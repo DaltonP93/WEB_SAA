@@ -6,6 +6,13 @@ import { CSS } from "@dnd-kit/utilities";
 import toast from "react-hot-toast";
 import { api } from "../api";
 import { useConfirm } from "./ConfirmDialog";
+import LucideIcon, { isIconName } from "./LucideIcon";
+
+/** Muestra el icono: lucide si es un nombre conocido, si no el texto/emoji tal cual. */
+function IconBadge({ value, className = "w-5 h-5 text-gray-500" }: { value: string; className?: string }) {
+  if (isIconName(value)) return <LucideIcon name={value} className={className} />;
+  return <span className="text-xl leading-none">{value}</span>;
+}
 
 export interface FieldDef {
   key: string;
@@ -39,7 +46,7 @@ function EntityRow({ row, reorderable, onEdit, onDelete }: { row: any; reorderab
       {reorderable && (
         <button {...attributes} {...listeners} className="cursor-grab text-gray-400 text-lg flex-shrink-0" title="arrastrar">⋮⋮</button>
       )}
-      {row.icon ? <span className="text-xl w-7 text-center flex-shrink-0">{row.icon}</span> : null}
+      {row.icon ? <span className="w-7 flex items-center justify-center flex-shrink-0 text-primary"><IconBadge value={row.icon} className="w-5 h-5 text-primary" /></span> : null}
       <div className="flex-1 min-w-0">
         <div className="font-semibold truncate flex items-center gap-2">
           {row.name}
@@ -141,7 +148,12 @@ export default function EntityManager({ title, endpoint, cacheKey, fields, slugF
                     {(f.options ?? []).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                   </select>
                 ) : f.kind === "icon" ? (
-                  <input className="input" value={editing[f.key] ?? ""} onChange={(e) => setEditing({ ...editing, [f.key]: e.target.value })} placeholder="emoji o nombre" />
+                  <div className="flex items-center gap-2">
+                    <span className="w-9 h-9 flex items-center justify-center flex-shrink-0 border rounded bg-gray-50 text-primary">
+                      {editing[f.key] ? <IconBadge value={editing[f.key]} className="w-5 h-5 text-primary" /> : <span className="text-gray-300 text-xs">?</span>}
+                    </span>
+                    <input className="input" value={editing[f.key] ?? ""} onChange={(e) => setEditing({ ...editing, [f.key]: e.target.value })} placeholder="nombre lucide (ej: heart-pulse) o emoji" />
+                  </div>
                 ) : (
                   <input className="input" value={editing[f.key] ?? ""} onChange={(e) => setEditing({ ...editing, [f.key]: e.target.value })} />
                 )}
