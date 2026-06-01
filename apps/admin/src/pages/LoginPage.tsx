@@ -6,7 +6,7 @@ import { api } from "../api";
 export default function LoginPage() {
   const nav = useNavigate();
   const [email, setEmail] = useState("admin@sanatorio.local");
-  const [password, setPassword] = useState("admin1234");
+  const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
 
   async function submit(e: React.FormEvent) {
