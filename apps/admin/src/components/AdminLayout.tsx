@@ -1,35 +1,36 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api";
+import LucideIcon from "./LucideIcon";
 
 type NavItem = { to: string; label: string; icon: string; end?: boolean; badge?: "msg" };
 
-const TOP: NavItem = { to: "/", label: "Inicio", icon: "🏠", end: true };
+const TOP: NavItem = { to: "/", label: "Inicio", icon: "home", end: true };
 
 const SECTIONS: { title: string; items: NavItem[] }[] = [
   {
     title: "Contenido",
     items: [
-      { to: "/pages", label: "Páginas", icon: "📄" },
-      { to: "/menus", label: "Menús", icon: "🧭" },
-      { to: "/doctors", label: "Médicos", icon: "👨‍⚕️" },
-      { to: "/specialties", label: "Especialidades", icon: "🩺" },
-      { to: "/services", label: "Servicios", icon: "🏥" },
-      { to: "/studies", label: "Estudios", icon: "🔬" },
-      { to: "/media", label: "Multimedia", icon: "🖼️" },
+      { to: "/pages", label: "Páginas", icon: "file-text" },
+      { to: "/menus", label: "Menús", icon: "menu" },
+      { to: "/doctors", label: "Médicos", icon: "stethoscope" },
+      { to: "/specialties", label: "Especialidades", icon: "heart-pulse" },
+      { to: "/services", label: "Servicios", icon: "hospital" },
+      { to: "/studies", label: "Estudios", icon: "flask-conical" },
+      { to: "/media", label: "Multimedia", icon: "image" },
     ],
   },
   {
     title: "Operación",
     items: [
-      { to: "/messages", label: "Mensajes", icon: "✉️", badge: "msg" },
+      { to: "/messages", label: "Mensajes", icon: "mail", badge: "msg" },
     ],
   },
   {
     title: "Sistema",
     items: [
-      { to: "/settings", label: "Branding y settings", icon: "🎨" },
-      { to: "/users", label: "Usuarios", icon: "👥" },
+      { to: "/settings", label: "Branding y settings", icon: "palette" },
+      { to: "/users", label: "Usuarios", icon: "users" },
     ],
   },
 ];
@@ -49,10 +50,18 @@ export default function AdminLayout() {
   return (
     <div className="flex h-screen">
       <aside className="w-60 bg-brand text-white flex flex-col">
-        <div className="px-4 py-4 border-b border-white/20">
-          <div className="font-bold">Sanatorio Adventista</div>
-          <div className="text-xs opacity-75">Panel de administración</div>
+        <div className="px-4 py-4 border-b border-white/10 bg-gradient-to-r from-brand to-brand-700">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-md bg-white/15 backdrop-blur flex items-center justify-center font-bold text-sm tracking-wide">
+              SA
+            </div>
+            <div className="leading-tight">
+              <div className="font-bold text-sm">Sanatorio Adventista</div>
+              <div className="text-[10px] uppercase tracking-wider opacity-75">Panel admin</div>
+            </div>
+          </div>
         </div>
+        <div className="h-px bg-gradient-to-r from-transparent via-white/15 to-transparent" />
         <nav className="flex-1 overflow-y-auto py-2">
           {(() => {
             const renderItem = (n: NavItem) => {
@@ -63,10 +72,16 @@ export default function AdminLayout() {
                   to={n.to}
                   end={n.end}
                   className={({ isActive }) =>
-                    `flex items-center gap-3 px-4 py-2 text-sm ${isActive ? "bg-white/15 font-semibold" : "hover:bg-white/10"}`
+                    `flex items-center gap-3 pl-4 pr-4 py-2 text-sm border-l-2 transition ${
+                      isActive
+                        ? "bg-white/10 border-secondary font-semibold"
+                        : "border-transparent hover:bg-white/5 hover:border-white/20"
+                    }`
                   }
                 >
-                  <span>{n.icon}</span>
+                  <span className="w-5 h-5 flex items-center justify-center">
+                    <LucideIcon name={n.icon} className="w-5 h-5" />
+                  </span>
                   <span>{n.label}</span>
                   {count > 0 && <span className="ml-auto text-[10px] bg-red-500 text-white rounded-full px-1.5 py-0.5">{count}</span>}
                 </NavLink>
@@ -74,10 +89,12 @@ export default function AdminLayout() {
             };
             return (
               <>
-                {renderItem(TOP)}
+                <div className="pb-1">{renderItem(TOP)}</div>
                 {SECTIONS.map((s) => (
                   <div key={s.title}>
-                    <div className="text-[10px] uppercase tracking-wide opacity-50 px-4 pt-3 pb-1">{s.title}</div>
+                    <div className="text-[10px] uppercase tracking-[0.14em] font-semibold text-white/50 px-4 pt-4 pb-1.5">
+                      {s.title}
+                    </div>
                     {s.items.map(renderItem)}
                   </div>
                 ))}
@@ -85,7 +102,7 @@ export default function AdminLayout() {
             );
           })()}
         </nav>
-        <button onClick={logout} className="m-3 text-sm bg-white/10 hover:bg-white/20 rounded py-2">
+        <button onClick={logout} className="m-3 btn-ghost text-white hover:bg-white/20">
           Cerrar sesión
         </button>
       </aside>

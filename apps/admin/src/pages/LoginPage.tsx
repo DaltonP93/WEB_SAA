@@ -32,7 +32,7 @@ export default function LoginPage() {
         <input className="input mb-4" value={email} onChange={(e) => setEmail(e.target.value)} type="email" required />
         <label className="label">Contraseña</label>
         <input className="input mb-6" value={password} onChange={(e) => setPassword(e.target.value)} type="password" required />
-        <button disabled={loading} className="btn-primary w-full">{loading ? "Ingresando…" : "Ingresar"}</button>
+        <button disabled={loading} className="btn-primary btn-lg w-full">{loading ? "Ingresando…" : "Ingresar"}</button>
       </form>
     </div>
   );

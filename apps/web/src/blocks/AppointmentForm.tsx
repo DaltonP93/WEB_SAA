@@ -1,8 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
+import { Loader2 } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
 import { api } from "../api";
 import type { AppointmentFormProps } from "@sa/shared/blocks";
+
+const inputClass =
+  "border rounded px-3 py-2 w-full bg-white focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition";
 
 export default function AppointmentForm({ heading = "Solicitar turno", defaultSpecialtyId }: AppointmentFormProps) {
   const [searchParams] = useSearchParams();
@@ -23,6 +28,7 @@ export default function AppointmentForm({ heading = "Solicitar turno", defaultSp
     preferredAt: "",
     message: "",
   });
+  const [submitting, setSubmitting] = useState(false);
 
   // Cuando el doctor se carga, pre-seleccionar su especialidad (si tiene 1).
   useEffect(() => {
@@ -54,11 +60,13 @@ export default function AppointmentForm({ heading = "Solicitar turno", defaultSp
   function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!waNumber) return;
+    setSubmitting(true);
     window.open(waHref(), "_blank", "noopener,noreferrer");
+    setTimeout(() => setSubmitting(false), 800);
   }
 
   return (
-    <section className="container-x py-12">
+    <section className="container-x section-y-md">
       <h2 className="text-2xl font-bold mb-6 text-primary">{heading}</h2>
       {doctor.data && (
         <div className="mb-4 max-w-2xl p-3 bg-secondary/10 border border-secondary/30 rounded text-sm">
@@ -72,28 +80,41 @@ export default function AppointmentForm({ heading = "Solicitar turno", defaultSp
       <form onSubmit={submit} className="grid gap-4 max-w-2xl">
         <div>
           <label htmlFor="appt-name" className="block text-sm font-medium mb-1">Nombre completo</label>
-          <input id="appt-name" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="border rounded px-3 py-2 w-full" />
+          <input id="appt-name" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className={inputClass} />
         </div>
         <div>
           <label htmlFor="appt-specialty" className="block text-sm font-medium mb-1">Especialidad (opcional)</label>
-          <select id="appt-specialty" value={form.specialtyId} onChange={(e) => setForm({ ...form, specialtyId: e.target.value })} className="border rounded px-3 py-2 w-full">
+          <select id="appt-specialty" value={form.specialtyId} onChange={(e) => setForm({ ...form, specialtyId: e.target.value })} className={inputClass}>
             <option value="">Seleccionar especialidad</option>
             {(specs.data ?? []).map((s: any) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         </div>
         <div>
           <label htmlFor="appt-datetime" className="block text-sm font-medium mb-1">Fecha y hora preferidas (opcional)</label>
-          <input id="appt-datetime" type="datetime-local" value={form.preferredAt} onChange={(e) => setForm({ ...form, preferredAt: e.target.value })} className="border rounded px-3 py-2 w-full" />
+          <input id="appt-datetime" type="datetime-local" value={form.preferredAt} onChange={(e) => setForm({ ...form, preferredAt: e.target.value })} className={inputClass} />
         </div>
         <div>
           <label htmlFor="appt-message" className="block text-sm font-medium mb-1">Mensaje / detalles (opcional)</label>
-          <textarea id="appt-message" rows={3} value={form.message} onChange={(e) => setForm({ ...form, message: e.target.value })} className="border rounded px-3 py-2 w-full" />
+          <textarea id="appt-message" rows={3} value={form.message} onChange={(e) => setForm({ ...form, message: e.target.value })} className={inputClass} />
         </div>
-        <button disabled={!waNumber} className="btn-primary self-start inline-flex items-center gap-2">
-          <span aria-hidden>💬</span>
-          {waNumber ? "Solicitar turno por WhatsApp" : "WhatsApp no disponible"}
+        <button disabled={!waNumber || submitting} className="btn-primary self-start inline-flex items-center gap-2 disabled:opacity-50">
+          {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <span aria-hidden>💬</span>}
+          {waNumber ? (submitting ? "Enviando…" : "Solicitar turno por WhatsApp") : "WhatsApp no disponible"}
         </button>
-        {!waNumber && <p className="text-sm text-red-700">No hay un número de WhatsApp configurado. Comunicate por los datos de contacto.</p>}
+        <AnimatePresence>
+          {!waNumber && (
+            <motion.p
+              key="no-wa"
+              initial={{ opacity: 0, y: -4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              className="text-sm text-red-700 inline-flex items-center gap-2"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-red-600 inline-block" />
+              No hay un número de WhatsApp configurado. Comunicate por los datos de contacto.
+            </motion.p>
+          )}
+        </AnimatePresence>
       </form>
     </section>
   );

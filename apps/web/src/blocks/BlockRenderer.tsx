@@ -88,7 +88,7 @@ const MAP: Record<BlockType, React.ComponentType<any>> = {
 
 export default function BlockRenderer({ blocks }: { blocks: Block[] }) {
   return (
-    <Suspense fallback={<div className="container-x py-10">Cargando…</div>}>
+    <Suspense fallback={<div className="container-x section-y-sm">Cargando…</div>}>
       {blocks.map((b) => {
         const C = MAP[b.type];
         if (!C) return <div key={b.id} className="container-x py-3 text-sm text-red-600">Bloque desconocido: {b.type}</div>;
