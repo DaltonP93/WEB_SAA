@@ -109,22 +109,22 @@ export default function DataTable<T>({
 
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-xs text-gray-500">
+          <thead className="bg-gray-50 text-xs text-gray-500 border-b border-gray-200">
             <tr>
               {columns.map((c) => (
                 <th
                   key={c.key}
-                  className={`text-left font-medium px-4 py-2 ${c.sortable ? "cursor-pointer select-none" : ""}`}
+                  className={`text-left font-semibold uppercase tracking-wider text-[11px] px-4 py-2.5 ${c.sortable ? "cursor-pointer select-none" : ""}`}
                   onClick={() => toggleSort(c)}
                 >
                   {c.header}
                   {c.sortable && sortKey === c.key && <span className="ml-1">{sortDir === "asc" ? "▲" : "▼"}</span>}
                 </th>
               ))}
-              {actions && <th className="px-4 py-2" />}
+              {actions && <th className="px-4 py-2.5" />}
             </tr>
           </thead>
-          <tbody className="divide-y">
+          <tbody className="divide-y divide-gray-100">
             {loading ? (
               Array.from({ length: 5 }).map((_, i) => (
                 <tr key={`sk-${i}`}>
@@ -148,7 +148,7 @@ export default function DataTable<T>({
               </tr>
             ) : (
               pageRows.map((row) => (
-                <tr key={getRowId(row)} className="hover:bg-gray-50">
+                <tr key={getRowId(row)} className="odd:bg-gray-50/50 hover:bg-gray-100 transition-colors">
                   {columns.map((c) => (
                     <td key={c.key} className="px-4 py-3 align-middle">
                       {c.render ? c.render(row) : String(cellValue(c, row) ?? "")}

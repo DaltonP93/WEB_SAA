@@ -29,7 +29,7 @@ export default function SettingsPage() {
     <div className="space-y-8">
       <div className="flex justify-between items-center">
         <h1 className="text-2xl font-bold">Branding & configuración</h1>
-        <button onClick={() => save.mutate(s)} className="btn-primary">Guardar cambios</button>
+        <button onClick={() => save.mutate(s)} className="btn-primary btn-lg">Guardar cambios</button>
       </div>
 
       <section className="card p-5">
@@ -103,7 +103,7 @@ export default function SettingsPage() {
       </section>
 
       <div className="flex justify-end">
-        <button onClick={() => save.mutate(s)} className="btn-primary">Guardar cambios</button>
+        <button onClick={() => save.mutate(s)} className="btn-primary btn-lg">Guardar cambios</button>
       </div>
     </div>
   );

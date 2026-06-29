@@ -4,7 +4,7 @@ import type { AccordionProps } from "@sa/shared/blocks";
 export default function Accordion({ heading, items }: AccordionProps) {
   const [open, setOpen] = useState<number | null>(0);
   return (
-    <section className="container-x py-10">
+    <section className="container-x section-y-sm">
       {heading && <h2 className="text-2xl font-bold mb-6 text-primary">{heading}</h2>}
       <div className="divide-y border rounded">
         {items.map((it, i) => (

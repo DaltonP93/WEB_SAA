@@ -16,6 +16,7 @@ export interface Settings {
     facebook?: string;
     instagram?: string;
     youtube?: string;
+    linkedin?: string;
   };
   theme?: {
     primary?: string;
@@ -49,6 +50,7 @@ export interface Specialty {
   name: string;
   description?: string;
   icon_url?: string;
+  icon?: string | null;
 }
 
 export interface Service {

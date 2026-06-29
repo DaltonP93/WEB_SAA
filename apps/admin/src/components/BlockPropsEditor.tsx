@@ -16,12 +16,16 @@ interface FieldDef {
 const SCHEMAS: Record<BlockType, FieldDef[]> = {
   hero: [
     { key: "title", label: "Título", kind: "text" },
+    { key: "eyebrow", label: "Eyebrow (etiqueta superior)", kind: "text" },
     { key: "subtitle", label: "Subtítulo", kind: "text" },
     { key: "imageUrl", label: "Imagen URL", kind: "image" },
-    { key: "ctaLabel", label: "CTA Label", kind: "text" },
-    { key: "ctaHref", label: "CTA Href", kind: "url" },
+    { key: "ctaLabel", label: "CTA principal Label", kind: "text" },
+    { key: "ctaHref", label: "CTA principal Href", kind: "url" },
+    { key: "secondaryCtaLabel", label: "CTA secundario Label", kind: "text" },
+    { key: "secondaryCtaHref", label: "CTA secundario Href", kind: "url" },
     { key: "variant", label: "Variante", kind: "select", options: [{ label: "Centrado", value: "centered" }, { label: "Izquierda", value: "left" }, { label: "Split", value: "split" }] },
     { key: "overlay", label: "Overlay %", kind: "number" },
+    { key: "animatedBg", label: "Fondo con gradiente animado", kind: "checkbox" },
   ],
   richText: [{ key: "html", label: "HTML", kind: "textarea" }],
   cards: [
@@ -99,7 +103,13 @@ const SCHEMAS: Record<BlockType, FieldDef[]> = {
     { key: "text", label: "Texto", kind: "text" },
     { key: "ctaLabel", label: "Label del botón", kind: "text" },
     { key: "ctaHref", label: "Href", kind: "url" },
-    { key: "background", label: "Color/Background", kind: "color" },
+    { key: "variant", label: "Variante", kind: "select", options: [
+      { label: "Acento (default)", value: "accent" },
+      { label: "Primario", value: "primary" },
+      { label: "Secundario", value: "secondary" },
+      { label: "Suave", value: "muted" },
+    ] },
+    { key: "background", label: "Color/Background (override)", kind: "color" },
   ],
   stats: [
     { key: "items", label: "Items", kind: "items", itemFields: [
