@@ -3,7 +3,6 @@ import { useQuery } from "@tanstack/react-query";
 import { Helmet } from "react-helmet-async";
 import { api } from "../api";
 import type { Doctor, Specialty } from "@sa/shared";
-import Avatar from "../components/Avatar";
 
 export default function DoctorDetailPage() {
   const { slug } = useParams();
@@ -32,7 +31,7 @@ export default function DoctorDetailPage() {
       <section className="container-x py-12 grid md:grid-cols-3 gap-8">
         <div>
           <div className="aspect-square rounded overflow-hidden bg-gray-100">
-            <Avatar src={data.photoUrl} alt={data.name} size="full" rounded={false} />
+            {data.photoUrl ? <img src={data.photoUrl} alt={data.name} loading="lazy" decoding="async" className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-5xl text-gray-400">👤</div>}
           </div>
         </div>
         <div className="md:col-span-2">

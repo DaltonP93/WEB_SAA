@@ -11,7 +11,7 @@ export default function MapEmbed({ embedHtml, height = 400 }: MapEmbedProps) {
   if (!html) return null;
   return (
     <section className="container-x py-6">
-      <div style={{ height }} className="rounded-2xl overflow-hidden shadow-xl border border-gray-200" dangerouslySetInnerHTML={{ __html: html }} />
+      <div style={{ height }} className="rounded overflow-hidden" dangerouslySetInnerHTML={{ __html: html }} />
     </section>
   );
 }

@@ -1,7 +1,6 @@
 import { useParams, Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api";
-import Avatar from "../components/Avatar";
 
 export default function SpecialtyDetailPage() {
   const { slug } = useParams();
@@ -23,10 +22,10 @@ export default function SpecialtyDetailPage() {
         <h2 className="text-xl font-bold mb-4">Profesionales</h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
           {(data.doctors ?? []).map((d: any) => (
-            <div key={d.id} className="group bg-white rounded shadow p-4 hover:shadow-lg hover:-translate-y-1 transition-all duration-300 flex flex-col">
+            <div key={d.id} className="bg-white rounded shadow p-4 hover:shadow-lg transition flex flex-col">
               <Link to={`/profesionales/${d.slug}`} className="flex-1">
                 <div className="aspect-square mb-3 rounded overflow-hidden bg-gray-100">
-                  <Avatar src={d.photoUrl} alt={d.name} size="full" rounded={false} />
+                  {d.photoUrl ? <img src={d.photoUrl} alt={d.name} loading="lazy" decoding="async" className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-3xl text-gray-400">👤</div>}
                 </div>
                 <h3 className="font-semibold text-primary mb-3">{d.name}</h3>
               </Link>

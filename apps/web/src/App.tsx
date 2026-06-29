@@ -2,7 +2,6 @@ import { Routes, Route, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { Helmet } from "react-helmet-async";
-import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { api, applyTheme } from "./api";
 import Layout from "./components/Layout";
 import DynamicPage from "./pages/DynamicPage";
@@ -15,7 +14,6 @@ import NotFoundPage from "./pages/NotFoundPage";
 
 export default function App() {
   const location = useLocation();
-  const reduced = useReducedMotion();
   const settingsQ = useQuery({
     queryKey: ["settings"],
     queryFn: async () => (await api.get("/public/settings")).data,
@@ -59,26 +57,16 @@ export default function App() {
         <script type="application/ld+json">{JSON.stringify(orgJsonLd)}</script>
       </Helmet>
       <Layout settings={settingsQ.data}>
-        <AnimatePresence mode="wait" initial={false}>
-          <motion.div
-            key={location.pathname}
-            initial={reduced ? false : { opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={reduced ? undefined : { opacity: 0, y: -8 }}
-            transition={{ duration: reduced ? 0 : 0.25, ease: "easeOut" }}
-          >
-            <Routes location={location}>
-              <Route path="/" element={<DynamicPage slug="home" />} />
-              <Route path="/profesionales" element={<DoctorsPage />} />
-              <Route path="/profesionales/:slug" element={<DoctorDetailPage />} />
-              <Route path="/especialidades/:slug" element={<SpecialtyDetailPage />} />
-              <Route path="/noticias" element={<NewsListPage />} />
-              <Route path="/noticias/:slug" element={<NewsDetailPage />} />
-              <Route path="/:slug" element={<DynamicPage />} />
-              <Route path="*" element={<NotFoundPage />} />
-            </Routes>
-          </motion.div>
-        </AnimatePresence>
+        <Routes>
+          <Route path="/" element={<DynamicPage slug="home" />} />
+          <Route path="/profesionales" element={<DoctorsPage />} />
+          <Route path="/profesionales/:slug" element={<DoctorDetailPage />} />
+          <Route path="/especialidades/:slug" element={<SpecialtyDetailPage />} />
+          <Route path="/noticias" element={<NewsListPage />} />
+          <Route path="/noticias/:slug" element={<NewsDetailPage />} />
+          <Route path="/:slug" element={<DynamicPage />} />
+          <Route path="*" element={<NotFoundPage />} />
+        </Routes>
       </Layout>
     </>
   );

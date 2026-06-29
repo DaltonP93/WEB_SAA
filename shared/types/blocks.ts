@@ -34,10 +34,6 @@ export interface HeroProps {
   ctaHref?: string;
   variant?: "centered" | "left" | "split";
   overlay?: number;
-  eyebrow?: string;
-  secondaryCtaLabel?: string;
-  secondaryCtaHref?: string;
-  animatedBg?: boolean;
 }
 
 export interface RichTextProps {
@@ -126,7 +122,6 @@ export interface CtaProps {
   ctaLabel: string;
   ctaHref: string;
   background?: string;
-  variant?: "accent" | "primary" | "secondary" | "muted";
 }
 
 export interface StatsProps {

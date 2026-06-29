@@ -95,7 +95,7 @@ export default function PageBuilderPage() {
         <h1 className="text-2xl font-bold">{page.title}</h1>
         <div className="flex gap-2">
           <a href={`${previewBase.replace(/\/$/, "")}/${page.slug === "home" ? "" : page.slug}`} target="_blank" rel="noreferrer" className="btn-secondary">Ver en sitio</a>
-          <button onClick={saveAll} className="btn-primary btn-lg">Guardar</button>
+          <button onClick={saveAll} className="btn-primary">Guardar</button>
         </div>
       </div>
 
