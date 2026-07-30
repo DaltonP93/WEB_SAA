@@ -24,7 +24,8 @@
 - **Editor rich-text** Tiptap para noticias.
 - **Multimedia**: uploader con validación de tipo, optimización con sharp y caché HTTP de 30 días.
 - **Auth** JWT + rate-limit por IP+email en el login.
-- **SEO**: meta tags por página, Open Graph + Twitter Cards, sitemap.xml dinámico, robots.txt, canonical URLs, JSON-LD Schema.org en fichas de médicos.
+- **SEO**: meta tags por página, Open Graph + Twitter Cards, sitemap.xml dinámico, robots.txt, canonical URLs, JSON-LD Schema.org en fichas de médicos, y **prerender estático de `/estudios`** en el build (HTML con la lista real de estudios agrupada, para buscadores que no ejecutan JS).
+- **Iconos**: los campos de icono de Especialidades / Servicios / Estudios aceptan un nombre [lucide](https://lucide.dev/icons/) en kebab-case (`heart-pulse`) o un emoji, con preview en vivo en el editor.
 - **Accesibilidad**: skip-link, navegación con teclado en dropdowns, labels asociados a inputs, contraste WCAG.
 
 ## 🧱 Arquitectura
@@ -33,14 +34,19 @@
 WebSantarioV2/
 ├── apps/
 │   ├── web/           React + Vite + TS + Tailwind + TanStack Query  → puerto 5173
+│   │   └── scripts/prerender.mjs   Prerender SEO de /estudios (post-build)
 │   └── admin/         React + Vite + TS + dnd-kit + Tiptap           → puerto 5174
 ├── api/               Node 20 + Express + TS + Knex + MySQL + JWT    → puerto 4000
 ├── shared/types/      Tipos compartidos (fuente de verdad de bloques)
-├── scripts/           extract-assets.ts / extract-doctors.ts
+├── scripts/
+│   ├── extract-assets.ts / extract-doctors.ts
+│   └── deploy/        run-remote.py (SSH) + setup-vps.sh + update-vps.sh
 ├── docker-compose.yml MySQL 8 + phpMyAdmin
 ├── docs/DEPLOY.md     Guía completa de deploy (Nginx + PM2 + Let's Encrypt)
-└── AGENTS.md          Contexto y flujo multi-agente para IAs
+└── AGENTS.md          Contexto, flujo multi-agente y runbook de producción (§9)
 ```
+
+> **El sitio es una SPA client-side, no hay SSR.** Nginx sirve los `dist/` como estáticos y la API sólo atiende `/api/`, `/uploads/`, `/robots.txt` y `/sitemap.xml`. La única excepción es el HTML prerenderizado de `/estudios`.
 
 Para profundizar: [`AGENTS.md`](AGENTS.md) explica el sistema de bloques, theming en runtime, esquema de base de datos y el flujo de 4 agentes (Analista → Desarrollador → Tester → Corrector) que se recomienda seguir para cualquier cambio.
 
@@ -134,13 +140,29 @@ Cada página se compone de bloques `{ type, props }` almacenados en MySQL. El ad
 
 ## 🚢 Deploy
 
-Guía paso a paso en [`docs/DEPLOY.md`](docs/DEPLOY.md). Resumen:
+Guía paso a paso en [`docs/DEPLOY.md`](docs/DEPLOY.md). Runbook de operación (incidentes, PM2, verificación) en [`AGENTS.md` §9](AGENTS.md).
 
-1. Servidor con Node 20, MySQL 8, Nginx, PM2 y Certbot.
-2. `pnpm install --frozen-lockfile && pnpm build`.
-3. PM2 corre `api/dist/index.js`.
-4. Nginx reverse-proxy a la API y sirve `apps/web/dist` + `apps/admin/dist` como estáticos.
-5. SSL con Let's Encrypt.
+**Instalación inicial de un servidor nuevo:** `scripts/deploy/setup-vps.sh` (Node 20, MySQL 8, Nginx, PM2, Certbot).
+
+**Deploy de cambios** — un solo comando, vía SSH con paramiko:
+
+```bash
+python scripts/deploy/run-remote.py <IP> root '<password>' \
+  "bash /var/www/sanatorio/scripts/deploy/update-vps.sh"
+```
+
+`update-vps.sh` hace `git reset --hard origin/main` → `pnpm install --frozen-lockfile` → `pnpm db:migrate` → builds → reload de Nginx + restart de PM2 (`sanatorio-api`).
+
+Dos cosas que muerden:
+
+- Todo cambio de dependencia necesita el **`pnpm-lock.yaml` commiteado**, o `--frozen-lockfile` rompe el deploy.
+- El script **se re-ejecuta si él mismo cambió**, así que el primer deploy que lo modifica corre con la versión vieja. Si el cambio que querés probar está en el script, deployá dos veces.
+
+**Verificación post-deploy** — no alcanza con abrir la home: Nginx sirve los estáticos aunque la API esté caída, así que la home da 200 igual. Hay que chequear la API:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' http://<IP>/api/health   # 200 esperado
+```
 
 ## 🤖 Trabajo con IAs
 
@@ -152,6 +174,21 @@ El archivo [`AGENTS.md`](AGENTS.md) es el punto de entrada para cualquier asiste
 - Skills disponibles del entorno Claude Code.
 
 ## 🔧 Troubleshooting
+
+<details>
+<summary><b>En producción la web carga pero no aparece ningún contenido (502 en /api)</b></summary>
+
+El proceso de la API se cayó. Nginx sigue sirviendo el HTML/CSS/JS estático, por eso la página "carga" vacía.
+
+```bash
+pm2 list                                    # ¿está online 'sanatorio-api'?
+pm2 logs sanatorio-api --lines 50 --nostream
+cd /var/www/sanatorio/api && pm2 start dist/src/index.js \
+  --name sanatorio-api --time --cwd /var/www/sanatorio/api && pm2 save
+```
+
+El `--cwd` no es opcional: sin él dotenv no encuentra `api/.env` y la API no conecta a MySQL. Detalle del incidente de julio 2026 y las mitigaciones en [`AGENTS.md` §9](AGENTS.md).
+</details>
 
 <details>
 <summary><b>El sitio muestra caracteres tipo "AsunciÃ³n" en vez de "Asunción"</b></summary>

@@ -19,6 +19,8 @@ imagenes/
 # Fotos optimizadas (se generan con pnpm exec tsx scripts/import-doctors-from-folder.ts)
 assets-extracted/doctors-optimized/*.jpg
 assets-extracted/doctors-optimized/upsert-utf8.sql
+assets-extracted/doctors-optimized/upsert.sql
+assets-extracted/doctors-optimized/index.json
 # Scripts efímeros usados para deploys puntuales
 _menus.json
 seed-menu.sh

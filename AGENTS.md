@@ -244,7 +244,7 @@ Si la IA que abre el repo está corriendo en Claude Code con la configuración a
 
 ---
 
-## 8. Estado actual (al 2026-05-29)
+## 8. Estado actual (al 2026-07-30)
 
 ✅ Estructura del monorepo, scripts de extracción, schema MySQL, seeds, API completa (público + admin + auth), frontend público con 19 bloques + páginas dinámicas + buscador de médicos, panel admin completo con page builder DnD, Tiptap, gestor de medios, usuarios.
 ✅ Documentación de deploy en [`docs/DEPLOY.md`](docs/DEPLOY.md).
@@ -259,6 +259,68 @@ Si la IA que abre el repo está corriendo en Claude Code con la configuración a
   - Turnos / Mensajes: filtros por estado + rango de fecha, "marcar leído", export CSV. Badges de pendientes/no leídos en el sidebar.
   - Sidebar agrupado (Inicio / Contenido / Operación / Sistema) y Dashboard con stats, actividad reciente y accesos rápidos.
   - Toggle publicar/despublicar inline en `PagesListPage` y `NewsListPage`.
+  - `LucideIcon.tsx` — renderiza iconos [lucide](https://lucide.dev/icons/) por nombre kebab-case (`heart-pulse`). Usa `lucide-react/dynamicIconImports` + `React.lazy` + `Suspense` (⚠️ en lucide-react 0.460 **no existe** el subpath `lucide-react/dynamic`). `isIconName()` valida antes de renderizar. El helper `IconBadge` de `EntityManager` muestra el icono si el valor es un nombre lucide válido, y si no cae al emoji tal cual — antes el nombre se imprimía como texto crudo y se superponía a los títulos.
 
 🔲 Tests automatizados (no hay; los agentes hacen smoke testing manual por ahora).
 🔲 Contenido real seed (las imágenes y los textos definitivos los carga el cliente desde el admin).
+🔲 `PUBLIC_SITE_URL` en el `api/.env` de producción todavía apunta a la **IP del VPS**, así que el `sitemap.xml` y todos los canonical usan la IP en vez del dominio. Cambiarlo cuando el DNS + HTTPS estén confirmados (requiere decisión del dueño del proyecto, no cambiarlo a ciegas).
+
+---
+
+## 9. Operación en producción (runbook)
+
+### Dónde vive
+
+| Qué | Dónde |
+|---|---|
+| Repo | `https://github.com/cacostama/WebSamap2.git`, rama única **`main`** |
+| VPS | `194.26.100.138` (Ubuntu, usuario `root`) — **compartido con otro proyecto** (existe un `/swapfile_futbot`) |
+| Código en el VPS | `/var/www/sanatorio` |
+| Config de la API | `/var/www/sanatorio/api/.env` (**fuera de git**, nunca commitear) |
+| Proceso | PM2, nombre **`sanatorio-api`**, entry `api/dist/src/index.js`, `--cwd /var/www/sanatorio/api` (necesario para que dotenv encuentre el `.env`) |
+| Reverse proxy | Nginx: `/api/`, `/uploads/`, `/robots.txt`, `/sitemap.xml` → `127.0.0.1:4000`; el resto sirve estáticos |
+
+Nginx sirve `apps/web/dist` en `/` (con `try_files $uri $uri/ /index.html`) y `apps/admin/dist` en `/admin`. **Consecuencia importante:** si la API se cae, el sitio sigue devolviendo 200 pero sin nada de contenido dinámico — un check de "la home carga" NO alcanza para saber si producción está sana. Siempre verificar `/api/health`.
+
+### Deploy
+
+```bash
+python scripts/deploy/run-remote.py <IP> root '<password>' \
+  "bash /var/www/sanatorio/scripts/deploy/update-vps.sh"
+```
+
+`update-vps.sh` hace: `git reset --hard origin/main` → **se re-ejecuta a sí mismo si el propio script cambió** → `pnpm install --frozen-lockfile` → `pnpm db:migrate` → builds → reload de Nginx + restart de PM2.
+
+⚠️ Por ese re-exec, **el primer deploy que modifica `update-vps.sh` corre con la versión vieja del script**. Si el cambio del deploy es el que querés probar, hay que deployar dos veces.
+
+⚠️ `--frozen-lockfile` implica que **todo cambio de dependencia debe llevar el `pnpm-lock.yaml` commiteado**, o el deploy falla.
+
+### Verificación post-deploy
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' http://<IP>/api/health   # debe dar 200
+for p in settings menus services specialties pages/home studies; do
+  curl -s -o /dev/null -w "$p %{http_code}\n" "http://<IP>/api/public/$p"
+done
+```
+
+### Si la API devuelve 502
+
+```bash
+pm2 list                      # ¿está 'sanatorio-api' online?
+pm2 logs sanatorio-api --lines 50 --nostream
+cd /var/www/sanatorio/api && pm2 start dist/src/index.js \
+  --name sanatorio-api --time --cwd /var/www/sanatorio/api && pm2 save
+```
+
+**Incidente 2026-07: la API estuvo ~19 días caída.** `pm2 jlist` devolvía `[]` — no era un crash-loop, el daemon de PM2 había perdido la lista de procesos entera, sin reboot del VPS (uptime 19 días) y sin OOM en syslog. Hipótesis: el daemon murió por presión de memoria durante un build (el VPS tiene **1.9 GB de RAM y el swap ya estaba a ~666 MB usados**; `vite build` es voraz). Dos mitigaciones aplicadas:
+
+1. `pm2 save` — lista de procesos congelada en `/root/.pm2/dump.pm2`.
+2. `pm2 startup systemd -u root --hp /root` — creó y habilitó `pm2-root.service`, que **no existía**. Sin eso, cualquier reboot dejaba la API caída de forma permanente.
+
+Si se repite, la solución de fondo es buildear fuera del VPS (subir artefactos) o ampliar la RAM.
+
+### Ruido esperado en los logs
+
+- `GET /api/vendor/phpunit/.../eval-stdin.php 404` — escaneo de bots buscando vulnerabilidades PHP. Inofensivo, la API los rechaza.
+- `/estudios` responde **301** hacia `/estudios/`: es el comportamiento de directory-index de Nginx sobre el HTML prerenderizado. Por eso el canonical del prerender apunta a `/estudios/` **con** barra final.
