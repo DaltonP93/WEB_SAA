@@ -124,6 +124,33 @@ export function applyDbEnv(name: string) {
   process.env.DB_NAME = name;
 }
 
+/**
+ * Cierra un servidor de prueba sin quedarse esperando.
+ *
+ * `server.close()` sólo llama a su callback cuando no queda ninguna conexión
+ * abierta, y el `fetch` de Node usa keep-alive: alcanza con que una conexión
+ * ociosa siga viva para que el callback no llegue nunca y el archivo de prueba
+ * se cuelgue sin fallar. `closeAllConnections()` las corta primero.
+ */
+export async function closeServer(server: { close: (cb?: () => void) => void; closeAllConnections?: () => void }) {
+  server.closeAllConnections?.();
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+}
+
+/**
+ * Cierra el pool que crea la app al importarse.
+ *
+ * `api/src/db.ts` instancia knex a nivel de módulo, así que un archivo de
+ * prueba que importa la app deja ese pool vivo aunque cierre su servidor. El
+ * reaper de tarn mantiene el event loop despierto y el worker de vitest no
+ * termina nunca: la suite queda colgada sin fallar (en CI se comió 25 minutos
+ * antes de que se notara).
+ */
+export async function closeAppDb() {
+  const { db } = await import("../../api/src/db.js");
+  await db.destroy();
+}
+
 export async function dropTestDatabase(name: string) {
   const admin = knexFactory({ client: "mysql2", connection: baseConnection });
   await admin.raw(`DROP DATABASE IF EXISTS \`${name}\``);

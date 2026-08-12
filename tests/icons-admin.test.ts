@@ -6,6 +6,8 @@ import {
   applyDbEnv,
   createTestDatabase,
   dropTestDatabase,
+  closeAppDb,
+  closeServer,
   migrateLatest,
   runSeeds,
   TEST_ADMIN_PASSWORD,
@@ -61,7 +63,8 @@ describeDb("iconos administrables", () => {
   }, 180_000);
 
   afterAll(async () => {
-    if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
+    await closeAppDb();
+    if (server) await closeServer(server);
     if (db) await db.destroy();
     await dropTestDatabase(DB_NAME);
   });

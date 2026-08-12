@@ -14,6 +14,10 @@ jobs:
   build:
     name: Typecheck, build y pruebas
     runs-on: ubuntu-latest
+    # Un cuelgue de la suite no puede quedarse tomando el runner: sin techo, un
+    # `server.close()` que nunca resuelve corre hasta el límite de 6 horas y el
+    # check queda "in progress" en vez de fallar.
+    timeout-minutes: 20
 
     services:
       mysql:
@@ -84,6 +88,7 @@ jobs:
   secrets:
     name: Detección de secretos
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -165,6 +170,7 @@ jobs:
   audit:
     name: Auditoría de dependencias
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

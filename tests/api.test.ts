@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Server } from "node:http";
+import { closeServer } from "./helpers/db";
 
 /**
  * Pruebas de la API sin base de datos disponible.
@@ -32,7 +33,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await closeServer(server);
 });
 
 describe("health con la base caída", () => {

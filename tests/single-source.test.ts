@@ -8,6 +8,8 @@ import {
   applyDbEnv,
   createTestDatabase,
   dropTestDatabase,
+  closeAppDb,
+  closeServer,
   migrateLatest,
   runSeeds,
   TEST_ADMIN_PASSWORD,
@@ -122,7 +124,8 @@ describeDb("un cambio en la tabla llega a todos los consumidores", () => {
   }, 180_000);
 
   afterAll(async () => {
-    if (server) await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
+    await closeAppDb();
+    if (server) await closeServer(server);
     if (db) await db.destroy();
     await dropTestDatabase(DB_NAME);
   });
