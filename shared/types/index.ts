@@ -45,6 +45,11 @@ export interface Study {
   body?: string | null;
 }
 
+/**
+ * Archivo histórico. La sección Noticias salió del producto (item 7): no hay
+ * endpoints públicos ni bloques que puedan renderizarla. El tipo se conserva
+ * sólo para leer la tabla si alguna vez se decide reactivarla.
+ */
 export interface NewsArticle {
   id: number;
   slug: string;

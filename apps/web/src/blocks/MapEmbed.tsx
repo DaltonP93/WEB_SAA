@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { MapPin, Navigation } from "lucide-react";
 import { api } from "../api";
 import type { MapEmbedProps } from "@sa/shared/blocks";
+import { isSafeExternalHref } from "../lib/url";
 
 export default function MapEmbed({ embedHtml, height = 400, heading, text, directionsUrl }: MapEmbedProps) {
   const { data } = useQuery({
@@ -10,7 +11,8 @@ export default function MapEmbed({ embedHtml, height = 400, heading, text, direc
   });
   const html = embedHtml || data?.contact?.mapEmbed || "";
   const address = text || data?.contact?.address || "";
-  const directions = directionsUrl || data?.contact?.mapsUrl || "";
+  const rawDirections = directionsUrl || data?.contact?.mapsUrl || "";
+  const directions = isSafeExternalHref(rawDirections) ? rawDirections : "";
   if (!html) return null;
   return (
     <section className="container-x py-6">

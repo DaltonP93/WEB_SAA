@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { db } from "../../db.js";
-import { sanitizeHtml } from "../../html.js";
+import { sanitizeMapEmbed } from "../../html.js";
 
 export const settingsRouter = Router();
 
@@ -44,16 +44,4 @@ function sanitizeSettingValue(key: string, value: unknown): unknown {
     return contact;
   }
   return value;
-}
-
-function sanitizeMapEmbed(value: string) {
-  const clean = sanitizeHtml(value) ?? "";
-  if (!/<iframe\b/i.test(clean)) return "";
-  // Aceptamos cualquiera de los formatos válidos de Google Maps:
-  //   - https://www.google.com/maps/embed?pb=...      (formato oficial "compartir → insertar")
-  //   - https://www.google.com/maps?q=...&output=embed (formato legacy con búsqueda)
-  //   - https://maps.google.com/maps?q=...&output=embed (alias del anterior)
-  const validSrc = /src=["']https:\/\/(www\.)?(google|maps\.google)\.com\/maps(?:\/embed)?\?/i;
-  if (!validSrc.test(clean)) return "";
-  return clean;
 }

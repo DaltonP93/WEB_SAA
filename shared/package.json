@@ -8,7 +8,8 @@
   "exports": {
     ".": "./types/index.ts",
     "./blocks": "./types/blocks.ts",
-    "./block-schemas": "./types/block-schemas.ts"
+    "./block-schemas": "./types/block-schemas.ts",
+    "./institutional-red": "./types/institutional-red.ts"
   },
   "dependencies": {
     "zod": "^3.23.8"

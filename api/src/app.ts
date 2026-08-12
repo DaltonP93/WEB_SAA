@@ -20,7 +20,24 @@ const UPLOAD_DIR = path.resolve(process.env.UPLOAD_DIR ?? "./uploads");
 export function createApp() {
   const app = express();
 
-  app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
+  // La API sólo devuelve JSON y archivos de /uploads: no necesita ejecutar
+  // nada, así que la CSP puede ser máximamente restrictiva.
+  app.use(
+    helmet({
+      crossOriginResourcePolicy: { policy: "cross-origin" },
+      contentSecurityPolicy: {
+        useDefaults: false,
+        directives: {
+          "default-src": ["'none'"],
+          "img-src": ["'self'", "data:"],
+          "base-uri": ["'none'"],
+          "form-action": ["'none'"],
+          "frame-ancestors": ["'none'"],
+        },
+      },
+      referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+    }),
+  );
   app.use(
     cors({
       origin: (process.env.CORS_ORIGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean),

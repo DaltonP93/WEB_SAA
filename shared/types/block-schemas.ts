@@ -1,5 +1,11 @@
 import { z } from "zod";
 import type { BlockType } from "./blocks";
+import {
+  EMERGENCY_VARIANT_MESSAGE,
+  RED_RESERVED_MESSAGE,
+  isInstitutionalRed,
+  mentionsEmergency,
+} from "./institutional-red";
 
 const urlLike = z.string().trim().max(500).optional().or(z.literal(""));
 const html = z.string().max(100_000);
@@ -13,6 +19,33 @@ const cardItemSchema = z.object({
   imageUrl: urlLike,
   href: urlLike,
 }).strip();
+
+/**
+ * CTA: el rojo es exclusivo de Emergencias.
+ *
+ * `variant: "emergency"` es la única forma de pedir rojo y sólo se acepta si
+ * el bloque habla de Emergencias. El override libre `background` nunca puede
+ * traer un rojo, ni siquiera en un bloque de Emergencias (ahí el color lo
+ * pone la variante, no el contenido cargado).
+ */
+const ctaSchema = z.object({
+  title: z.string().trim().min(1).max(180),
+  text: z.string().max(500).optional().or(z.literal("")),
+  ctaLabel: z.string().trim().min(1).max(80),
+  ctaHref: z.string().trim().min(1).max(500),
+  background: z.string().max(80).optional().or(z.literal("")),
+  variant: z.enum(["emergency", "primary", "secondary", "muted"]).optional(),
+}).strip().superRefine((value, ctx) => {
+  if (isInstitutionalRed(value.background)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["background"], message: RED_RESERVED_MESSAGE });
+  }
+  if (
+    value.variant === "emergency" &&
+    !mentionsEmergency(value.title, value.text, value.ctaLabel, value.ctaHref)
+  ) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["variant"], message: EMERGENCY_VARIANT_MESSAGE });
+  }
+});
 
 export const blockPropsSchemas = {
   hero: z.object({
@@ -86,10 +119,6 @@ export const blockPropsSchemas = {
     heading: z.string().max(180).optional().or(z.literal("")),
     category: z.string().trim().max(32).optional().or(z.literal("")),
   }).strip(),
-  newsGrid: z.object({
-    limit: z.number().int().positive().max(50),
-    columns: columns2to4,
-  }).strip(),
   mapEmbed: z.object({
     embedHtml: html,
     height: z.number().int().min(160).max(900).optional(),
@@ -136,14 +165,7 @@ export const blockPropsSchemas = {
     text: z.string().max(500).optional().or(z.literal("")),
     areaKeys: z.array(z.string().trim().max(64)).max(20).optional(),
   }).strip(),
-  cta: z.object({
-    title: z.string().trim().min(1).max(180),
-    text: z.string().max(500).optional().or(z.literal("")),
-    ctaLabel: z.string().trim().min(1).max(80),
-    ctaHref: z.string().trim().min(1).max(500),
-    background: z.string().max(80).optional().or(z.literal("")),
-    variant: z.enum(["accent", "primary", "secondary", "muted"]).optional(),
-  }).strip(),
+  cta: ctaSchema,
   stats: z.object({
     heading: z.string().max(180).optional().or(z.literal("")),
     items: z.array(z.object({

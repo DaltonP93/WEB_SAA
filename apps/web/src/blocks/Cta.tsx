@@ -1,29 +1,38 @@
 import { Link } from "react-router-dom";
 import type { CtaProps } from "@sa/shared/blocks";
+import { isInstitutionalRed } from "@sa/shared/institutional-red";
 import LucideIcon from "../components/LucideIcon";
 import { isInternalHref, safeInternalHref } from "../lib/url";
 
 type Variant = NonNullable<CtaProps["variant"]>;
 
 const VARIANT_BG: Record<Variant, string> = {
-  accent: "bg-accent text-white",
+  emergency: "bg-accent text-white",
   primary: "bg-primary text-white",
   secondary: "bg-secondary-700 text-white",
   muted: "bg-gray-100 text-ink",
 };
 
 const VARIANT_BTN: Record<Variant, string> = {
-  accent: "bg-white text-accent-700 hover:bg-gray-100",
+  emergency: "bg-white text-accent-700 hover:bg-gray-100",
   primary: "bg-white text-primary hover:bg-gray-100",
   secondary: "bg-white text-secondary-700 hover:bg-gray-100",
   muted: "bg-primary text-white hover:opacity-90",
 };
 
 export default function Cta(p: CtaProps) {
-  // El rojo (accent) queda reservado para Emergencias: hay que pedirlo explícito.
-  const variant: Variant = p.variant ?? "primary";
+  /*
+   * El rojo institucional es exclusivo de Emergencias y sólo lo enciende
+   * `variant: "emergency"`. Cualquier otro valor (incluida la variante
+   * histórica "accent" que quedó en contenido viejo) cae en primary. El
+   * schema ya rechaza un `background` rojo; acá se vuelve a filtrar por si
+   * la fila viene de antes de esa validación.
+   */
+  const requested = p.variant as string | undefined;
+  const variant: Variant = requested && requested in VARIANT_BG ? (requested as Variant) : "primary";
   const sectionBg = VARIANT_BG[variant];
   const btnClass = VARIANT_BTN[variant];
+  const background = p.background && !isInstitutionalRed(p.background) ? p.background : undefined;
   const href = p.ctaHref ?? "#";
   const isInternal = isInternalHref(href);
   const linkClass = `px-6 py-3 rounded font-semibold transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 whitespace-nowrap ${btnClass}`;
@@ -31,11 +40,11 @@ export default function Cta(p: CtaProps) {
   return (
     <section
       className={`${sectionBg} section-y-md`}
-      style={p.background ? { background: p.background } : undefined}
+      style={background ? { background } : undefined}
     >
       <div className="container-x flex flex-col md:flex-row items-center justify-between gap-4">
         <div className="flex items-start gap-3">
-          {variant === "accent" && (
+          {variant === "emergency" && (
             <span className="hidden sm:flex w-11 h-11 shrink-0 rounded-full bg-white/15 items-center justify-center">
               <LucideIcon name="siren" className="w-6 h-6" />
             </span>

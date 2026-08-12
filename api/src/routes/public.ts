@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { db } from "../db.js";
-import { sanitizeHtml, stripHtml } from "../html.js";
+import { sanitizeHtml, stripHtml, sanitizeMapEmbed, safeLinkHref } from "../html.js";
 import { rateLimit } from "../rate-limit.js";
 import { verifyCaptcha } from "../captcha.js";
 import { badRequest, notFound } from "../http.js";
@@ -183,23 +183,18 @@ publicRouter.get("/schedules", async (_req, res) => {
 publicRouter.get("/services", async (_req, res) => {
   res.json(await db("services").orderBy("order"));
 });
+/**
+ * Sólo los estudios que el sanatorio marcó como publicados: el catálogo puede
+ * estar cargado sin afirmar todavía que la prestación existe.
+ */
 publicRouter.get("/studies", async (_req, res) => {
-  res.json(await db("studies").orderBy("order"));
+  res.json(await db("studies").where({ published: true }).orderBy("order"));
 });
-publicRouter.get("/news", async (req, res) => {
-  const limit = Math.min(Number(req.query.limit ?? 20), 100);
-  res.json(
-    await db("news")
-      .where({ status: "published" })
-      .orderBy("published_at", "desc")
-      .limit(limit),
-  );
-});
-publicRouter.get("/news/:slug", async (req, res) => {
-  const n = await db("news").where({ slug: req.params.slug, status: "published" }).first();
-  if (!n) throw notFound("no encontrada");
-  res.json({ ...n, body: sanitizeHtml(n.body) });
-});
+/**
+ * Noticias quedó fuera del producto (item 7 de la minuta): no hay endpoints
+ * públicos para listarlas ni consultarlas. La tabla se conserva como archivo
+ * histórico, pero no hay ninguna vía pública para publicar su contenido.
+ */
 
 const appointmentSchema = z.object({
   name: plainText(160).pipe(z.string().min(2, "nombre demasiado corto")),
@@ -214,13 +209,35 @@ const appointmentSchema = z.object({
   website: z.string().max(200).optional(),
 });
 
+/**
+ * Saneo profundo de los props de un bloque.
+ *
+ * - `html`/`body`: HTML con allowlist.
+ * - `embedHtml`: sólo el iframe del mapa, reconstruido y validado.
+ * - claves de enlace (`href`, `ctaHref`, `directionsUrl`…): se descartan si el
+ *   destino no es seguro, para que un `javascript:` nunca llegue al front.
+ */
+const HTML_KEYS = new Set(["html", "body"]);
+const LINK_KEYS = new Set([
+  "href",
+  "ctaHref",
+  "secondaryCtaHref",
+  "directionsUrl",
+  "imageUrl",
+  "url",
+]);
+
 function sanitizeBlockProps(props: unknown): unknown {
   if (Array.isArray(props)) return props.map(sanitizeBlockProps);
   if (!props || typeof props !== "object") return props;
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(props)) {
-    if (typeof value === "string" && (key === "html" || key === "body" || key === "embedHtml")) {
+    if (typeof value === "string" && HTML_KEYS.has(key)) {
       out[key] = sanitizeHtml(value) ?? "";
+    } else if (typeof value === "string" && key === "embedHtml") {
+      out[key] = sanitizeMapEmbed(value);
+    } else if (typeof value === "string" && LINK_KEYS.has(key)) {
+      out[key] = safeLinkHref(value) ?? "";
     } else {
       out[key] = sanitizeBlockProps(value);
     }
@@ -228,7 +245,14 @@ function sanitizeBlockProps(props: unknown): unknown {
   return out;
 }
 
+/**
+ * Tipos de bloque retirados del producto. Aunque queden filas viejas en la
+ * base, no se sirven: así Noticias no puede reaparecer por datos históricos.
+ */
+const RETIRED_BLOCK_TYPES = new Set(["newsGrid"]);
+
 function shouldExposePublicBlock(pageSlug: string, block: { type: string; props: unknown }) {
+  if (RETIRED_BLOCK_TYPES.has(block.type)) return false;
   if (block.type !== "cta") return true;
   // CTAs con acciones directas (tel:, mailto:, WhatsApp, Google Maps) siempre se muestran.
   const props = parseJson(block.props) as { ctaHref?: unknown } | null;

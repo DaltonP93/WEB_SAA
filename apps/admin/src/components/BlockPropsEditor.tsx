@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import type { BlockType } from "@sa/shared/blocks";
+import { RED_RESERVED_MESSAGE, isInstitutionalRed } from "@sa/shared/institutional-red";
 import { api } from "../api";
 
 /**
@@ -24,6 +25,8 @@ interface FieldDef {
     | "channelKeys";
   options?: { label: string; value: any }[];
   itemFields?: FieldDef[]; // para 'items'
+  /** Aclaración corta debajo del campo (reglas que además valida el servidor). */
+  help?: string;
 }
 
 const SCHEMAS: Record<BlockType, FieldDef[]> = {
@@ -109,10 +112,6 @@ const SCHEMAS: Record<BlockType, FieldDef[]> = {
       { label: "Biopsias / anatomía patológica", value: "biopsias" },
     ] },
   ],
-  newsGrid: [
-    { key: "limit", label: "Cantidad", kind: "number" },
-    { key: "columns", label: "Columnas", kind: "select", options: [2,3,4].map(n => ({ label: String(n), value: n })) },
-  ],
   mapEmbed: [
     { key: "heading", label: "Encabezado", kind: "text" },
     { key: "text", label: "Texto (dirección, referencias)", kind: "textarea" },
@@ -163,12 +162,12 @@ const SCHEMAS: Record<BlockType, FieldDef[]> = {
     { key: "ctaLabel", label: "Label del botón", kind: "text" },
     { key: "ctaHref", label: "Href", kind: "url" },
     { key: "variant", label: "Variante", kind: "select", options: [
-      { label: "Acento (default)", value: "accent" },
-      { label: "Primario", value: "primary" },
+      { label: "Primario (default)", value: "primary" },
       { label: "Secundario", value: "secondary" },
       { label: "Suave", value: "muted" },
-    ] },
-    { key: "background", label: "Color/Background (override)", kind: "color" },
+      { label: "Emergencias (rojo)", value: "emergency" },
+    ], help: "El rojo es exclusivo de Emergencias: la variante sólo se guarda si el bloque habla de Emergencias." },
+    { key: "background", label: "Color/Background (override)", kind: "color", help: "No admite el rojo institucional, reservado para Emergencias." },
   ],
   stats: [
     { key: "heading", label: "Encabezado", kind: "text" },
@@ -290,6 +289,10 @@ export default function BlockPropsEditor({ type, props, onChange }: { type: Bloc
         <div key={f.key}>
           <label className="label">{f.label}</label>
           <Field def={f} value={props?.[f.key]} onChange={(v) => onChange({ ...props, [f.key]: v })} />
+          {f.help && <p className="mt-1 text-xs text-gray-500">{f.help}</p>}
+          {f.kind === "color" && isInstitutionalRed(props?.[f.key]) && (
+            <p className="mt-1 text-xs font-medium text-red-700">{RED_RESERVED_MESSAGE}</p>
+          )}
         </div>
       ))}
     </div>

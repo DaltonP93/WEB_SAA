@@ -5,7 +5,7 @@ import { api } from "../api";
 import type { SiteSettings } from "@sa/shared";
 import SocialIcon, { type SocialKind } from "./SocialIcon";
 import { CHANNEL_KEYS, channelHref, useContactChannels } from "../lib/contact-channels";
-import { safeInternalHref } from "../lib/url";
+import { isSafeExternalHref, safeInternalHref } from "../lib/url";
 
 interface Props {
   children: ReactNode;
@@ -206,7 +206,8 @@ export default function Layout({ children, settings }: Props) {
   const brand = settings?.brand;
   const contact = settings?.contact;
   const social = settings?.social ?? {};
-  const mapsUrl = contact?.mapsUrl?.trim() || MAPS_URL_FALLBACK;
+  // Un enlace mal cargado en el panel no puede convertirse en javascript:
+  const mapsUrl = isSafeExternalHref(contact?.mapsUrl) ? contact!.mapsUrl!.trim() : MAPS_URL_FALLBACK;
 
   // Header y footer leen de la misma tabla que los bloques de contacto.
   const { channels, get, firstWithValue } = useContactChannels();
@@ -224,7 +225,7 @@ export default function Layout({ children, settings }: Props) {
 
   const socialLinks = (["facebook", "instagram", "youtube", "linkedin"] as SocialKind[])
     .map((kind) => ({ kind, href: (social as Record<string, string | undefined>)[kind] }))
-    .filter((s): s is { kind: SocialKind; href: string } => !!s.href);
+    .filter((s): s is { kind: SocialKind; href: string } => isSafeExternalHref(s.href));
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
