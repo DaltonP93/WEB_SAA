@@ -41,8 +41,15 @@ export async function seed(knex: Knex): Promise<void> {
       phones: ["+595 21 000 000"],
       email: "contacto@sanatorioadventista.com.py",
       whatsapp: "+595981000000",
-      hours: "Lunes a Viernes 7:00 - 19:00 | Sábados 8:00 - 12:00",
+      hours:
+        "Consultorios externos: lunes a viernes 7:00 - 19:00 | sábados 8:00 - 12:00\nEmergencias: 24 horas, todos los días",
       mapEmbed: SANATORIO_MAP_EMBED,
+      // Pendientes de definición con el cliente: mientras estén vacíos la UI
+      // los muestra como "a confirmar" en vez de inventar un dato.
+      emergencyPhone: "",
+      gthEmail: "",
+      mapsUrl:
+        "https://www.google.com/maps/search/?api=1&query=Sanatorio+Adventista+Asunci%C3%B3n+Paraguay",
     },
     social: {
       facebook: "https://facebook.com/",
@@ -62,6 +69,9 @@ export async function seed(knex: Knex): Promise<void> {
     await knex("settings").insert({ key, value: JSON.stringify(value) });
   }
 
+  // Menú base. La estructura definitiva (Servicios con sus estudios,
+  // Pacientes con Información / Portal / Atención) la deja la migración
+  // 20260812000000, que este seed vuelve a aplicar desde 03_pages_and_content.
   await knex("menus").del();
   await knex("menus").insert([
     {
@@ -69,18 +79,18 @@ export async function seed(knex: Knex): Promise<void> {
       items: JSON.stringify([
         { label: "Inicio", href: "/" },
         { label: "Institucional", href: "/institucional" },
-        { label: "Especialidades", href: "/especialidades" },
-        { label: "Profesionales", href: "/profesionales" },
         { label: "Servicios", href: "/servicios" },
-        { label: "Noticias", href: "/noticias" },
+        { label: "Médicos", href: "/profesionales" },
+        { label: "Pacientes", href: "/pacientes" },
+        { label: "Convenios", href: "/convenios" },
         { label: "Contacto", href: "/contacto" },
       ]),
     },
     {
       location: "footer",
       items: JSON.stringify([
-        { label: "Estudios", href: "/estudios" },
-        { label: "Solicitar turno", href: "/turnos" },
+        { label: "Estudios y laboratorio", href: "/estudios" },
+        { label: "Reservar turno", href: "/turnos" },
         { label: "Trabajá con nosotros", href: "/contacto" },
         { label: "Política de privacidad", href: "/privacidad" },
       ]),

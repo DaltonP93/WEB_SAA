@@ -45,19 +45,17 @@ app.get("/robots.txt", (_req, res) => {
 });
 app.get("/sitemap.xml", async (_req, res) => {
   const siteUrl = getSiteUrl();
-  const [pages, specialties, doctors, news] = await Promise.all([
+  // La sección Noticias se retiró del sitio público, así que no se indexa.
+  const [pages, specialties, doctors] = await Promise.all([
     db("pages").where({ status: "published" }).select("slug", "updated_at"),
     db("specialties").select("slug"),
     db("doctors").select("slug"),
-    db("news").where({ status: "published" }).select("slug", "updated_at", "published_at"),
   ]);
   const urls: { loc: string; lastmod?: string | Date }[] = [
     ...pages.map((p) => ({ loc: p.slug === "home" ? "/" : `/${p.slug}`, lastmod: p.updated_at })),
     { loc: "/profesionales" },
-    { loc: "/noticias" },
     ...specialties.map((s) => ({ loc: `/especialidades/${s.slug}` })),
     ...doctors.map((d) => ({ loc: `/profesionales/${d.slug}` })),
-    ...news.map((n) => ({ loc: `/noticias/${n.slug}`, lastmod: n.updated_at ?? n.published_at })),
   ];
   res.type("application/xml").send(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.map((u) => sitemapUrl(siteUrl, u.loc, u.lastmod)).join("\n")}\n</urlset>`);
 });

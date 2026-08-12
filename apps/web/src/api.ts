@@ -55,30 +55,37 @@ function hslToRgb(h: number, s: number, l: number): [number, number, number] {
   ];
 }
 
-function mixTone(hex: string, delta: number): string {
+/**
+ * Escala de tonos: `mix` > 0 aclara hacia el blanco y < 0 oscurece hacia el
+ * negro, en proporción a la luminosidad del color base (por eso funciona igual
+ * con el navy primario que con el coral del accent).
+ */
+function mixTone(hex: string, mix: number): string {
   const [h, s, l] = hexToHsl(hex);
-  const nl = Math.max(0, Math.min(1, l + delta));
-  const [r, g, b] = hslToRgb(h, s, nl);
+  const nl = mix >= 0 ? l + (1 - l) * mix : l * (1 + mix);
+  const [r, g, b] = hslToRgb(h, s, Math.max(0, Math.min(1, nl)));
   return `${r} ${g} ${b}`;
 }
 
-const TONE_STEPS: { step: number; delta: number }[] = [
-  { step: 50, delta: -0.45 },
-  { step: 100, delta: -0.30 },
-  { step: 200, delta: -0.15 },
-  { step: 300, delta: -0.08 },
-  { step: 400, delta: 0 },
-  { step: 500, delta: 0.08 },
-  { step: 600, delta: 0.15 },
-  { step: 700, delta: 0.30 },
-  { step: 800, delta: 0.45 },
-  { step: 900, delta: 0.55 },
+// Mismo sentido que la escala estática de styles.css y que Tailwind:
+// 50 es el tono más claro y 900 el más oscuro; 500 es el color de marca.
+const TONE_STEPS: { step: number; mix: number }[] = [
+  { step: 50, mix: 0.92 },
+  { step: 100, mix: 0.84 },
+  { step: 200, mix: 0.7 },
+  { step: 300, mix: 0.55 },
+  { step: 400, mix: 0.35 },
+  { step: 500, mix: 0 },
+  { step: 600, mix: -0.12 },
+  { step: 700, mix: -0.28 },
+  { step: 800, mix: -0.45 },
+  { step: 900, mix: -0.62 },
 ];
 
 function applyScale(r: CSSStyleDeclaration, prefix: string, base: string | undefined, fallbackHex: string) {
   const source = base ?? fallbackHex;
-  for (const { step, delta } of TONE_STEPS) {
-    r.setProperty(`${prefix}-${step}`, mixTone(source, delta));
+  for (const { step, mix } of TONE_STEPS) {
+    r.setProperty(`${prefix}-${step}`, mixTone(source, mix));
   }
 }
 

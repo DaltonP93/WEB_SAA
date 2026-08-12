@@ -38,7 +38,7 @@ WebSantarioV2/
 │
 ├── apps/
 │   ├── web/              React 18 + Vite + Tailwind + TanStack Query
-│   │   └── src/blocks/   19 bloques renderizables (Hero, Cards, DoctorList, …)
+│   │   └── src/blocks/   21 bloques renderizables (Hero, Cards, DoctorList, …)
 │   └── admin/            React 18 + Vite + Tailwind + dnd-kit + Tiptap
 │       └── src/pages/    Páginas del panel (PageBuilder, Settings, Doctors, …)
 │
@@ -244,7 +244,44 @@ Si la IA que abre el repo está corriendo en Claude Code con la configuración a
 
 ---
 
-## 8. Estado actual (al 2026-07-30)
+## 8. Estado actual (al 2026-08-12)
+
+### Minuta de ajustes del sitio (2026-08-12)
+
+Los 25 puntos acordados con el cliente están implementados. Lo estructural:
+
+- **IA del sitio**: el menú "Especialidades" pasó a ser **Servicios** (con especialidades,
+  odontología, estudios por imágenes / cardiológicos / laboratorio / biopsias y preparación
+  para estudios adentro). **Pacientes** tiene página propia (`/pacientes`) y su desplegable
+  va Información → Portal del paciente → Atención al paciente. El **Portal del paciente**
+  quedó unificado en `/portal-paciente`. Se agregaron `/horarios`, `/odontologia` y
+  `/privacidad`. **Se eliminó la sección Noticias** del sitio público (rutas, página, links
+  del menú, `newsGrid` del registro de bloques y URLs del sitemap); el CRUD de noticias
+  sigue en el admin por si se reactiva.
+- **Bloques nuevos**: `contactChannels` (WhatsApp/teléfono/email/emergencias diferenciados
+  por tipo de atención) y `socialLinks` ("Conócenos en nuestras redes"). Varios bloques
+  ganaron props: `heading`/`compact` en las grillas, `category` en `studyGrid`,
+  `heading`/`text`/`directionsUrl` en `mapEmbed`, `icon` en items de `cards` y `stats`.
+- **Color**: el rojo (accent) quedó **exclusivamente para Emergencias**. "Reservar turno"
+  usa `.btn-turno` (cyan `secondary-700`) y Emergencias `.btn-emergency`. El `cta` sin
+  `variant` ahora es `primary`, no `accent`.
+- **Iconos**: cada especialidad / servicio / estudio tiene el suyo en la DB, con fallback por
+  slug en `apps/web/src/lib/icons.ts`. Ojo: `lungs`, `venus` y `flask` **no existen** en
+  lucide 0.460 (estaban en uso y no renderizaban nada).
+- **Escala de tonos del theming**: `applyTheme` generaba la escala **invertida** respecto de
+  `styles.css` y de Tailwind (50 salía oscuro y 900 claro). Corregido en `apps/web/src/api.ts`.
+- **Estilos de contenido**: no está el plugin `@tailwindcss/typography`, así que `.prose`
+  se define a mano en `styles.css` (listas, links y tablas del contenido cargado por el
+  cliente salían sin estilo).
+- **Seeds**: `03_pages_and_content.ts` borra páginas y bloques, así que al final **vuelve a
+  aplicar las migraciones de contenido** (todas idempotentes) para que una instalación nueva
+  quede igual que producción.
+- **Pendientes del cliente** (quedan vacíos y la UI los muestra como "a confirmar", se cargan
+  desde el admin sin tocar código): números de WhatsApp por tipo de atención, número de
+  Emergencias (`contact.emergencyPhone`), correo de GTH (`contact.gthEmail`), horarios
+  definitivos y alcance exacto de Biopsias.
+
+### Base previa (al 2026-07-30)
 
 ✅ Estructura del monorepo, scripts de extracción, schema MySQL, seeds, API completa (público + admin + auth), frontend público con 19 bloques + páginas dinámicas + buscador de médicos, panel admin completo con page builder DnD, Tiptap, gestor de medios, usuarios.
 ✅ Documentación de deploy en [`docs/DEPLOY.md`](docs/DEPLOY.md).
