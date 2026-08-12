@@ -62,8 +62,8 @@ Para profundizar: [`AGENTS.md`](AGENTS.md) explica el sistema de bloques, themin
 ### 1. Clonar e instalar
 
 ```bash
-git clone https://github.com/cacostama/WebSamap2.git
-cd WebSamap2
+git clone https://github.com/DaltonP93/WEB_SAA.git
+cd WEB_SAA
 pnpm install
 ```
 
@@ -136,6 +136,10 @@ Cada página se compone de bloques `{ type, props }` almacenados en MySQL. El ad
 | `pnpm db:migrate` | Aplica migraciones Knex |
 | `pnpm db:seed` | Corre los 3 seeds (users, specialties+doctors, pages+content) |
 | `pnpm db:reset` | Rollback total + migrate + seed |
+| `pnpm typecheck` | Typecheck de api, web y admin |
+| `pnpm test` | Pruebas (vitest). Con `TEST_DATABASE=1` incluye migraciones |
+| `pnpm check:secrets` | Detector de credenciales hardcodeadas |
+| `pnpm audit:prod` | Auditoría de dependencias de producción (high/critical) |
 | `pnpm extract:assets` | Saca imágenes base64 de los HTML de referencia |
 | `pnpm extract:doctors` | Extrae la guía médica de Asunción a JSON |
 
@@ -148,8 +152,9 @@ Guía paso a paso en [`docs/DEPLOY.md`](docs/DEPLOY.md). Runbook de operación (
 **Deploy de cambios** — un solo comando, vía SSH con paramiko:
 
 ```bash
-python scripts/deploy/run-remote.py <IP> root '<password>' \
-  "bash /var/www/sanatorio/scripts/deploy/update-vps.sh"
+# Credenciales por entorno (.env.deploy, fuera de git) — nunca por argumento
+cp .env.deploy.example .env.deploy   # completar host, usuario y llave SSH
+python scripts/deploy/run-remote.py "bash /var/www/sanatorio/scripts/deploy/update-vps.sh"
 ```
 
 `update-vps.sh` hace `git reset --hard origin/main` → `pnpm install --frozen-lockfile` → `pnpm db:migrate` → builds → reload de Nginx + restart de PM2 (`sanatorio-api`).

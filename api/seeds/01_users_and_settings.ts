@@ -12,8 +12,23 @@ const SANATORIO_MAP_EMBED =
 export async function seed(knex: Knex): Promise<void> {
   await knex("users").del();
   const email = process.env.SEED_ADMIN_EMAIL ?? "admin@sanatorio.local";
-  const password = process.env.SEED_ADMIN_PASSWORD ?? "admin1234";
   const name = process.env.SEED_ADMIN_NAME ?? "Administrador";
+  // Nunca una contraseña administrativa fija: en producción es obligatoria por
+  // entorno; en desarrollo se usa una local y se avisa por consola.
+  const envPassword = process.env.SEED_ADMIN_PASSWORD?.trim();
+  if (!envPassword && process.env.NODE_ENV === "production") {
+    throw new Error(
+      "SEED_ADMIN_PASSWORD es obligatoria cuando NODE_ENV=production. " +
+        "Definila en api/.env antes de sembrar.",
+    );
+  }
+  const password = envPassword || "dev-only-change-me";
+  if (!envPassword) {
+    console.warn(
+      "[seed] SEED_ADMIN_PASSWORD no definida: se usó una contraseña de desarrollo. " +
+        "Cambiala antes de exponer el panel.",
+    );
+  }
   const hash = await bcrypt.hash(password, 10);
   await knex("users").insert({ email, password_hash: hash, name, role: "superadmin" });
 
@@ -36,24 +51,24 @@ export async function seed(knex: Knex): Promise<void> {
       fontBody: "Open Sans",
       radius: "0.5rem",
     },
+    // Teléfonos, WhatsApp y correos NO viven acá: se administran en
+    // "Canales de contacto" (tabla contact_channels). Los horarios, en
+    // "Horarios de atención" (tabla schedules). Nada de datos de ejemplo:
+    // el sitio muestra "A confirmar" hasta que el sanatorio los cargue.
     contact: {
       address: "Silvio Pettirossi 380 c/ Pai Pérez, Asunción, Paraguay",
-      phones: ["+595 21 000 000"],
-      email: "contacto@sanatorioadventista.com.py",
-      whatsapp: "+595981000000",
-      hours:
-        "Consultorios externos: lunes a viernes 7:00 - 19:00 | sábados 8:00 - 12:00\nEmergencias: 24 horas, todos los días",
+      phones: [],
+      email: "",
+      hours: "",
       mapEmbed: SANATORIO_MAP_EMBED,
-      // Pendientes de definición con el cliente: mientras estén vacíos la UI
-      // los muestra como "a confirmar" en vez de inventar un dato.
-      emergencyPhone: "",
-      gthEmail: "",
       mapsUrl:
         "https://www.google.com/maps/search/?api=1&query=Sanatorio+Adventista+Asunci%C3%B3n+Paraguay",
     },
+    // Sin perfiles de ejemplo: un link a facebook.com/ no es la página del
+    // sanatorio. Se cargan desde el panel cuando estén confirmados.
     social: {
-      facebook: "https://facebook.com/",
-      instagram: "https://instagram.com/",
+      facebook: "",
+      instagram: "",
       youtube: "",
       linkedin: "",
     },

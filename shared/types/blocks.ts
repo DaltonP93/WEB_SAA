@@ -16,6 +16,8 @@ export type BlockType =
   | "appointmentForm"
   | "contactChannels"
   | "socialLinks"
+  | "steps"
+  | "scheduleTable"
   | "cta"
   | "stats"
   | "logos"
@@ -77,11 +79,20 @@ export interface GalleryProps {
 export interface DoctorListProps {
   /** Preselecciona una especialidad por id (el visitante puede cambiarla). */
   specialtyFilter?: number;
+  /**
+   * Especialidad por slug: más estable que el id, que cambia entre entornos.
+   * Con `lockSpecialty` la lista queda restringida a esa especialidad.
+   */
+  specialtySlug?: string;
+  /** Fija la especialidad: oculta el selector y no muestra otros médicos. */
+  lockSpecialty?: boolean;
   showSearch?: boolean;
   limit?: number;
   heading?: string;
   /** Texto de ayuda debajo del título. */
   intro?: string;
+  /** Mensaje cuando la especialidad todavía no tiene profesionales cargados. */
+  emptyText?: string;
 }
 
 export interface SpecialtyGridProps {
@@ -139,26 +150,49 @@ export interface AppointmentFormProps {
   defaultSpecialtyId?: number;
 }
 
-/** Canal de contacto directo (WhatsApp, teléfono, email, emergencias). */
-export type ContactChannelKind = "whatsapp" | "phone" | "email" | "emergency";
-
-export interface ContactChannelItem {
-  kind: ContactChannelKind;
-  /** Tipo de atención: "Turnos", "Estudios y laboratorio", "Trabajá con nosotros"… */
-  label: string;
-  /** Número o correo. Si queda vacío se muestra como "a confirmar" y no se linkea. */
-  value?: string;
-  note?: string;
-  /** Mensaje pre-cargado para los links de WhatsApp. */
-  message?: string;
-  icon?: string;
-}
-
+/**
+ * Bloque de canales de contacto.
+ *
+ * Los datos NO viven en el bloque: se administran en Configuración → Canales de
+ * contacto (tabla `contact_channels`) y el bloque sólo elige cuáles mostrar.
+ * Así un número se cambia en un único lugar.
+ */
 export interface ContactChannelsProps {
   heading?: string;
   text?: string;
   columns?: 2 | 3 | 4;
-  items: ContactChannelItem[];
+  /** Claves de canal a mostrar, en orden. Vacío = todos los activos. */
+  keys?: string[];
+}
+
+/**
+ * Infografía de pasos (item 9): explica un proceso en 3-4 pasos numerados,
+ * con icono y texto. Editable desde el panel.
+ */
+export interface StepItem {
+  title: string;
+  text?: string;
+  icon?: string;
+}
+
+export interface StepsProps {
+  heading?: string;
+  text?: string;
+  items: StepItem[];
+  /** Fondo suave para separar la sección del resto. */
+  muted?: boolean;
+}
+
+/**
+ * Tabla de horarios. Los datos viven en la tabla `schedules` (administrable);
+ * si no hay ninguno activo, el bloque avisa que están en confirmación en vez
+ * de publicar horarios inventados.
+ */
+export interface ScheduleTableProps {
+  heading?: string;
+  text?: string;
+  /** Filtra por área/servicio; vacío = todas. */
+  areaKeys?: string[];
 }
 
 export interface SocialLinksProps {
@@ -209,6 +243,8 @@ export type Block =
   | BaseBlock<"appointmentForm", AppointmentFormProps>
   | BaseBlock<"contactChannels", ContactChannelsProps>
   | BaseBlock<"socialLinks", SocialLinksProps>
+  | BaseBlock<"steps", StepsProps>
+  | BaseBlock<"scheduleTable", ScheduleTableProps>
   | BaseBlock<"cta", CtaProps>
   | BaseBlock<"stats", StatsProps>
   | BaseBlock<"logos", LogosProps>
@@ -232,9 +268,19 @@ export const BLOCK_REGISTRY: { type: BlockType; label: string; defaults: unknown
   {
     type: "contactChannels",
     label: "Canales de contacto (WhatsApp / tel / email)",
-    defaults: { heading: "Canales de atención", columns: 3, items: [] } satisfies ContactChannelsProps,
+    defaults: { heading: "Canales de atención", columns: 3, keys: [] } satisfies ContactChannelsProps,
   },
   { type: "socialLinks", label: "Redes sociales", defaults: { heading: "Conócenos en nuestras redes" } satisfies SocialLinksProps },
+  {
+    type: "steps",
+    label: "Infografía de pasos",
+    defaults: { heading: "Cómo sacar tu turno", items: [], muted: true } satisfies StepsProps,
+  },
+  {
+    type: "scheduleTable",
+    label: "Horarios de atención",
+    defaults: { heading: "Horarios de atención" } satisfies ScheduleTableProps,
+  },
   { type: "cta", label: "Llamado a la accion", defaults: { title: "", ctaLabel: "Ver mas", ctaHref: "#", variant: "primary" } satisfies CtaProps },
   { type: "stats", label: "Estadisticas", defaults: { items: [] } satisfies StatsProps },
   { type: "logos", label: "Logos", defaults: { logos: [] } satisfies LogosProps },

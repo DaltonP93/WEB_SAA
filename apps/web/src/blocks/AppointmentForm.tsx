@@ -5,6 +5,7 @@ import { Loader2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { api } from "../api";
 import type { AppointmentFormProps } from "@sa/shared/blocks";
+import { CHANNEL_KEYS, waDigits, useContactChannels } from "../lib/contact-channels";
 
 const inputClass =
   "border rounded px-3 py-2 w-full bg-white focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition";
@@ -13,8 +14,10 @@ export default function AppointmentForm({ heading = "Solicitar turno", defaultSp
   const [searchParams] = useSearchParams();
   const doctorSlugParam = searchParams.get("doctor") ?? "";
 
-  const settings = useQuery({ queryKey: ["settings"], queryFn: async () => (await api.get("/public/settings")).data });
   const specs = useQuery({ queryKey: ["specialties"], queryFn: async () => (await api.get("/public/specialties")).data });
+  // El WhatsApp de turnos sale de Canales de contacto (fuente única).
+  const { firstWithValue } = useContactChannels();
+  const turnosChannel = firstWithValue(CHANNEL_KEYS.turnos, CHANNEL_KEYS.general);
   // Cargar info del doctor si vino por query param ?doctor=slug
   const doctor = useQuery({
     queryKey: ["doctor-for-form", doctorSlugParam],
@@ -39,7 +42,7 @@ export default function AppointmentForm({ heading = "Solicitar turno", defaultSp
     }));
   }, [doctor.data]);
 
-  const waNumber = useMemo(() => (settings.data?.contact?.whatsapp ?? "").replace(/[^0-9]/g, ""), [settings.data]);
+  const waNumber = useMemo(() => (turnosChannel?.value ? waDigits(turnosChannel.value) : ""), [turnosChannel]);
 
   function specialtyName(): string | undefined {
     if (!form.specialtyId) return undefined;
@@ -108,10 +111,10 @@ export default function AppointmentForm({ heading = "Solicitar turno", defaultSp
               initial={{ opacity: 0, y: -4 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }}
-              className="text-sm text-red-700 inline-flex items-center gap-2"
+              className="text-sm text-amber-700 inline-flex items-center gap-2"
             >
-              <span className="w-1.5 h-1.5 rounded-full bg-red-600 inline-block" />
-              No hay un número de WhatsApp configurado. Comunicate por los datos de contacto.
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-600 inline-block" />
+              El WhatsApp de turnos todavía no está configurado. Escribinos por los otros canales de contacto.
             </motion.p>
           )}
         </AnimatePresence>

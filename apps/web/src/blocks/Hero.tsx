@@ -1,17 +1,29 @@
 import type { HeroProps } from "@sa/shared/blocks";
 import { Link } from "react-router-dom";
 
+/**
+ * CTA del hero. El principal usa el cyan institucional (mismo color que
+ * "Reservar turno" en el resto del sitio); el secundario, contorno blanco.
+ * Nunca rojo: ese color es sólo de Emergencias.
+ */
 function CTA({ to, label, variant = "primary" }: { to: string; label: string; variant?: "primary" | "outline" }) {
-  const base = "inline-flex items-center justify-center px-6 py-3 rounded font-semibold transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-white";
-  if (variant === "outline") {
+  const base = "px-6 py-3 text-base";
+  const isExternal = /^https?:\/\//i.test(to) || to.startsWith("tel:") || to.startsWith("mailto:");
+
+  const className =
+    variant === "outline"
+      ? `btn ${base} border-2 border-white text-white hover:bg-white hover:text-primary active:bg-white/90 focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-primary`
+      : `btn-turno-on-dark ${base}`;
+
+  if (isExternal) {
     return (
-      <Link to={to} className={`${base} border-2 border-white text-white hover:bg-white hover:text-primary`}>
+      <a href={to} className={className} {...(to.startsWith("http") ? { target: "_blank", rel: "noreferrer" } : {})}>
         {label}
-      </Link>
+      </a>
     );
   }
   return (
-    <Link to={to} className={`${base} bg-white text-primary hover:bg-gray-100`}>
+    <Link to={to} className={className}>
       {label}
     </Link>
   );

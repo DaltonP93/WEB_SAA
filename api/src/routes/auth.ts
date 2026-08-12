@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { db } from "../db.js";
 import { comparePassword, signToken, requireAuth } from "../auth.js";
+import { rateLimit } from "../rate-limit.js";
 
 export const authRouter = Router();
 
@@ -14,7 +15,15 @@ const attempts = new Map<string, { count: number; resetAt: number }>();
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_MAX_ATTEMPTS = 8;
 
-authRouter.post("/login", async (req, res) => {
+// Límite por IP además del contador por IP+email de más abajo: frena el
+// barrido de muchos emails distintos desde la misma conexión.
+const loginLimiter = rateLimit({
+  windowMs: LOGIN_WINDOW_MS,
+  max: Number(process.env.LOGIN_RATE_MAX ?? 20),
+  message: "Demasiados intentos de acceso. Esperá unos minutos.",
+});
+
+authRouter.post("/login", loginLimiter, async (req, res) => {
   const parsed = loginSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "payload invalido" });
   const { email, password } = parsed.data;

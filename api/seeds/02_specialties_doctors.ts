@@ -62,12 +62,21 @@ export async function seed(knex: Knex): Promise<void> {
   const specRows = await knex("specialties").select("id", "slug", "name");
   const specBySlug = new Map(specRows.map((r) => [r.slug, r.id]));
 
-  const fallbackDoctors = [
-    { name: "Dr. Juan Pérez", specialties: ["Cardiología"] },
-    { name: "Dra. María González", specialties: ["Pediatría"] },
-    { name: "Dr. Carlos Martínez", specialties: ["Traumatología"] },
-    { name: "Dra. Ana López", specialties: ["Ginecología y Obstetricia"] },
-  ].map((d) => ({ ...d, slug: slugify(d.name) }));
+  // Médicos de ejemplo SÓLO para desarrollo: son nombres inventados y no
+  // pueden terminar publicados. En producción la guía médica se carga desde
+  // el panel o con `pnpm extract:doctors` (datos reales).
+  const seedDemoData =
+    process.env.SEED_DEMO_DATA === "1" ||
+    (process.env.SEED_DEMO_DATA !== "0" && process.env.NODE_ENV !== "production");
+
+  const fallbackDoctors = seedDemoData
+    ? [
+        { name: "Dr. Juan Pérez", specialties: ["Cardiología"] },
+        { name: "Dra. María González", specialties: ["Pediatría"] },
+        { name: "Dr. Carlos Martínez", specialties: ["Traumatología"] },
+        { name: "Dra. Ana López", specialties: ["Ginecología y Obstetricia"] },
+      ].map((d) => ({ ...d, slug: slugify(d.name) }))
+    : [];
 
   const doctorsFromFile = await tryReadJSON<
     { name: string; slug: string; specialties: string[] }[]

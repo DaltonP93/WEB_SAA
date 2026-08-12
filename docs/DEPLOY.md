@@ -133,21 +133,63 @@ certbot --nginx -d sanatorioadventista.com.py -d www.sanatorioadventista.com.py
 Cron diario de MySQL:
 
 ```bash
-0 3 * * * mysqldump -u sanatorio -p'PASS' sanatorio | gzip > /var/backups/sanatorio_$(date +\%F).sql.gz
+0 3 * * * MYSQL_PWD="$(grep '^DB_PASS=' /var/www/sanatorio/api/.env | cut -d= -f2-)" mysqldump -u sanatorio sanatorio | gzip > /var/backups/sanatorio_$(date +\%F).sql.gz
 ```
 
 Backup de `api/uploads/` (rsync semanal a almacenamiento externo).
 
 ## 7. Actualizaciones
 
+Todo el ciclo está en `scripts/deploy/update-vps.sh`, que además saca un backup
+de la base antes de migrar y falla si el health check no da 200:
+
 ```bash
-cd /var/www/sanatorio
-git pull
-pnpm install --frozen-lockfile
-pnpm db:migrate
-pnpm build
-pm2 restart sanatorio-api
+# Desde tu máquina (credenciales en .env.deploy, ver .env.deploy.example)
+python scripts/deploy/run-remote.py "bash /var/www/sanatorio/scripts/deploy/update-vps.sh"
+
+# O directamente en el servidor
+bash /var/www/sanatorio/scripts/deploy/update-vps.sh
 ```
+
+Pasos que ejecuta:
+
+1. `git fetch` + `reset --hard origin/main` (o al SHA de `ROLLBACK_TO`).
+2. `pnpm install --frozen-lockfile` — **sin fallback**: si el lockfile no
+   coincide, el deploy se detiene en vez de instalar otra cosa.
+3. `mysqldump | gzip` a `/var/www/sanatorio/.db-backups/` (guarda los 10 últimos).
+4. `pnpm db:migrate`.
+5. Builds de api, web (con prerender SEO) y admin.
+6. Reload de Nginx + restart de PM2 (`sanatorio-api`).
+7. Health check con reintentos: si `/api/health` no da 200 en 20s, sale con
+   error e imprime el comando de rollback.
+
+### Rollback
+
+```bash
+# 1. Volver el código a la versión anterior (el script imprime el SHA previo)
+ROLLBACK_TO=<sha-anterior> bash /var/www/sanatorio/scripts/deploy/update-vps.sh
+
+# 2. Si la versión nueva agregó migraciones, revertirlas de a una
+cd /var/www/sanatorio/api
+pnpm exec knex --knexfile knexfile.ts migrate:down     # repetir por migración
+
+# 3. Si hace falta restaurar datos, usar el backup previo al deploy
+gunzip < /var/www/sanatorio/.db-backups/sanatorio-<fecha>.sql.gz \
+  | mysql -u sanatorio -p sanatorio
+```
+
+Las migraciones de contenido de esta fase guardan el estado anterior de los
+bloques en la tabla `settings` (`minuta_blocks_backup_*`), así que su `down()`
+restaura las páginas tal como estaban.
+
+### Verificación de salud
+
+```bash
+curl -s http://<host>/api/health        # 200 = API y base OK · 503 = base caída
+```
+
+`/api/health` devuelve el estado por componente (`api`, `database`) sin exponer
+credenciales ni datos de conexión.
 
 ## 8. Verificación post-deploy
 
@@ -155,8 +197,16 @@ pm2 restart sanatorio-api
 - [ ] `https://sanatorioadventista.com.py/admin/` muestra el login
 - [ ] `https://sanatorioadventista.com.py/api/health` devuelve `{ok:true}`
 - [ ] Cambiar la contraseña del admin sembrado y crear usuarios reales
+- [ ] Borrar `/var/www/sanatorio/.deploy-credentials` después de leerlo
 - [ ] Subir el logo definitivo y configurar branding completo
-- [ ] Crear contenido inicial (médicos, noticias) desde el admin
+- [ ] Cargar **Canales de contacto** (WhatsApp por tipo de atención, Emergencias, GTH)
+- [ ] Cargar **Horarios de atención** y activarlos (hasta entonces el sitio dice "en proceso de confirmación")
+- [ ] Crear contenido inicial (médicos) desde el admin
+
+> El panel `/admin` **no se publica sin HTTPS**: `setup-vps.sh` sólo lo expone
+> si se pasa `DOMAIN` (y emite el certificado con certbot). Para publicarlo sin
+> TLS hay que pedirlo explícitamente con `ADMIN_ALLOW_INSECURE_HTTP=1`, lo que
+> deja las credenciales del admin viajando en texto plano.
 
 ## Variables de entorno producción
 
@@ -167,7 +217,10 @@ pm2 restart sanatorio-api
 | `DB_HOST` | `127.0.0.1` |
 | `DB_USER` | `sanatorio` |
 | `DB_NAME` | `sanatorio` |
-| `JWT_SECRET` | `<random 64 chars>` |
+| `JWT_SECRET` | `<random ≥32 chars>` — la API no arranca en producción con el valor de ejemplo |
+| `SEED_ADMIN_PASSWORD` | obligatoria al sembrar con `NODE_ENV=production` |
+| `PUBLIC_FORMS_RATE_MAX` | `10` envíos por IP en `PUBLIC_FORMS_RATE_WINDOW_MS` |
+| `CAPTCHA_PROVIDER` / `CAPTCHA_SECRET_KEY` | opcional (`turnstile`/`recaptcha`); vacío = verificación desactivada |
 | `CORS_ORIGINS` | `https://sanatorioadventista.com.py` |
 | `PUBLIC_BASE_URL` | `https://sanatorioadventista.com.py` |
 | `UPLOAD_DIR` | `/var/www/sanatorio/api/uploads` |

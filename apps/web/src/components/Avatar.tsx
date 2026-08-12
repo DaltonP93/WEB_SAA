@@ -32,13 +32,15 @@ function initials(name: string): string {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
+/**
+ * Paleta de avatares: sólo primario y secundario.
+ * El accent (rojo) queda reservado para Emergencias, así que no se usa acá.
+ */
 const AVATAR_PALETTE = [
   "bg-primary/15 text-primary",
   "bg-secondary/20 text-secondary-800",
-  "bg-accent/15 text-accent-700",
   "bg-primary-100 text-primary-800",
   "bg-secondary-100 text-secondary-800",
-  "bg-accent-100 text-accent-800",
   "bg-primary-200 text-primary-900",
   "bg-secondary-200 text-secondary-900",
 ];

@@ -10,6 +10,8 @@ import { newsRouter } from "./news.js";
 import { menusRouter } from "./menus.js";
 import { appointmentsRouter } from "./appointments.js";
 import { contactMessagesRouter } from "./contact_messages.js";
+import { contactChannelsRouter } from "./contact_channels.js";
+import { schedulesRouter } from "./schedules.js";
 import { mediaRouter } from "./media.js";
 import { usersRouter } from "./users.js";
 
@@ -26,5 +28,7 @@ adminRouter.use("/news", newsRouter);
 adminRouter.use("/menus", menusRouter);
 adminRouter.use("/appointments", appointmentsRouter);
 adminRouter.use("/contact-messages", contactMessagesRouter);
+adminRouter.use("/contact-channels", contactChannelsRouter);
+adminRouter.use("/schedules", schedulesRouter);
 adminRouter.use("/media", mediaRouter);
 adminRouter.use("/users", usersRouter);

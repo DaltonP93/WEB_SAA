@@ -5,8 +5,24 @@ import type { Request, Response, NextFunction } from "express";
 const SECRET = process.env.JWT_SECRET ?? "dev-secret";
 const EXPIRES = process.env.JWT_EXPIRES_IN ?? "7d";
 
-if (process.env.NODE_ENV === "production" && SECRET === "dev-secret") {
-  throw new Error("JWT_SECRET es obligatorio en produccion");
+// Valores que alguna vez estuvieron en los .env de ejemplo: si quedan en
+// producción, cualquiera puede firmar un token de superadmin.
+const PLACEHOLDER_SECRETS = new Set([
+  "dev-secret",
+  "cambia-este-secreto-en-produccion",
+  "changeme",
+  "secret",
+]);
+
+if (process.env.NODE_ENV === "production") {
+  if (PLACEHOLDER_SECRETS.has(SECRET)) {
+    throw new Error(
+      "JWT_SECRET tiene un valor de ejemplo. Generá uno real: openssl rand -base64 48",
+    );
+  }
+  if (SECRET.length < 32) {
+    throw new Error("JWT_SECRET debe tener al menos 32 caracteres en producción");
+  }
 }
 
 export interface AuthPayload {

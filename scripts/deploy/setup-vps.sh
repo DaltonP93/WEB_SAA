@@ -3,12 +3,20 @@
 # Bootstrap deploy para Sanatorio Adventista V2 — VPS Ubuntu 22/24
 #
 # Uso (como root):
-#   curl -fsSL https://raw.githubusercontent.com/cacostama/WebSamap2/main/scripts/deploy/setup-vps.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/DaltonP93/WEB_SAA/main/scripts/deploy/setup-vps.sh | bash
 #
 # O bajando el script primero:
-#   wget https://raw.githubusercontent.com/cacostama/WebSamap2/main/scripts/deploy/setup-vps.sh
+#   wget https://raw.githubusercontent.com/DaltonP93/WEB_SAA/main/scripts/deploy/setup-vps.sh
 #   chmod +x setup-vps.sh
 #   ./setup-vps.sh
+#
+# Variables opcionales:
+#   REPO_URL   repo a clonar (default: DaltonP93/WEB_SAA)
+#   DOMAIN     dominio para HTTPS con Let's Encrypt. Sin dominio el panel
+#              /admin NO se publica (ver ADMIN_ALLOW_INSECURE_HTTP).
+#   ADMIN_EMAIL / ADMIN_PASS  credenciales del superadmin sembrado. Si no se
+#              pasa ADMIN_PASS se genera una aleatoria y se guarda en un
+#              archivo sólo-root; nunca se imprime en pantalla.
 #
 # Deja corriendo:
 #   - MySQL 8 con DB sanatorio
@@ -18,7 +26,7 @@
 set -euo pipefail
 
 # --- Configuración --------------------------------------------------------
-REPO_URL="${REPO_URL:-https://github.com/cacostama/WebSamap2.git}"
+REPO_URL="${REPO_URL:-https://github.com/DaltonP93/WEB_SAA.git}"
 APP_DIR="${APP_DIR:-/var/www/sanatorio}"
 BRANCH="${BRANCH:-main}"
 
@@ -28,10 +36,18 @@ DB_PASS="${DB_PASS:-$(openssl rand -base64 24 | tr -d '/+=' | head -c 24)}"
 JWT_SECRET="${JWT_SECRET:-$(openssl rand -base64 48 | tr -d '/+=' | head -c 48)}"
 
 ADMIN_EMAIL="${ADMIN_EMAIL:-admin@sanatorio.local}"
-ADMIN_PASS="${ADMIN_PASS:-Thiago.190918}"
+# Nunca hardcodear una contraseña: si no viene por entorno se genera una al azar
+# y se guarda en un archivo sólo-root. No se imprime en pantalla ni en logs.
+ADMIN_PASS="${ADMIN_PASS:-$(openssl rand -base64 24 | tr -d '/+=' | head -c 20)}"
 ADMIN_NAME="${ADMIN_NAME:-Administrador}"
+CREDENTIALS_FILE="${APP_DIR}/.deploy-credentials"
 
 SERVER_IP="${SERVER_IP:-$(curl -s4 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')}"
+# Con DOMAIN se configura HTTPS (certbot) y el panel /admin queda publicado
+# sólo sobre TLS. Sin dominio hay que habilitarlo explícitamente.
+DOMAIN="${DOMAIN:-}"
+ADMIN_ALLOW_INSECURE_HTTP="${ADMIN_ALLOW_INSECURE_HTTP:-0}"
+SERVER_NAME="${DOMAIN:-_}"
 
 log()  { echo -e "\033[1;34m==>\033[0m $*"; }
 warn() { echo -e "\033[1;33m!!\033[0m $*"; }
@@ -113,7 +129,9 @@ chmod 600 "${APP_DIR}/api/.env"
 # --- 7. Install, migrate, seed, build -------------------------------------
 log "7/9  Instalando deps + migrando DB + build de los 3 paquetes"
 cd "$APP_DIR"
-pnpm install --frozen-lockfile || pnpm install
+# Falla ruidosamente: un install no congelado deja el server con dependencias
+# distintas a las auditadas.
+pnpm install --frozen-lockfile || die "pnpm install --frozen-lockfile falló. Revisá que pnpm-lock.yaml esté commiteado y actualizado; no se instala sin lockfile congelado."
 
 pnpm db:migrate
 
@@ -141,11 +159,33 @@ chown -R www-data:www-data "${APP_DIR}/api/uploads" || true
 
 # --- 8. Nginx -------------------------------------------------------------
 log "8/9  Configurando Nginx"
+if [ -n "$DOMAIN" ]; then
+  ADMIN_BLOCK="  # Panel admin (^~ para que /admin/assets/*.js no caigan en la regex global)
+  location ^~ /admin {
+    alias ${APP_DIR}/apps/admin/dist;
+    try_files \$uri \$uri/ /admin/index.html;
+  }"
+elif [ "$ADMIN_ALLOW_INSECURE_HTTP" = "1" ]; then
+  warn "El panel /admin se va a publicar SIN HTTPS (ADMIN_ALLOW_INSECURE_HTTP=1)."
+  warn "Las credenciales del admin viajan en texto plano. Configurá DOMAIN y TLS cuanto antes."
+  ADMIN_BLOCK="  location ^~ /admin {
+    alias ${APP_DIR}/apps/admin/dist;
+    try_files \$uri \$uri/ /admin/index.html;
+  }"
+else
+  warn "Sin DOMAIN configurado: el panel /admin NO se publica (evita login sin HTTPS)."
+  warn "Para publicarlo igual: ADMIN_ALLOW_INSECURE_HTTP=1 bash setup-vps.sh"
+  ADMIN_BLOCK="  location ^~ /admin {
+    default_type text/plain;
+    return 403 'El panel admin requiere HTTPS. Configurá DOMAIN y volvé a correr setup-vps.sh.';
+  }"
+fi
+
 cat > /etc/nginx/sites-available/sanatorio <<NGINX
 server {
   listen 80 default_server;
   listen [::]:80 default_server;
-  server_name _;
+  server_name ${SERVER_NAME};
   client_max_body_size 20M;
 
   # API (^~ para que gane prioridad sobre la regex de assets estáticos)
@@ -172,11 +212,7 @@ server {
   location = /robots.txt    { proxy_pass http://127.0.0.1:4000; }
   location = /sitemap.xml   { proxy_pass http://127.0.0.1:4000; }
 
-  # Panel admin (^~ para que /admin/assets/*.js no caigan en la regex global)
-  location ^~ /admin {
-    alias ${APP_DIR}/apps/admin/dist;
-    try_files \$uri \$uri/ /admin/index.html;
-  }
+${ADMIN_BLOCK}
 
   # Sitio público (catch-all)
   location / {
@@ -198,6 +234,14 @@ ln -sf /etc/nginx/sites-available/sanatorio /etc/nginx/sites-enabled/sanatorio
 rm -f /etc/nginx/sites-enabled/default
 nginx -t
 systemctl reload nginx
+
+if [ -n "$DOMAIN" ]; then
+  log "    Emitiendo certificado TLS para ${DOMAIN} (Let's Encrypt)"
+  apt install -y -qq certbot python3-certbot-nginx
+  certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos \
+    -m "${CERTBOT_EMAIL:-$ADMIN_EMAIL}" --redirect \
+    || warn "certbot falló. El sitio queda en HTTP; volvé a intentar cuando el DNS apunte al servidor."
+fi
 
 # --- 9. PM2 + firewall ----------------------------------------------------
 log "9/9  Arrancando API con PM2 y configurando firewall"
@@ -233,16 +277,24 @@ echo "Sitio público:   http://${SERVER_IP}"
 echo "Panel admin:     http://${SERVER_IP}/admin"
 echo "API health:      http://${SERVER_IP}/api/health"
 echo ""
-echo "Login admin:"
-echo "  email:    ${ADMIN_EMAIL}"
-echo "  password: ${ADMIN_PASS}"
+# Las credenciales NO se imprimen: quedarían en la terminal, en el historial y
+# en los logs de quien haya lanzado el deploy.
+umask 077
+cat > "$CREDENTIALS_FILE" <<CREDS
+# Generado por setup-vps.sh el $(date -Iseconds). Archivo sólo-root.
+# Cambiá la contraseña del admin al primer login y después borrá este archivo.
+ADMIN_EMAIL=${ADMIN_EMAIL}
+ADMIN_PASSWORD=${ADMIN_PASS}
+DB_NAME=${DB_NAME}
+DB_USER=${DB_USER}
+CREDS
+chmod 600 "$CREDENTIALS_FILE"
+
+echo "Credenciales del admin y de la DB: ${CREDENTIALS_FILE} (chmod 600, sólo root)"
+echo "  → leelas con: cat ${CREDENTIALS_FILE}"
+echo "  → cambiá la contraseña del admin al primer login y borrá el archivo"
 echo ""
-echo "Credenciales DB MySQL (guardadas en ${APP_DIR}/api/.env):"
-echo "  DB:       ${DB_NAME}"
-echo "  user:     ${DB_USER}"
-echo "  pass:     ${DB_PASS}"
-echo ""
-echo "JWT_SECRET generado: guardado en ${APP_DIR}/api/.env"
+echo "La contraseña de la DB y el JWT_SECRET se generaron al azar y quedaron en ${APP_DIR}/api/.env (chmod 600)"
 echo "========================================================"
 echo ""
 echo "Próximos comandos útiles:"

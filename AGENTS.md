@@ -153,7 +153,7 @@ Para deploy ver [`docs/DEPLOY.md`](docs/DEPLOY.md).
    - `curl localhost:4000/api/health`
    - `curl localhost:4000/api/public/settings`
    - `curl localhost:4000/api/public/pages/home`
-   - Login: `curl -X POST localhost:4000/api/auth/login -H 'Content-Type: application/json' -d '{"email":"admin@sanatorio.local","password":"admin1234"}'`
+   - Login: `curl -X POST localhost:4000/api/auth/login -H 'Content-Type: application/json' -d "{\"email\":\"admin@sanatorio.local\",\"password\":\"$SEED_ADMIN_PASSWORD\"}"`
    - Endpoint admin tocado, con `Authorization: Bearer <token>`
 4. Si la tarea tocó UI: levantar `pnpm dev:web` y/o `pnpm dev:admin`, abrir en browser, verificar el flujo crítico (golden path) y al menos un edge case.
 5. Reportar PASS/FAIL por punto, con logs.
@@ -187,7 +187,8 @@ Para deploy ver [`docs/DEPLOY.md`](docs/DEPLOY.md).
   - **Headings**: **Work Sans** (peso `600`/`700`)
   - **Body**: **Open Sans** (peso `400`/`600`)
   - Ambas fuentes se preloadean desde Google Fonts en los `index.html`.
-- **Datos sensibles**: el seed mete un superadmin con password trivial. **Nunca** dejarlo así en prod.
+- **Datos sensibles**: nunca hardcodear credenciales. `SEED_ADMIN_PASSWORD` es obligatoria con `NODE_ENV=production`; el deploy genera contraseñas al azar y las deja en un archivo sólo-root. `pnpm check:secrets` corre en CI sobre el árbol.
+- **Datos del cliente**: no inventar teléfonos, correos, horarios ni prestaciones. Los canales de contacto viven en `contact_channels` y los horarios en `schedules`; sin valor cargado la UI muestra "A confirmar" / "Horarios en proceso de confirmación".
 - **Migraciones**: nuevas tablas o columnas → archivo nuevo en `api/migrations/` con timestamp creciente. NO editar migrations ya aplicadas.
 
 ---
@@ -244,7 +245,36 @@ Si la IA que abre el repo está corriendo en Claude Code con la configuración a
 
 ---
 
-## 8. Estado actual (al 2026-08-12)
+## 8. Estado actual (al 2026-08-13)
+
+### Correcciones post-auditoría (2026-08-13)
+
+- **Seguridad**: se sacaron las credenciales hardcodeadas de
+  `scripts/deploy-doctor-photos.py` y `scripts/deploy/setup-vps.sh`. El SSH usa
+  `.env.deploy` (fuera de git) con llave o, en el peor caso, contraseña — nunca
+  argumentos de línea de comandos. `pnpm check:secrets` corre en CI.
+  ⚠️ **El secreto sigue en el historial de git**: el propietario tiene que
+  rotarlo y purgarlo (ver §10).
+- **Estabilidad de API**: `api/src/http.ts` envuelve los handlers async
+  (`wrapRouterAsync`), centraliza los errores sin filtrar internals y devuelve
+  503 cuando la base no responde. `/api/health` informa por componente y
+  responde 503 con MySQL caído. Apagado controlado en SIGTERM/SIGINT.
+- **Formularios públicos**: rate limit por IP, honeypot (`website`), validación
+  y saneado con Zod, límites de tamaño y CAPTCHA opcional (`CAPTCHA_PROVIDER`).
+- **Fuente única de contacto**: tabla `contact_channels` (panel → *Canales de
+  contacto*). Header, footer, Turnos, Contacto y el bloque `contactChannels`
+  leen de ahí. Sin valor cargado se muestra "A confirmar" y **no** se genera
+  enlace.
+- **Horarios**: tabla `schedules` (panel → *Horarios*). Sin filas activas el
+  sitio dice "Horarios en proceso de confirmación". No hay horas de ejemplo.
+- **Bloques nuevos**: `steps` (infografía de pasos) y `scheduleTable`.
+- **Pruebas**: `pnpm test` (vitest) cubre mapa de iconos, filtros de médicos,
+  enlaces de canales, saneado de URLs, API con la base caída, rate limiting y
+  migraciones (estas últimas con `TEST_DATABASE=1`).
+- **Build**: `api` arranca con `dist/src/index.js`; el lockfile es v9 y
+  `pnpm install --frozen-lockfile` funciona con el pnpm declarado.
+
+### Base previa (al 2026-08-12)
 
 ### Minuta de ajustes del sitio (2026-08-12)
 
@@ -310,7 +340,7 @@ Los 25 puntos acordados con el cliente están implementados. Lo estructural:
 
 | Qué | Dónde |
 |---|---|
-| Repo | `https://github.com/cacostama/WebSamap2.git`, rama única **`main`** |
+| Repo | `https://github.com/DaltonP93/WEB_SAA.git`, rama única **`main`** |
 | VPS | `194.26.100.138` (Ubuntu, usuario `root`) — **compartido con otro proyecto** (existe un `/swapfile_futbot`) |
 | Código en el VPS | `/var/www/sanatorio` |
 | Config de la API | `/var/www/sanatorio/api/.env` (**fuera de git**, nunca commitear) |
@@ -322,8 +352,8 @@ Nginx sirve `apps/web/dist` en `/` (con `try_files $uri $uri/ /index.html`) y `a
 ### Deploy
 
 ```bash
-python scripts/deploy/run-remote.py <IP> root '<password>' \
-  "bash /var/www/sanatorio/scripts/deploy/update-vps.sh"
+# Las credenciales salen de .env.deploy / variables de entorno, nunca de argv
+python scripts/deploy/run-remote.py "bash /var/www/sanatorio/scripts/deploy/update-vps.sh"
 ```
 
 `update-vps.sh` hace: `git reset --hard origin/main` → **se re-ejecuta a sí mismo si el propio script cambió** → `pnpm install --frozen-lockfile` → `pnpm db:migrate` → builds → reload de Nginx + restart de PM2.
@@ -361,3 +391,29 @@ Si se repite, la solución de fondo es buildear fuera del VPS (subir artefactos)
 
 - `GET /api/vendor/phpunit/.../eval-stdin.php 404` — escaneo de bots buscando vulnerabilidades PHP. Inofensivo, la API los rechaza.
 - `/estudios` responde **301** hacia `/estudios/`: es el comportamiento de directory-index de Nginx sobre el HTML prerenderizado. Por eso el canonical del prerender apunta a `/estudios/` **con** barra final.
+
+---
+
+## 10. Acciones pendientes del propietario (seguridad)
+
+El árbol actual ya no tiene credenciales, pero **el historial de git sí**: la
+contraseña del VPS estuvo commiteada en `scripts/deploy-doctor-photos.py` y en
+`scripts/deploy/setup-vps.sh`. Reescribir el historial remoto es una decisión
+del dueño del repo, así que no se hizo desde acá. Hay que:
+
+1. **Rotar la contraseña de root del VPS** (y cualquier otra cuenta que la haya
+   reutilizado). Hasta que eso pase, hay que considerarla comprometida.
+2. **Revisar accesos SSH**: `last -F`, `/var/log/auth.log`, y las claves en
+   `~/.ssh/authorized_keys` de root y de cualquier otro usuario.
+3. **Deshabilitar el acceso por contraseña**: en `/etc/ssh/sshd_config`,
+   `PasswordAuthentication no` y `PermitRootLogin prohibit-password`, después
+   `systemctl restart ssh`. Antes, dejar cargada la llave pública del equipo.
+4. **Purgar el secreto del historial** de forma coordinada (todos con el repo
+   clonado tienen que re-clonar después):
+   `git filter-repo --replace-text` o BFG, luego `push --force` y rotar
+   nuevamente la credencial por las dudas.
+5. **Revisar clones, forks y logs** (CI, capturas, historiales de shell) donde
+   la contraseña haya quedado registrada.
+
+Mientras 1–5 estén pendientes, el proyecto **no puede recibir un GO** para
+producción por más que el código esté limpio.

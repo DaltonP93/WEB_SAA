@@ -10,6 +10,8 @@ import DoctorEditPage from "./pages/DoctorEditPage";
 import SpecialtiesPage from "./pages/SpecialtiesPage";
 import ServicesPage from "./pages/ServicesPage";
 import StudiesPage from "./pages/StudiesPage";
+import ContactChannelsPage from "./pages/ContactChannelsPage";
+import SchedulesPage from "./pages/SchedulesPage";
 import MenusPage from "./pages/MenusPage";
 import ContactMessagesPage from "./pages/ContactMessagesPage";
 import MediaPage from "./pages/MediaPage";
@@ -35,6 +37,8 @@ export const routes = createRoutesFromElements(
       <Route path="specialties" element={<SpecialtiesPage />} />
       <Route path="services" element={<ServicesPage />} />
       <Route path="studies" element={<StudiesPage />} />
+      <Route path="contact-channels" element={<ContactChannelsPage />} />
+      <Route path="schedules" element={<SchedulesPage />} />
       <Route path="menus" element={<MenusPage />} />
       <Route path="messages" element={<ContactMessagesPage />} />
       <Route path="media" element={<MediaPage />} />

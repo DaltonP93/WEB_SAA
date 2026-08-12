@@ -10,6 +10,9 @@ const CONTENT_MIGRATIONS = [
   "20260523000000_specialties_and_studies_detail",
   "20260523000001_add_service_detail_placeholders",
   "20260812000000_web_minuta_ajustes",
+  "20260813000000_contact_channels",
+  "20260813000001_schedules",
+  "20260813000002_minuta_correcciones",
 ];
 
 async function applyContentMigrations(knex: Knex) {

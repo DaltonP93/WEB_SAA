@@ -3,20 +3,25 @@ Deploy de fotos de doctores al VPS:
 - Comprime assets-extracted/doctors-optimized en un tar.gz
 - SFTP al VPS, descomprime en /var/www/sanatorio/api/uploads/doctors/
 - Sube y corre el SQL upsert.sql
+
+Las credenciales salen del entorno o de `.env.deploy` (ver
+`.env.deploy.example`), nunca del código. El destino se puede cambiar con
+SANATORIO_UPLOADS_DIR.
 """
-import paramiko
-import os
-import tarfile
 import io
+import os
+import sys
+import tarfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent / "deploy"))
+from ssh_utils import connect  # noqa: E402
+
 LOCAL_DIR = Path(__file__).resolve().parent.parent / "assets-extracted" / "doctors-optimized"
-HOST = "194.26.100.138"
-USER = "root"
-PASSWORD = "Thiago.190918"
 REMOTE_TGZ = "/tmp/doctors-photos.tar.gz"
 REMOTE_SQL = "/tmp/doctors-upsert.sql"
-TARGET_DIR = "/var/www/sanatorio/api/uploads/doctors"
+APP_DIR = os.environ.get("SANATORIO_APP_DIR", "/var/www/sanatorio")
+TARGET_DIR = os.environ.get("SANATORIO_UPLOADS_DIR", f"{APP_DIR}/api/uploads/doctors")
 
 def main():
     if not LOCAL_DIR.exists():
@@ -34,12 +39,10 @@ def main():
     print(f">>> {photo_count} fotos en {size_mb:.1f} MB (tar.gz)")
 
     sql_path = LOCAL_DIR / "upsert.sql"
-    sql_size = sql_path.stat().st_size
+    if not sql_path.exists():
+        raise SystemExit(f"No existe {sql_path}")
 
-    print(f">>> conectando a {USER}@{HOST}")
-    c = paramiko.SSHClient()
-    c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    c.connect(HOST, username=USER, password=PASSWORD, timeout=30)
+    c = connect()
 
     sftp = c.open_sftp()
     print(">>> subiendo tar.gz")
@@ -57,7 +60,7 @@ chown -R www-data:www-data {TARGET_DIR}
 chmod 644 {TARGET_DIR}/*.jpg
 ls {TARGET_DIR} | wc -l
 echo '--- corriendo SQL upsert'
-DB_PASS=$(grep '^DB_PASS=' /var/www/sanatorio/api/.env | cut -d= -f2-)
+DB_PASS=$(grep '^DB_PASS=' {APP_DIR}/api/.env | cut -d= -f2-)
 mysql -usanatorio -p"$DB_PASS" --default-character-set=utf8mb4 sanatorio < {REMOTE_SQL} 2>&1 | grep -v 'Using a password'
 echo '--- doctor count post-upsert'
 mysql -usanatorio -p"$DB_PASS" sanatorio -se 'SELECT COUNT(*) FROM doctors; SELECT COUNT(*) FROM specialties; SELECT COUNT(*) FROM doctor_specialty;' 2>&1 | grep -v 'Using a password'

@@ -18,6 +18,8 @@ import type {
   AppointmentFormProps,
   ContactChannelsProps,
   SocialLinksProps,
+  StepsProps,
+  ScheduleTableProps,
   CtaProps,
   StatsProps,
   LogosProps,
@@ -41,6 +43,8 @@ const ContactForm = lazy(() => import("./ContactForm"));
 const AppointmentForm = lazy(() => import("./AppointmentForm"));
 const ContactChannels = lazy(() => import("./ContactChannels"));
 const SocialLinks = lazy(() => import("./SocialLinks"));
+const Steps = lazy(() => import("./Steps"));
+const ScheduleTable = lazy(() => import("./ScheduleTable"));
 const Cta = lazy(() => import("./Cta"));
 const Stats = lazy(() => import("./Stats"));
 const Logos = lazy(() => import("./Logos"));
@@ -64,6 +68,8 @@ type BlockPropsMap = {
   appointmentForm: AppointmentFormProps;
   contactChannels: ContactChannelsProps;
   socialLinks: SocialLinksProps;
+  steps: StepsProps;
+  scheduleTable: ScheduleTableProps;
   cta: CtaProps;
   stats: StatsProps;
   logos: LogosProps;
@@ -88,6 +94,8 @@ const MAP: Record<BlockType, React.ComponentType<any>> = {
   appointmentForm: AppointmentForm,
   contactChannels: ContactChannels,
   socialLinks: SocialLinks,
+  steps: Steps,
+  scheduleTable: ScheduleTable,
   cta: Cta,
   stats: Stats,
   logos: Logos,
@@ -99,7 +107,7 @@ export default function BlockRenderer({ blocks }: { blocks: Block[] }) {
     <Suspense fallback={<div className="container-x section-y-sm">Cargando…</div>}>
       {blocks.map((b) => {
         const C = MAP[b.type];
-        if (!C) return <div key={b.id} className="container-x py-3 text-sm text-red-600">Bloque desconocido: {b.type}</div>;
+        if (!C) return <div key={b.id} className="container-x py-3 text-sm text-amber-700">Bloque desconocido: {b.type}</div>;
         return <C key={b.id} {...(b.props as any)} />;
       })}
     </Suspense>

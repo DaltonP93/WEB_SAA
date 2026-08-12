@@ -1,9 +1,32 @@
 import { Router } from "express";
 import { z } from "zod";
 import { db } from "../db.js";
-import { sanitizeHtml } from "../html.js";
+import { sanitizeHtml, stripHtml } from "../html.js";
+import { rateLimit } from "../rate-limit.js";
+import { verifyCaptcha } from "../captcha.js";
+import { badRequest, notFound } from "../http.js";
 
 export const publicRouter = Router();
+
+/**
+ * Formularios públicos: límite por IP + payload acotado. Los valores se
+ * pueden ajustar por entorno sin tocar código.
+ */
+const formsLimiter = rateLimit({
+  windowMs: Number(process.env.PUBLIC_FORMS_RATE_WINDOW_MS ?? 15 * 60 * 1000),
+  max: Number(process.env.PUBLIC_FORMS_RATE_MAX ?? 10),
+  message: "Recibimos varios envíos desde esta conexión. Esperá unos minutos e intentá de nuevo.",
+});
+
+/** Campo trampa: los bots completan todo, las personas no lo ven. */
+function isHoneypotFilled(body: unknown): boolean {
+  const value = (body as { website?: unknown } | null)?.website;
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+/** Texto plano: sin HTML, recortado y con longitud acotada. */
+const plainText = (max: number) =>
+  z.string().transform((value) => stripHtml(value).slice(0, max));
 
 publicRouter.get("/settings", async (_req, res) => {
   const rows = await db("settings").select("key", "value");
@@ -26,7 +49,7 @@ publicRouter.get("/pages", async (_req, res) => {
 
 publicRouter.get("/pages/:slug", async (req, res) => {
   const page = await db("pages").where({ slug: req.params.slug, status: "published" }).first();
-  if (!page) return res.status(404).json({ error: "no encontrada" });
+  if (!page) throw notFound("página no encontrada");
   const blocks = await db("blocks").where({ page_id: page.id }).orderBy("order");
   const visibleBlocks = blocks.filter((block) => shouldExposePublicBlock(page.slug, block));
   res.json({
@@ -48,7 +71,7 @@ publicRouter.get("/specialties", async (_req, res) => {
 
 publicRouter.get("/specialties/:slug", async (req, res) => {
   const sp = await db("specialties").where({ slug: req.params.slug }).first();
-  if (!sp) return res.status(404).json({ error: "no encontrada" });
+  if (!sp) throw notFound("especialidad no encontrada");
   const rows = await db("doctors as d")
     .join("doctor_specialty as ds", "ds.doctor_id", "d.id")
     .where("ds.specialty_id", sp.id)
@@ -104,7 +127,7 @@ publicRouter.get("/doctors", async (req, res) => {
 
 publicRouter.get("/doctors/:slug", async (req, res) => {
   const d = await db("doctors").where({ slug: req.params.slug }).first();
-  if (!d) return res.status(404).json({ error: "no encontrado" });
+  if (!d) throw notFound("médico no encontrado");
   const specialties = await db("doctor_specialty as ds")
     .join("specialties as s", "s.id", "ds.specialty_id")
     .where("ds.doctor_id", d.id)
@@ -118,6 +141,43 @@ publicRouter.get("/doctors/:slug", async (req, res) => {
     schedule: d.schedule,
     specialties,
   });
+});
+
+/**
+ * Canales de contacto activos. Fuente única para header, footer, bloques de
+ * contacto y turnos. Los que no tienen valor cargado igual se devuelven: la UI
+ * los muestra como "A confirmar" en vez de generar un enlace inválido.
+ */
+publicRouter.get("/contact-channels", async (_req, res) => {
+  const rows = await db("contact_channels")
+    .where({ active: true })
+    .orderBy("order")
+    .orderBy("id")
+    .select("id", "key", "label", "kind", "value", "note", "message", "href", "icon", "order");
+  res.json(
+    rows.map((r) => ({
+      ...r,
+      value: r.value?.trim() ? r.value.trim() : null,
+    })),
+  );
+});
+
+/**
+ * Horarios publicados. Sólo los que el sanatorio marcó como activos y con
+ * horario cargado: mientras no haya ninguno, el sitio avisa que están en
+ * confirmación en vez de mostrar horas inventadas.
+ */
+publicRouter.get("/schedules", async (_req, res) => {
+  const rows = await db("schedules")
+    .where({ active: true })
+    .orderBy("order")
+    .orderBy("id")
+    .select("id", "key", "area", "service_slug", "days", "hours", "note", "order");
+  res.json(
+    rows
+      .filter((r) => r.hours?.trim())
+      .map((r) => ({ ...r, serviceSlug: r.service_slug ?? null })),
+  );
 });
 
 publicRouter.get("/services", async (_req, res) => {
@@ -137,18 +197,21 @@ publicRouter.get("/news", async (req, res) => {
 });
 publicRouter.get("/news/:slug", async (req, res) => {
   const n = await db("news").where({ slug: req.params.slug, status: "published" }).first();
-  if (!n) return res.status(404).json({ error: "no encontrada" });
+  if (!n) throw notFound("no encontrada");
   res.json({ ...n, body: sanitizeHtml(n.body) });
 });
 
 const appointmentSchema = z.object({
-  name: z.string().min(2),
-  phone: z.string().min(4),
-  email: z.string().email(),
-  specialtyId: z.number().int().optional(),
-  doctorId: z.number().int().optional(),
-  preferredAt: z.string().optional(),
-  message: z.string().optional(),
+  name: plainText(160).pipe(z.string().min(2, "nombre demasiado corto")),
+  phone: plainText(40).pipe(z.string().min(4, "teléfono inválido")),
+  email: z.string().trim().max(190).email(),
+  specialtyId: z.number().int().positive().optional(),
+  doctorId: z.number().int().positive().optional(),
+  preferredAt: z.string().trim().max(40).optional(),
+  message: plainText(2000).optional(),
+  captchaToken: z.string().max(4000).optional(),
+  // Honeypot: si viene con contenido, es spam.
+  website: z.string().max(200).optional(),
 });
 
 function sanitizeBlockProps(props: unknown): unknown {
@@ -202,9 +265,19 @@ function parseJson(value: unknown): unknown {
     return value;
   }
 }
-publicRouter.post("/appointments", async (req, res) => {
+publicRouter.post("/appointments", formsLimiter, async (req, res) => {
+  if (isHoneypotFilled(req.body)) {
+    // Respondemos 201 para no darle información útil al bot.
+    console.warn("[spam] honeypot activado en /appointments");
+    return res.status(201).json({ id: null });
+  }
   const parsed = appointmentSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: "payload invalido", issues: parsed.error.issues });
+  if (!parsed.success) {
+    throw badRequest("payload invalido", parsed.error.flatten().fieldErrors);
+  }
+  if (!(await verifyCaptcha(parsed.data.captchaToken, req.ip))) {
+    throw badRequest("verificación anti-spam fallida");
+  }
   const d = parsed.data;
   const [id] = await db("appointments").insert({
     name: d.name,
@@ -219,14 +292,25 @@ publicRouter.post("/appointments", async (req, res) => {
 });
 
 const contactSchema = z.object({
-  name: z.string().min(2),
-  email: z.string().email(),
-  phone: z.string().optional(),
-  message: z.string().min(5),
+  name: plainText(160).pipe(z.string().min(2, "nombre demasiado corto")),
+  email: z.string().trim().max(190).email(),
+  phone: plainText(40).optional(),
+  message: plainText(4000).pipe(z.string().min(5, "mensaje demasiado corto")),
+  captchaToken: z.string().max(4000).optional(),
+  website: z.string().max(200).optional(),
 });
-publicRouter.post("/contact-messages", async (req, res) => {
+publicRouter.post("/contact-messages", formsLimiter, async (req, res) => {
+  if (isHoneypotFilled(req.body)) {
+    console.warn("[spam] honeypot activado en /contact-messages");
+    return res.status(201).json({ id: null });
+  }
   const parsed = contactSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: "payload invalido" });
+  if (!parsed.success) {
+    throw badRequest("payload invalido", parsed.error.flatten().fieldErrors);
+  }
+  if (!(await verifyCaptcha(parsed.data.captchaToken, req.ip))) {
+    throw badRequest("verificación anti-spam fallida");
+  }
   const d = parsed.data;
   const [id] = await db("contact_messages").insert({
     name: d.name,

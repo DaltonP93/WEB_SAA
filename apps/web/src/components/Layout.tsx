@@ -4,6 +4,8 @@ import { Link, NavLink } from "react-router-dom";
 import { api } from "../api";
 import type { SiteSettings } from "@sa/shared";
 import SocialIcon, { type SocialKind } from "./SocialIcon";
+import { CHANNEL_KEYS, channelHref, useContactChannels } from "../lib/contact-channels";
+import { safeInternalHref } from "../lib/url";
 
 interface Props {
   children: ReactNode;
@@ -37,12 +39,13 @@ function NavItem({ item, level = 0, onNavigate }: { item: MenuItem; level?: numb
   const isTopLevel = level === 0;
   // Un item con href propio siempre navega; el desplegable se abre aparte.
   const hasOwnPage = !!item.href && item.href !== "#";
+  const href = safeInternalHref(item.href);
 
   if (!hasChildren) {
     if (isTopLevel) {
       return (
         <NavLink
-          to={item.href}
+          to={href}
           end
           onClick={onNavigate}
           className={({ isActive }) =>
@@ -55,7 +58,7 @@ function NavItem({ item, level = 0, onNavigate }: { item: MenuItem; level?: numb
     }
     return (
       <Link
-        to={item.href}
+        to={href}
         onClick={onNavigate}
         className="block px-4 py-2 text-sm hover:bg-gray-50 hover:text-primary"
       >
@@ -77,7 +80,7 @@ function NavItem({ item, level = 0, onNavigate }: { item: MenuItem; level?: numb
       {hasOwnPage ? (
         <div className={isTopLevel ? "inline-flex items-center" : "flex items-center justify-between w-full"}>
           <NavLink
-            to={item.href}
+            to={href}
             onClick={onNavigate}
             className={({ isActive }) =>
               isTopLevel
@@ -138,12 +141,13 @@ function NavItem({ item, level = 0, onNavigate }: { item: MenuItem; level?: numb
 function MobileNavItem({ item, level = 0, onNavigate }: { item: MenuItem; level?: number; onNavigate?: () => void }) {
   const [open, setOpen] = useState(false);
   const hasChildren = !!item.children?.length;
+  const href = safeInternalHref(item.href);
   const indent = { paddingLeft: `${1 + level}rem` };
   const linkClass = "block flex-1 py-3 text-sm hover:text-primary";
 
   if (!hasChildren) {
     return (
-      <Link to={item.href} onClick={onNavigate} className={linkClass} style={indent}>
+      <Link to={href} onClick={onNavigate} className={linkClass} style={indent}>
         {item.label}
       </Link>
     );
@@ -152,7 +156,7 @@ function MobileNavItem({ item, level = 0, onNavigate }: { item: MenuItem; level?
   return (
     <div>
       <div className="flex items-center">
-        <Link to={item.href} onClick={onNavigate} className={linkClass} style={indent}>
+        <Link to={href} onClick={onNavigate} className={linkClass} style={indent}>
           {item.label}
         </Link>
         <button
@@ -202,11 +206,21 @@ export default function Layout({ children, settings }: Props) {
   const brand = settings?.brand;
   const contact = settings?.contact;
   const social = settings?.social ?? {};
-  const wa = contact?.whatsapp?.replace(/[^0-9]/g, "");
-  const emergencyPhone = contact?.emergencyPhone?.trim();
-  const emergencyTel = emergencyPhone?.replace(/[^0-9+]/g, "");
-  const gthEmail = contact?.gthEmail?.trim();
   const mapsUrl = contact?.mapsUrl?.trim() || MAPS_URL_FALLBACK;
+
+  // Header y footer leen de la misma tabla que los bloques de contacto.
+  const { channels, get, firstWithValue } = useContactChannels();
+  const emergency = get(CHANNEL_KEYS.emergencias);
+  const emergencyHref = emergency ? channelHref(emergency) : undefined;
+  const emergencyPhone = emergency?.value ?? null;
+  const whatsapp = firstWithValue(CHANNEL_KEYS.turnos, CHANNEL_KEYS.general);
+  const whatsappHref = whatsapp ? channelHref(whatsapp) : undefined;
+  const gth = get(CHANNEL_KEYS.gth);
+  const gthHref = gth ? channelHref(gth) : undefined;
+  // Teléfonos y correos del pie: también salen de Canales de contacto.
+  const footerChannels = channels.filter(
+    (c) => c.value && c.key !== CHANNEL_KEYS.emergencias && c.key !== CHANNEL_KEYS.gth,
+  );
 
   const socialLinks = (["facebook", "instagram", "youtube", "linkedin"] as SocialKind[])
     .map((kind) => ({ kind, href: (social as Record<string, string | undefined>)[kind] }))
@@ -272,7 +286,7 @@ export default function Layout({ children, settings }: Props) {
               <NavItem key={it.href + it.label} item={it} />
             ))}
             <a
-              href={emergencyTel ? `tel:${emergencyTel}` : "/emergencias"}
+              href={emergencyHref ?? "/emergencias"}
               className="btn-emergency btn-sm gap-1.5 whitespace-nowrap"
               aria-label={emergencyPhone ? `Emergencias 24hs: ${emergencyPhone}` : "Emergencias 24hs"}
             >
@@ -314,40 +328,45 @@ export default function Layout({ children, settings }: Props) {
             {brand?.tagline && (
               <p className="text-sm opacity-90 leading-relaxed">{brand.tagline}</p>
             )}
-            {emergencyPhone && (
-              <a
-                href={`tel:${emergencyTel}`}
-                className="mt-4 inline-flex items-center gap-2 rounded bg-accent px-3 py-2 text-sm font-semibold hover:bg-accent-600 transition"
-              >
-                Emergencias 24hs · {emergencyPhone}
-              </a>
+            {emergency && (
+              emergencyHref ? (
+                <a
+                  href={emergencyHref}
+                  className="mt-4 inline-flex items-center gap-2 rounded bg-accent px-3 py-2 text-sm font-semibold hover:bg-accent-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white transition"
+                >
+                  Emergencias 24hs · {emergencyPhone}
+                </a>
+              ) : (
+                <span className="mt-4 inline-flex items-center gap-2 rounded bg-white/10 px-3 py-2 text-sm">
+                  Emergencias 24hs · número a confirmar
+                </span>
+              )
             )}
           </div>
           <div>
             <h4 className="text-xs font-semibold uppercase tracking-wider opacity-80 mb-3">Contacto</h4>
             <ul className="space-y-1.5 text-sm">
               {contact?.address && <li className="opacity-90">{contact.address}</li>}
-              {contact?.phones?.map((p: string) => (
-                <li key={p}>
-                  <a href={`tel:${p.replace(/[^0-9+]/g, "")}`} className="hover:underline opacity-90">{p}</a>
-                </li>
-              ))}
-              {wa && (
+              {footerChannels.map((c) => {
+                const href = channelHref(c);
+                if (!href) return null;
+                const external = href.startsWith("http");
+                return (
+                  <li key={c.key}>
+                    <a
+                      href={href}
+                      className="hover:underline opacity-90"
+                      {...(external ? { target: "_blank", rel: "noreferrer" } : {})}
+                    >
+                      {c.label}: {c.value}
+                    </a>
+                  </li>
+                );
+              })}
+              {gthHref && (
                 <li>
-                  <a href={`https://wa.me/${wa}`} target="_blank" rel="noreferrer" className="hover:underline opacity-90">
-                    WhatsApp turnos
-                  </a>
-                </li>
-              )}
-              {contact?.email && (
-                <li>
-                  <a href={`mailto:${contact.email}`} className="hover:underline opacity-90">{contact.email}</a>
-                </li>
-              )}
-              {gthEmail && (
-                <li>
-                  <a href={`mailto:${gthEmail}`} className="hover:underline opacity-90">
-                    Trabajá con nosotros: {gthEmail}
+                  <a href={gthHref} className="hover:underline opacity-90">
+                    Trabajá con nosotros: {gth?.value}
                   </a>
                 </li>
               )}
@@ -362,16 +381,26 @@ export default function Layout({ children, settings }: Props) {
             <h4 className="text-xs font-semibold uppercase tracking-wider opacity-80 mb-3">Enlaces</h4>
             <ul className="space-y-1.5">
               {footer.map((it) => (
-                <li key={it.href}><Link to={it.href} className="text-sm hover:underline opacity-90">{it.label}</Link></li>
+                <li key={it.href}>
+                  <Link to={safeInternalHref(it.href)} className="text-sm hover:underline opacity-90">
+                    {it.label}
+                  </Link>
+                </li>
               ))}
             </ul>
           </div>
           <div>
-            {contact?.hours && (
-              <>
-                <h4 className="text-xs font-semibold uppercase tracking-wider opacity-80 mb-3">Horarios</h4>
-                <p className="text-sm opacity-90 whitespace-pre-line mb-6">{contact.hours}</p>
-              </>
+            <h4 className="text-xs font-semibold uppercase tracking-wider opacity-80 mb-3">Horarios</h4>
+            {contact?.hours ? (
+              <p className="text-sm opacity-90 whitespace-pre-line mb-6">{contact.hours}</p>
+            ) : (
+              /* Sin horarios confirmados no publicamos ninguno: enlazamos a la
+                 página donde se cargan a medida que el sanatorio los define. */
+              <p className="text-sm opacity-90 mb-6">
+                <Link to="/horarios" className="underline hover:no-underline">
+                  Ver horarios de atención
+                </Link>
+              </p>
             )}
             <h4 className="text-xs font-semibold uppercase tracking-wider opacity-80 mb-3">Conócenos en nuestras redes</h4>
             <div className="flex flex-wrap gap-3">
@@ -387,9 +416,9 @@ export default function Layout({ children, settings }: Props) {
                   <SocialIcon kind={s.kind} />
                 </a>
               ))}
-              {wa && (
+              {whatsappHref && (
                 <a
-                  href={`https://wa.me/${wa}`}
+                  href={whatsappHref}
                   target="_blank"
                   rel="noreferrer"
                   aria-label="WhatsApp"
@@ -406,13 +435,13 @@ export default function Layout({ children, settings }: Props) {
         </div>
       </footer>
 
-      {wa && (
+      {whatsappHref && (
         <a
-          href={`https://wa.me/${wa}`}
+          href={whatsappHref}
           target="_blank"
           rel="noreferrer"
-          className="fixed bottom-5 right-5 z-50 bg-green-500 text-white rounded-full w-14 h-14 flex items-center justify-center shadow-lg hover:scale-105 transition"
-          aria-label="WhatsApp"
+          className="fixed bottom-5 right-5 z-50 bg-green-600 text-white rounded-full w-14 h-14 flex items-center justify-center shadow-lg hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-700 focus-visible:ring-offset-2 transition"
+          aria-label={whatsapp?.label ?? "WhatsApp"}
         >
           <SocialIcon kind="whatsapp" className="w-7 h-7" />
         </a>
@@ -459,7 +488,7 @@ export default function Layout({ children, settings }: Props) {
               Reservar turno
             </Link>
             <a
-              href={emergencyTel ? `tel:${emergencyTel}` : "/emergencias"}
+              href={emergencyHref ?? "/emergencias"}
               onClick={() => setDrawerOpen(false)}
               className="btn-emergency btn-sm w-full text-center block"
             >
