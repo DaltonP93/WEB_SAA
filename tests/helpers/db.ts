@@ -21,6 +21,18 @@ export const DB_TESTS_ENABLED = process.env.TEST_DATABASE === "1";
  */
 export const TEST_ADMIN_PASSWORD = `prueba-${randomUUID()}`;
 
+/**
+ * Lee una columna JSON sin depender del motor.
+ *
+ * MySQL 8 —lo que corre en producción y en CI— devuelve las columnas JSON ya
+ * parseadas; MariaDB, que es lo que suele haber en local, las devuelve como
+ * string. `JSON.parse` directo funciona en una y falla en la otra con
+ * `"[object Object]" is not valid JSON`.
+ */
+export function jsonColumn<T = any>(value: unknown): T {
+  return (typeof value === "string" ? JSON.parse(value) : value) as T;
+}
+
 export const baseConnection = {
   host: process.env.DB_HOST ?? "127.0.0.1",
   port: Number(process.env.DB_PORT ?? 3306),

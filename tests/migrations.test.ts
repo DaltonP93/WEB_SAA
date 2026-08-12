@@ -9,6 +9,7 @@ import {
   migrateUpOne,
   migrationSource,
   pendingMigrations,
+  jsonColumn,
 } from "./helpers/db";
 
 /**
@@ -98,7 +99,7 @@ describeDb("migraciones", () => {
   it("el backup del rollback no se pisa al repetir la migración", async () => {
     const row = await db("settings").where({ key: "minuta_blocks_backup_20260812000000" }).first();
     expect(row).toBeTruthy();
-    const value = typeof row.value === "string" ? JSON.parse(row.value) : row.value;
+    const value = jsonColumn(row.value);
     // El backup guarda el estado ANTERIOR: bloques de páginas que la migración
     // reemplazó. Si se hubiera pisado en la segunda corrida, estaría vacío.
     expect(Array.isArray(value.blocks)).toBe(true);
@@ -110,8 +111,6 @@ describeDb("migraciones", () => {
  * anterior a las migraciones correctivas con el que queda tras revertirlas.
  */
 async function contentSnapshot(db: Knex) {
-  const json = (v: unknown) => (typeof v === "string" ? JSON.parse(v) : v);
-
   const pages = await db("pages").orderBy("slug").select("slug", "title", "status");
   const blocks = await db("blocks")
     .join("pages", "pages.id", "blocks.page_id")
@@ -132,7 +131,7 @@ async function contentSnapshot(db: Knex) {
 
   return {
     pages,
-    blocks: blocks.map((b) => ({ ...b, props: json(b.props) })),
+    blocks: blocks.map((b) => ({ ...b, props: jsonColumn(b.props) })),
     studies,
     services,
     specialties,
@@ -142,8 +141,8 @@ async function contentSnapshot(db: Knex) {
     // la migración está aplicada; no forma parte del contenido a comparar.
     settings: settings
       .filter((s) => !String(s.key).startsWith("snapshot_"))
-      .map((s) => ({ ...s, value: json(s.value) })),
-    menus: menus.map((m) => ({ ...m, items: json(m.items) })),
+      .map((s) => ({ ...s, value: jsonColumn(s.value) })),
+    menus: menus.map((m) => ({ ...m, items: jsonColumn(m.items) })),
   };
 }
 
@@ -223,11 +222,11 @@ describeDb("migraciones correctivas frente a ediciones del cliente", () => {
     expect(page).toBeTruthy();
     const blocks = await db("blocks").where({ page_id: page.id }).orderBy("order");
     expect(blocks).toHaveLength(2);
-    const rich = JSON.parse(blocks[0].props as string);
+    const rich = jsonColumn(blocks[0].props);
     expect(rich.html).toContain("Texto propio del sanatorio");
 
     // El CTA sigue estando, pero ya sin rojo: no habla de Emergencias.
-    const cta = JSON.parse(blocks[1].props as string);
+    const cta = jsonColumn(blocks[1].props);
     expect(cta.variant).toBe("primary");
     expect(cta.background).toBeUndefined();
     expect(cta.title).toBe("Convenios corporativos");
@@ -259,13 +258,11 @@ describeDb("migraciones correctivas frente a ediciones del cliente", () => {
       await mig.up(db);
     }
 
-    const hero = JSON.parse(
-      (await db("blocks").where({ page_id: page.id, order: 0 }).first()).props as string,
-    );
+    const hero = jsonColumn((await db("blocks").where({ page_id: page.id, order: 0 }).first()).props);
     expect(hero.subtitle).toBe("Editado desde el panel");
     const added = await db("blocks").where({ id: newBlockId }).first();
     expect(added).toBeTruthy();
-    expect(JSON.parse(added.props as string).html).toContain("Aviso cargado después de migrar");
+    expect(jsonColumn(added.props).html).toContain("Aviso cargado después de migrar");
 
     // Se deshace la edición para que el rollback pueda compararse con `before`.
     await db("blocks").where({ id: newBlockId }).del();
