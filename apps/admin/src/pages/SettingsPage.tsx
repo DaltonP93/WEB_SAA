@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { api } from "../api";
@@ -61,30 +62,27 @@ export default function SettingsPage() {
       </section>
 
       <section className="card p-5">
-        <h2 className="font-semibold mb-3">Contacto</h2>
+        <h2 className="font-semibold mb-3">Ubicación</h2>
+        {/*
+          Teléfonos, WhatsApp, correos, Emergencias, GTH y redes se editan en
+          "Canales de contacto"; los horarios, en "Horarios de atención". Antes
+          también estaban acá y se podían editar por duplicado: un número
+          quedaba distinto según dónde se mirara. La API descarta esos campos
+          si llegan, así que no alcanza con volver a agregarlos al formulario.
+        */}
+        <p className="text-sm text-gray-600 mb-4">
+          Los teléfonos, WhatsApp, correos y redes se cargan en{" "}
+          <Link to="/contact-channels" className="text-primary underline">Canales de contacto</Link>{" "}
+          y los horarios en{" "}
+          <Link to="/schedules" className="text-primary underline">Horarios de atención</Link>.
+          Cada dato vive en un solo lugar.
+        </p>
         <div className="grid md:grid-cols-2 gap-4">
-          <div><label className="label">Dirección</label><input className="input" value={s.contact?.address ?? ""} onChange={(e) => setKey("contact", { address: e.target.value })} /></div>
-          <div><label className="label">Email</label><input className="input" value={s.contact?.email ?? ""} onChange={(e) => setKey("contact", { email: e.target.value })} /></div>
-          <div><label className="label">WhatsApp</label><input className="input" value={s.contact?.whatsapp ?? ""} onChange={(e) => setKey("contact", { whatsapp: e.target.value })} placeholder="+595981000000" /></div>
-          <div><label className="label">Teléfonos (separados por coma)</label>
-            <input className="input" value={(s.contact?.phones ?? []).join(", ")} onChange={(e) => setKey("contact", { phones: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })} />
-          </div>
-          <div><label className="label">Emergencias 24hs (teléfono)</label><input className="input" value={s.contact?.emergencyPhone ?? ""} onChange={(e) => setKey("contact", { emergencyPhone: e.target.value })} placeholder="+595 21 000 000" /></div>
-          <div><label className="label">Correo de GTH (Trabajá con nosotros)</label><input className="input" value={s.contact?.gthEmail ?? ""} onChange={(e) => setKey("contact", { gthEmail: e.target.value })} placeholder="gth@…" /></div>
+          <div className="md:col-span-2"><label className="label">Dirección</label><input className="input" value={s.contact?.address ?? ""} onChange={(e) => setKey("contact", { address: e.target.value })} /></div>
           <div className="md:col-span-2"><label className="label">Link "Cómo llegar" (Google Maps)</label><input className="input" value={s.contact?.mapsUrl ?? ""} onChange={(e) => setKey("contact", { mapsUrl: e.target.value })} placeholder="https://www.google.com/maps/…" /></div>
-          <div className="md:col-span-2"><label className="label">Horarios</label><input className="input" value={s.contact?.hours ?? ""} onChange={(e) => setKey("contact", { hours: e.target.value })} /></div>
           <div className="md:col-span-2"><label className="label">Embed de mapa (HTML)</label>
             <textarea className="input" rows={3} value={s.contact?.mapEmbed ?? ""} onChange={(e) => setKey("contact", { mapEmbed: e.target.value })} />
           </div>
-        </div>
-      </section>
-
-      <section className="card p-5">
-        <h2 className="font-semibold mb-3">Redes sociales</h2>
-        <div className="grid md:grid-cols-2 gap-4">
-          {(["facebook", "instagram", "youtube", "linkedin"] as const).map((k) => (
-            <div key={k}><label className="label">{k}</label><input className="input" value={s.social?.[k] ?? ""} onChange={(e) => setKey("social", { [k]: e.target.value })} /></div>
-          ))}
         </div>
       </section>
 

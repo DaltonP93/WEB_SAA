@@ -34,6 +34,7 @@ const describeDb = DB_TESTS_ENABLED ? describe : describe.skip;
 const CORRECTIVE = [
   "20260814000000_contenido_no_confirmado.ts",
   "20260815000000_rojo_solo_emergencias.ts",
+  "20260816000000_fuente_unica_contacto.ts",
 ];
 
 describeDb("migraciones", () => {
@@ -280,8 +281,8 @@ describeDb("migraciones correctivas frente a ediciones del cliente", () => {
         .update({ props: JSON.stringify(original.props) });
     }
 
-    await migrateDown(db); // 20260815 rojo_solo_emergencias
-    await migrateDown(db); // 20260814 contenido_no_confirmado
+    // Una por una y en orden inverso: rollback() volvería el batch entero.
+    for (let i = 0; i < CORRECTIVE.length; i++) await migrateDown(db);
 
     const after = await contentSnapshot(db);
     // El diff de vitest sobre dos snapshots completos es ilegible; con

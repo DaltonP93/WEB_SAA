@@ -1,37 +1,37 @@
-import { useQuery } from "@tanstack/react-query";
-import { api } from "../api";
 import type { SocialLinksProps } from "@sa/shared/blocks";
 import SocialIcon, { type SocialKind } from "../components/SocialIcon";
-import { CHANNEL_KEYS, channelHref, useContactChannels } from "../lib/contact-channels";
+import { CHANNEL_KEYS, channelHref, socialChannels, useContactChannels } from "../lib/contact-channels";
 import { isSafeExternalHref } from "../lib/url";
 
-const NETWORKS: { key: SocialKind; label: string; brand: string }[] = [
-  { key: "facebook", label: "Facebook", brand: "bg-[#1877F2]" },
-  { key: "instagram", label: "Instagram", brand: "bg-gradient-to-br from-[#f9ce34] via-[#ee2a7b] to-[#6228d7]" },
-  { key: "youtube", label: "YouTube", brand: "bg-[#FF0000]" },
-  { key: "linkedin", label: "LinkedIn", brand: "bg-[#0A66C2]" },
-];
+/*
+ * Colores oficiales de cada red: excepción de marca, no el rojo institucional.
+ * El #FF0000 de YouTube es el color del tercero y sólo se usa acá, como fondo
+ * del ícono circular; no sale del token `accent` del tema ni se aplica nunca a
+ * un llamado a la acción. Ver `shared/types/institutional-red.ts`.
+ */
+const NETWORKS: Record<SocialKind, { label: string; brand: string }> = {
+  facebook: { label: "Facebook", brand: "bg-[#1877F2]" },
+  instagram: { label: "Instagram", brand: "bg-gradient-to-br from-[#f9ce34] via-[#ee2a7b] to-[#6228d7]" },
+  youtube: { label: "YouTube", brand: "bg-[#FF0000]" },
+  linkedin: { label: "LinkedIn", brand: "bg-[#0A66C2]" },
+  whatsapp: { label: "WhatsApp", brand: "bg-[#25D366]" },
+};
 
 export default function SocialLinks({
   heading = "Conócenos en nuestras redes",
   text,
   muted = true,
 }: SocialLinksProps) {
-  const { data } = useQuery({
-    queryKey: ["settings"],
-    queryFn: async () => (await api.get("/public/settings")).data,
-  });
-  const social = (data?.social ?? {}) as Record<string, string | undefined>;
-  const { firstWithValue } = useContactChannels();
+  // Redes y WhatsApp salen de la misma tabla que el resto de los canales.
+  const { channels, firstWithValue } = useContactChannels();
   const whatsappChannel = firstWithValue(CHANNEL_KEYS.general, CHANNEL_KEYS.turnos);
   const whatsappHref = whatsappChannel ? channelHref(whatsappChannel) : undefined;
 
-  const links = NETWORKS.filter((n) => isSafeExternalHref(social[n.key])).map((n) => ({
-    ...n,
-    href: (social[n.key] as string).trim(),
-  }));
+  const links = socialChannels(channels)
+    .filter((s) => isSafeExternalHref(s.href))
+    .map((s) => ({ key: s.key as SocialKind, href: s.href, ...NETWORKS[s.key as SocialKind] }));
   if (whatsappHref) {
-    links.push({ key: "whatsapp", label: "WhatsApp", brand: "bg-[#25D366]", href: whatsappHref });
+    links.push({ key: "whatsapp", href: whatsappHref, ...NETWORKS.whatsapp });
   }
   if (links.length === 0) return null;
 

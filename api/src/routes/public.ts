@@ -28,8 +28,19 @@ function isHoneypotFilled(body: unknown): boolean {
 const plainText = (max: number) =>
   z.string().transform((value) => stripHtml(value).slice(0, max));
 
+/**
+ * Ajustes públicos.
+ *
+ * Se devuelven sólo las claves que el sitio usa. La tabla `settings` guarda
+ * además cosas internas —los snapshots que dejan las migraciones para poder
+ * revertirse, por ejemplo—, y devolver la tabla entera las publicaba junto con
+ * el resto. Los teléfonos, correos y horarios ya no están acá: viven en
+ * `/public/contact-channels` y `/public/schedules`.
+ */
+const PUBLIC_SETTING_KEYS = ["brand", "theme", "contact", "seo"];
+
 publicRouter.get("/settings", async (_req, res) => {
-  const rows = await db("settings").select("key", "value");
+  const rows = await db("settings").whereIn("key", PUBLIC_SETTING_KEYS).select("key", "value");
   const out: Record<string, unknown> = {};
   for (const r of rows) out[r.key] = r.value;
   res.json(out);

@@ -32,7 +32,10 @@ export async function seed(knex: Knex): Promise<void> {
   const hash = await bcrypt.hash(password, 10);
   await knex("users").insert({ email, password_hash: hash, name, role: "superadmin" });
 
-  await knex("settings").del();
+  // Se borran sólo los ajustes del sitio: las claves internas que dejan las
+  // migraciones (los snapshots que permiten revertirlas) tienen que sobrevivir
+  // a un re-seed, o el rollback se queda sin con qué restaurar.
+  await knex("settings").whereNot("key", "like", "snapshot_%").whereNot("key", "like", "%_backup_%").del();
   const settings: Record<string, unknown> = {
     brand: {
       name: "Sanatorio Adventista de Asunción",
@@ -51,26 +54,15 @@ export async function seed(knex: Knex): Promise<void> {
       fontBody: "Open Sans",
       radius: "0.5rem",
     },
-    // Teléfonos, WhatsApp y correos NO viven acá: se administran en
+    // Teléfonos, WhatsApp, correos y redes NO viven acá: se administran en
     // "Canales de contacto" (tabla contact_channels). Los horarios, en
     // "Horarios de atención" (tabla schedules). Nada de datos de ejemplo:
     // el sitio muestra "A confirmar" hasta que el sanatorio los cargue.
     contact: {
       address: "Silvio Pettirossi 380 c/ Pai Pérez, Asunción, Paraguay",
-      phones: [],
-      email: "",
-      hours: "",
       mapEmbed: SANATORIO_MAP_EMBED,
       mapsUrl:
         "https://www.google.com/maps/search/?api=1&query=Sanatorio+Adventista+Asunci%C3%B3n+Paraguay",
-    },
-    // Sin perfiles de ejemplo: un link a facebook.com/ no es la página del
-    // sanatorio. Se cargan desde el panel cuando estén confirmados.
-    social: {
-      facebook: "",
-      instagram: "",
-      youtube: "",
-      linkedin: "",
     },
     seo: {
       title: "Sanatorio Adventista de Asunción",

@@ -10,6 +10,7 @@ import DoctorsPage from "./pages/DoctorsPage";
 import DoctorDetailPage from "./pages/DoctorDetailPage";
 import SpecialtyDetailPage from "./pages/SpecialtyDetailPage";
 import NotFoundPage from "./pages/NotFoundPage";
+import { CHANNEL_KEYS, socialChannels, useContactChannels } from "./lib/contact-channels";
 
 /** Rutas del portal unificadas en /portal-paciente (item 23 de la minuta). */
 const PORTAL_REDIRECTS = [
@@ -34,6 +35,12 @@ export default function App() {
   const brand = settingsQ.data?.brand;
   const seo = settingsQ.data?.seo;
   const contact = settingsQ.data?.contact;
+  // Teléfono, correo y redes del JSON-LD salen de Canales de contacto, igual
+  // que el header y el pie: no hay una copia en settings.
+  const { channels, get } = useContactChannels();
+  const telephone = get(CHANNEL_KEYS.emergencias)?.value || get(CHANNEL_KEYS.recepcion)?.value || undefined;
+  const email = get(CHANNEL_KEYS.email)?.value || undefined;
+  const sameAs = socialChannels(channels).map((s) => s.href);
   const canonicalUrl = `${window.location.origin}${location.pathname}`;
   const orgJsonLd = {
     "@context": "https://schema.org",
@@ -42,8 +49,9 @@ export default function App() {
     url: window.location.origin,
     logo: brand?.logoUrl ? absoluteUrl(brand.logoUrl) : undefined,
     address: contact?.address,
-    telephone: contact?.phones?.[0],
-    email: contact?.email,
+    telephone,
+    email,
+    ...(sameAs.length ? { sameAs } : {}),
   };
 
   return (

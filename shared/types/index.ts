@@ -79,6 +79,23 @@ export interface ContactChannel {
   order: number;
 }
 
+/**
+ * Horario de atención publicado — fuente única (tabla `schedules`).
+ * `settings.contact.hours` se retiró: había dos lugares para lo mismo.
+ */
+export interface Schedule {
+  id: number;
+  /** Clave estable del área ("consultorios", "laboratorio"…). */
+  key: string;
+  area: string;
+  serviceSlug?: string | null;
+  days: string | null;
+  /** null o vacío = a confirmar; esos no se publican. */
+  hours: string | null;
+  note?: string | null;
+  order: number;
+}
+
 export interface MenuItem {
   label: string;
   href: string;
@@ -107,25 +124,19 @@ export interface SiteSettings {
     fontBody: string;
     radius: string;
   };
+  /**
+   * Datos de la institución que no son canales de contacto.
+   *
+   * Teléfonos, WhatsApp, correos, Emergencias, GTH y redes viven en
+   * `contact_channels`; los horarios, en `schedules`. Estaban duplicados acá y
+   * el panel dejaba editar los dos lados, así que un número podía quedar
+   * distinto según dónde se mirara. La API descarta esos campos al guardar.
+   */
   contact: {
     address: string;
-    phones: string[];
-    email: string;
-    whatsapp: string;
-    hours: string;
     mapEmbed: string;
-    /** Número de Emergencias 24hs, destacado en header y footer. */
-    emergencyPhone?: string;
-    /** Correo de Gestión de Talento Humano ("Trabajá con nosotros"). */
-    gthEmail?: string;
     /** Link "Cómo llegar" (Google Maps). */
     mapsUrl?: string;
-  };
-  social: {
-    facebook?: string;
-    instagram?: string;
-    youtube?: string;
-    linkedin?: string;
   };
   seo: {
     title: string;
