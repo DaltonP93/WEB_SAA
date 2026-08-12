@@ -56,6 +56,24 @@ export interface NewsArticle {
   status: "draft" | "published";
 }
 
+/** Canal de contacto administrable (tabla contact_channels). */
+export type ContactChannelKindDb = "whatsapp" | "phone" | "email" | "url";
+
+export interface ContactChannel {
+  id: number;
+  /** Clave estable usada por bloques y layout (ej. "whatsapp-turnos"). */
+  key: string;
+  label: string;
+  kind: ContactChannelKindDb;
+  /** null = a confirmar; nunca se arma un enlace con esto vacío. */
+  value: string | null;
+  note?: string | null;
+  message?: string | null;
+  href?: string | null;
+  icon?: string | null;
+  order: number;
+}
+
 export interface MenuItem {
   label: string;
   href: string;

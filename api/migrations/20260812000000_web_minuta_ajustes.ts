@@ -957,12 +957,17 @@ export async function up(knex: Knex): Promise<void> {
   }
 
   // Guardamos el estado previo para poder revertir.
-  await knex("settings").where({ key: BACKUP_KEY }).del();
-  await knex("settings").insert({
-    key: BACKUP_KEY,
-    value: JSON.stringify({ createdAt: new Date().toISOString(), blocks: backup }),
-    updated_at: knex.fn.now(),
-  });
+  // Si ya existe un backup NO se pisa: al re-ejecutar `up()` (por ejemplo desde
+  // los seeds) el "estado previo" ya es el nuevo, y sobrescribirlo dejaría el
+  // rollback sin nada que restaurar.
+  const existingBackup = await knex("settings").where({ key: BACKUP_KEY }).first();
+  if (!existingBackup) {
+    await knex("settings").insert({
+      key: BACKUP_KEY,
+      value: JSON.stringify({ createdAt: new Date().toISOString(), blocks: backup }),
+      updated_at: knex.fn.now(),
+    });
+  }
 
   // ------------------------------------------------- 5. eliminar Noticias (item 7)
   await knex("pages").where({ slug: "noticias" }).del(); // los bloques caen por FK

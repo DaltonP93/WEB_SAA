@@ -76,10 +76,29 @@ h1, h2, h3, h4, h5, h6 {
 .btn-lg { @apply btn px-6 py-3 text-base; }
 .btn-primary { @apply btn bg-primary text-white hover:opacity-90 focus-visible:ring-white; }
 .btn-secondary { @apply btn bg-secondary text-white hover:opacity-90 focus-visible:ring-white; }
-/* Reserva de turnos: cyan institucional (amable, contrastado). El rojo queda
-   exclusivamente para Emergencias (.btn-emergency). */
-.btn-turno { @apply btn bg-secondary-700 text-white shadow-sm hover:bg-secondary-600 focus-visible:ring-secondary-700; }
-.btn-emergency { @apply btn bg-accent text-white hover:bg-accent-600 focus-visible:ring-accent; }
+/* Reserva de turnos: cyan institucional (amable y contrastado, ~4.9:1 sobre
+   blanco). El rojo queda exclusivamente para Emergencias (.btn-emergency).
+   Estados explícitos: hover, focus visible, active y disabled. */
+.btn-turno {
+  @apply btn bg-secondary-700 text-white shadow-sm
+         hover:bg-secondary-800 hover:shadow
+         active:bg-secondary-900 active:shadow-none active:translate-y-px
+         focus-visible:ring-2 focus-visible:ring-secondary-700 focus-visible:ring-offset-2
+         disabled:bg-secondary-700/60 disabled:shadow-none;
+}
+/* Variante sobre fondos oscuros (hero): mismo cyan, con foco en blanco. */
+.btn-turno-on-dark {
+  @apply btn bg-secondary-600 text-white shadow-sm
+         hover:bg-secondary-700 active:bg-secondary-800 active:translate-y-px
+         focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-primary
+         disabled:opacity-60;
+}
+.btn-emergency {
+  @apply btn bg-accent text-white
+         hover:bg-accent-600 active:bg-accent-700 active:translate-y-px
+         focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2
+         disabled:opacity-60;
+}
 .btn-outline { @apply btn border border-primary text-primary hover:bg-primary hover:text-white focus-visible:ring-primary; }
 .btn-ghost { @apply btn bg-transparent text-primary hover:bg-primary/10 focus-visible:ring-primary; }
 .btn-white { @apply btn bg-white text-primary hover:bg-white/90 focus-visible:ring-white shadow-sm; }

@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import type { CtaProps } from "@sa/shared/blocks";
 import LucideIcon from "../components/LucideIcon";
+import { isInternalHref, safeInternalHref } from "../lib/url";
 
 type Variant = NonNullable<CtaProps["variant"]>;
 
@@ -24,7 +25,7 @@ export default function Cta(p: CtaProps) {
   const sectionBg = VARIANT_BG[variant];
   const btnClass = VARIANT_BTN[variant];
   const href = p.ctaHref ?? "#";
-  const isInternal = href.startsWith("/");
+  const isInternal = isInternalHref(href);
   const linkClass = `px-6 py-3 rounded font-semibold transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 whitespace-nowrap ${btnClass}`;
 
   return (
@@ -45,7 +46,7 @@ export default function Cta(p: CtaProps) {
           </div>
         </div>
         {isInternal ? (
-          <Link to={href} className={linkClass}>{p.ctaLabel}</Link>
+          <Link to={safeInternalHref(href)} className={linkClass}>{p.ctaLabel}</Link>
         ) : (
           <a
             href={href}

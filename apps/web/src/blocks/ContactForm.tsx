@@ -91,7 +91,7 @@ export default function ContactForm({ heading = "Contacto", showPhone = true }: 
               initial={{ opacity: 0, y: -4 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }}
-              className="text-red-700 inline-flex items-center gap-2"
+              className="text-amber-700 inline-flex items-center gap-2"
             >
               <AlertCircle className="w-4 h-4" />
               Hubo un error. Intentá nuevamente.

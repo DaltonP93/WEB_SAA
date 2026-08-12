@@ -1,4 +1,4 @@
-import { Routes, Route, useLocation } from "react-router-dom";
+import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { Helmet } from "react-helmet-async";
@@ -10,6 +10,14 @@ import DoctorsPage from "./pages/DoctorsPage";
 import DoctorDetailPage from "./pages/DoctorDetailPage";
 import SpecialtyDetailPage from "./pages/SpecialtyDetailPage";
 import NotFoundPage from "./pages/NotFoundPage";
+
+/** Rutas del portal unificadas en /portal-paciente (item 23 de la minuta). */
+const PORTAL_REDIRECTS = [
+  "/portal-resultados-diagnostico",
+  "/portal-resultados-laboratorio",
+  "/portal-presupuestos-cirugia",
+  "/portal-facturacion-electronica",
+];
 
 export default function App() {
   const location = useLocation();
@@ -70,6 +78,11 @@ export default function App() {
               <Route path="/profesionales" element={<DoctorsPage />} />
               <Route path="/profesionales/:slug" element={<DoctorDetailPage />} />
               <Route path="/especialidades/:slug" element={<SpecialtyDetailPage />} />
+              {/* Portal del paciente: una sola ruta canónica. Las páginas
+                  sueltas anteriores redirigen para no perder enlaces viejos. */}
+              {PORTAL_REDIRECTS.map((from) => (
+                <Route key={from} path={from} element={<Navigate to="/portal-paciente" replace />} />
+              ))}
               {/* La sección Noticias se retiró del sitio público (minuta de ajustes).
                   El CRUD sigue en el admin por si se reactiva más adelante. */}
               <Route path="/:slug" element={<DynamicPage />} />

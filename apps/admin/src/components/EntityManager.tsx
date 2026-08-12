@@ -17,7 +17,7 @@ function IconBadge({ value, className = "w-5 h-5 text-gray-500" }: { value: stri
 export interface FieldDef {
   key: string;
   label: string;
-  kind?: "text" | "textarea" | "icon" | "select";
+  kind?: "text" | "textarea" | "icon" | "select" | "checkbox";
   options?: { value: string; label: string }[];
 }
 
@@ -28,6 +28,12 @@ interface Props {
   fields: FieldDef[];
   slugFrom?: string;
   reorderable?: boolean;
+  /** Campo que se muestra como título de cada fila (default: name). */
+  labelKey?: string;
+  /** Campo secundario mostrado bajo el título (default: slug). */
+  subtitleKey?: string;
+  /** false para entidades sin slug (usan otra clave estable). */
+  withSlug?: boolean;
 }
 
 function slugify(s: string) {
@@ -38,7 +44,21 @@ function norm(s: string) {
   return s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
 }
 
-function EntityRow({ row, reorderable, onEdit, onDelete }: { row: any; reorderable: boolean; onEdit: () => void; onDelete: () => void }) {
+function EntityRow({
+  row,
+  reorderable,
+  onEdit,
+  onDelete,
+  labelKey,
+  subtitleKey,
+}: {
+  row: any;
+  reorderable: boolean;
+  onEdit: () => void;
+  onDelete: () => void;
+  labelKey: string;
+  subtitleKey: string;
+}) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: row.id, disabled: !reorderable });
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 };
   return (
@@ -49,10 +69,21 @@ function EntityRow({ row, reorderable, onEdit, onDelete }: { row: any; reorderab
       {row.icon ? <span className="w-7 flex items-center justify-center flex-shrink-0 text-primary"><IconBadge value={row.icon} className="w-5 h-5 text-primary" /></span> : null}
       <div className="flex-1 min-w-0">
         <div className="font-semibold truncate flex items-center gap-2">
-          {row.name}
+          {row[labelKey]}
           {row.category && <span className="text-[10px] uppercase tracking-wide bg-gray-100 text-gray-600 rounded px-1.5 py-0.5">{row.category}</span>}
+          {row.kind && !row.category && <span className="text-[10px] uppercase tracking-wide bg-gray-100 text-gray-600 rounded px-1.5 py-0.5">{row.kind}</span>}
+          {"active" in row && !row.active && (
+            <span className="text-[10px] uppercase tracking-wide bg-gray-200 text-gray-600 rounded px-1.5 py-0.5">inactivo</span>
+          )}
+          {"value" in row && !row.value && (
+            <span className="text-[10px] uppercase tracking-wide bg-amber-100 text-amber-700 rounded px-1.5 py-0.5">a confirmar</span>
+          )}
         </div>
-        <div className="text-xs text-gray-500 truncate">/{row.slug}{row.description ? ` · ${String(row.description).slice(0, 80)}` : ""}</div>
+        <div className="text-xs text-gray-500 truncate">
+          {row[subtitleKey] ? String(row[subtitleKey]) : ""}
+          {row.description ? ` · ${String(row.description).slice(0, 80)}` : ""}
+          {row.note ? ` · ${String(row.note).slice(0, 80)}` : ""}
+        </div>
       </div>
       <button onClick={onEdit} className="btn-secondary">Editar</button>
       <button onClick={onDelete} className="btn-danger">Eliminar</button>
@@ -60,7 +91,17 @@ function EntityRow({ row, reorderable, onEdit, onDelete }: { row: any; reorderab
   );
 }
 
-export default function EntityManager({ title, endpoint, cacheKey, fields, slugFrom = "name", reorderable = false }: Props) {
+export default function EntityManager({
+  title,
+  endpoint,
+  cacheKey,
+  fields,
+  slugFrom = "name",
+  reorderable = false,
+  labelKey = "name",
+  subtitleKey = "slug",
+  withSlug = true,
+}: Props) {
   const qc = useQueryClient();
   const confirm = useConfirm();
   const list = useQuery({ queryKey: [cacheKey], queryFn: async () => (await api.get(endpoint)).data });
@@ -69,7 +110,9 @@ export default function EntityManager({ title, endpoint, cacheKey, fields, slugF
 
   const save = useMutation({
     mutationFn: async (payload: any) => {
-      const body = { ...payload, slug: payload.slug || slugify(payload[slugFrom] ?? "") };
+      const body = withSlug
+        ? { ...payload, slug: payload.slug || slugify(payload[slugFrom] ?? "") }
+        : payload;
       if (payload.id) return (await api.put(`${endpoint}/${payload.id}`, body)).data;
       return (await api.post(endpoint, body)).data;
     },
@@ -101,17 +144,18 @@ export default function EntityManager({ title, endpoint, cacheKey, fields, slugF
     const q = norm(query.trim());
     if (!q) return rows;
     return rows.filter((r) =>
-      norm(String(r.name ?? "")).includes(q) ||
-      norm(String(r.slug ?? "")).includes(q) ||
-      norm(String(r.description ?? "")).includes(q),
+      norm(String(r[labelKey] ?? "")).includes(q) ||
+      norm(String(r[subtitleKey] ?? "")).includes(q) ||
+      norm(String(r.description ?? "")).includes(q) ||
+      norm(String(r.note ?? "")).includes(q),
     );
-  }, [rows, query]);
+  }, [rows, query, labelKey, subtitleKey]);
 
   // Drag only when reorderable AND not filtering (reorder + filtered view conflict).
   const canDrag = reorderable && query.trim() === "";
 
   async function askDelete(row: any) {
-    if (await confirm({ title: "Eliminar", message: `¿Eliminar "${row.name}"? Esta acción no se puede deshacer.`, confirmLabel: "Eliminar", danger: true })) {
+    if (await confirm({ title: "Eliminar", message: `¿Eliminar "${row[labelKey]}"? Esta acción no se puede deshacer.`, confirmLabel: "Eliminar", danger: true })) {
       del.mutate(row.id);
     }
   }
@@ -147,6 +191,15 @@ export default function EntityManager({ title, endpoint, cacheKey, fields, slugF
                     <option value="">—</option>
                     {(f.options ?? []).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                   </select>
+                ) : f.kind === "checkbox" ? (
+                  <label className="inline-flex min-h-10 items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={editing[f.key] ?? true}
+                      onChange={(e) => setEditing({ ...editing, [f.key]: e.target.checked })}
+                    />
+                    <span>Activado</span>
+                  </label>
                 ) : f.kind === "icon" ? (
                   <div className="flex items-center gap-2">
                     <span className="w-9 h-9 flex items-center justify-center flex-shrink-0 border rounded bg-gray-50 text-primary">
@@ -159,10 +212,12 @@ export default function EntityManager({ title, endpoint, cacheKey, fields, slugF
                 )}
               </div>
             ))}
-            <div>
-              <label className="label">Slug</label>
-              <input className="input" value={editing.slug ?? ""} onChange={(e) => setEditing({ ...editing, slug: e.target.value })} placeholder={slugify(editing[slugFrom] ?? "")} />
-            </div>
+            {withSlug && (
+              <div>
+                <label className="label">Slug</label>
+                <input className="input" value={editing.slug ?? ""} onChange={(e) => setEditing({ ...editing, slug: e.target.value })} placeholder={slugify(editing[slugFrom] ?? "")} />
+              </div>
+            )}
           </div>
           <div className="flex justify-end gap-2 mt-4">
             <button onClick={() => setEditing(null)} className="btn-secondary">Cancelar</button>
@@ -195,6 +250,8 @@ export default function EntityManager({ title, endpoint, cacheKey, fields, slugF
                   reorderable={canDrag}
                   onEdit={() => setEditing(row)}
                   onDelete={() => askDelete(row)}
+                  labelKey={labelKey}
+                  subtitleKey={subtitleKey}
                 />
               ))}
             </div>

@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import type { CardItem, CardsProps } from "@sa/shared/blocks";
 import LucideIcon, { isIconName } from "../components/LucideIcon";
+import { isInternalHref, isSafeExternalHref, safeInternalHref } from "../lib/url";
 
 function CardIcon({ icon }: { icon: string }) {
   return (
@@ -17,7 +18,10 @@ function CardShell({ item, children }: { item: CardItem; children: ReactNode }) 
   const href = item.href?.trim();
   if (!href) return <div className={className}>{children}</div>;
   // Los enlaces internos usan el router; los externos (tel:, mailto:, http) un <a>.
-  if (href.startsWith("/")) return <Link to={href} className={className}>{children}</Link>;
+  if (isInternalHref(href)) {
+    return <Link to={safeInternalHref(href)} className={className}>{children}</Link>;
+  }
+  if (!isSafeExternalHref(href)) return <div className={className}>{children}</div>;
   const external = /^https?:\/\//i.test(href);
   return (
     <a href={href} className={className} {...(external ? { target: "_blank", rel: "noreferrer" } : {})}>

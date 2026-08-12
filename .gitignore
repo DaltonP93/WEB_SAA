@@ -1,8 +1,23 @@
 node_modules
 dist
 build
+
+# Secretos y credenciales — nunca commitear.
 .env
 .env.local
+.env.deploy
+.env.*.local
+!.env.example
+!.env.deploy.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+.deploy-credentials
+.db-backups/
+
 *.log
 .DS_Store
 api/uploads/*
@@ -13,6 +28,8 @@ assets-extracted/images/*
 .vite
 coverage
 *.tsbuildinfo
+__pycache__/
+*.pyc
 
 # Carpeta local con originales pesados (700MB de fotos OneDrive zip + fotos)
 imagenes/

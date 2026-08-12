@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Ningún PR debería considerarse listo sin estos checks en verde.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Typecheck, build y pruebas
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: sanatorio_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          # Sale de packageManager en package.json
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      # Instalación reproducible: si el lockfile no coincide, el job falla.
+      - name: Install (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Build API
+        run: pnpm --filter @sa/api build
+
+      - name: Build web
+        run: pnpm --filter @sa/web build
+
+      - name: Build admin
+        run: pnpm --filter @sa/admin build
+
+      - name: Pruebas (incluye migraciones sobre MySQL)
+        env:
+          TEST_DATABASE: "1"
+          TEST_DB_NAME: sanatorio_test
+          DB_HOST: 127.0.0.1
+          DB_PORT: "3306"
+          DB_USER: root
+          DB_PASS: root
+        run: pnpm test
+
+  secrets:
+    name: Detección de secretos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Historial completo para que gitleaks pueda revisar los commits.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # Chequeo propio del árbol actual: no necesita red ni binarios externos.
+      - name: check-secrets (árbol actual)
+        run: node scripts/check-secrets.mjs
+
+      # Escaneo del historial. Informativo: el secreto ya filtrado se purga
+      # aparte, de forma coordinada con el propietario del repo.
+      - name: gitleaks (historial)
+        uses: gitleaks/gitleaks-action@v2
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  audit:
+    name: Auditoría de dependencias
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # Falla con vulnerabilidades altas o críticas en dependencias de
+      # producción. Las moderadas se revisan pero no bloquean.
+      - name: Audit (high/critical, prod)
+        run: pnpm audit --prod --audit-level high
+
+      - name: Audit completo (informativo)
+        run: pnpm audit --prod || true

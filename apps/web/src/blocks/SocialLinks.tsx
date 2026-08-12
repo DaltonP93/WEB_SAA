@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "../api";
 import type { SocialLinksProps } from "@sa/shared/blocks";
 import SocialIcon, { type SocialKind } from "../components/SocialIcon";
+import { CHANNEL_KEYS, channelHref, useContactChannels } from "../lib/contact-channels";
 
 const NETWORKS: { key: SocialKind; label: string; brand: string }[] = [
   { key: "facebook", label: "Facebook", brand: "bg-[#1877F2]" },
@@ -20,14 +21,16 @@ export default function SocialLinks({
     queryFn: async () => (await api.get("/public/settings")).data,
   });
   const social = (data?.social ?? {}) as Record<string, string | undefined>;
-  const whatsapp = (data?.contact?.whatsapp ?? "").replace(/[^0-9]/g, "");
+  const { firstWithValue } = useContactChannels();
+  const whatsappChannel = firstWithValue(CHANNEL_KEYS.general, CHANNEL_KEYS.turnos);
+  const whatsappHref = whatsappChannel ? channelHref(whatsappChannel) : undefined;
 
   const links = NETWORKS.filter((n) => !!social[n.key]).map((n) => ({
     ...n,
     href: social[n.key] as string,
   }));
-  if (whatsapp) {
-    links.push({ key: "whatsapp", label: "WhatsApp", brand: "bg-[#25D366]", href: `https://wa.me/${whatsapp}` });
+  if (whatsappHref) {
+    links.push({ key: "whatsapp", label: "WhatsApp", brand: "bg-[#25D366]", href: whatsappHref });
   }
   if (links.length === 0) return null;
 

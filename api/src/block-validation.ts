@@ -14,15 +14,6 @@ const cardItemSchema = z.object({
   href: urlLike,
 }).strip();
 
-const contactChannelSchema = z.object({
-  kind: z.enum(["whatsapp", "phone", "email", "emergency"]),
-  label: z.string().trim().min(1).max(120),
-  value: z.string().trim().max(120).optional().or(z.literal("")),
-  note: z.string().max(240).optional().or(z.literal("")),
-  message: z.string().max(500).optional().or(z.literal("")),
-  icon: z.string().trim().max(64).optional().or(z.literal("")),
-}).strip();
-
 const blockPropsSchemas = {
   hero: z.object({
     title: z.string().trim().min(1).max(180),
@@ -53,10 +44,13 @@ const blockPropsSchemas = {
   }).strip(),
   doctorList: z.object({
     specialtyFilter: z.number().int().positive().optional(),
+    specialtySlug: z.string().trim().max(191).optional().or(z.literal("")),
+    lockSpecialty: z.boolean().optional(),
     showSearch: z.boolean().optional(),
     limit: z.number().int().positive().max(100).optional(),
     heading: z.string().max(180).optional().or(z.literal("")),
     intro: z.string().max(500).optional().or(z.literal("")),
+    emptyText: z.string().max(500).optional().or(z.literal("")),
   }).strip(),
   specialtyGrid: z.object({
     columns: z.union([z.literal(3), z.literal(4), z.literal(6)]),
@@ -92,12 +86,28 @@ const blockPropsSchemas = {
     heading: z.string().max(180).optional().or(z.literal("")),
     text: z.string().max(500).optional().or(z.literal("")),
     columns: columns2to4.optional(),
-    items: z.array(contactChannelSchema).max(12),
+    // Los valores viven en la tabla contact_channels; acá sólo qué mostrar.
+    keys: z.array(z.string().trim().max(64)).max(12).optional(),
   }).strip(),
   socialLinks: z.object({
     heading: z.string().max(180).optional().or(z.literal("")),
     text: z.string().max(500).optional().or(z.literal("")),
     muted: z.boolean().optional(),
+  }).strip(),
+  steps: z.object({
+    heading: z.string().max(180).optional().or(z.literal("")),
+    text: z.string().max(500).optional().or(z.literal("")),
+    muted: z.boolean().optional(),
+    items: z.array(z.object({
+      title: z.string().trim().min(1).max(160),
+      text: itemText,
+      icon: z.string().trim().max(64).optional().or(z.literal("")),
+    }).strip()).max(8),
+  }).strip(),
+  scheduleTable: z.object({
+    heading: z.string().max(180).optional().or(z.literal("")),
+    text: z.string().max(500).optional().or(z.literal("")),
+    areaKeys: z.array(z.string().trim().max(64)).max(20).optional(),
   }).strip(),
   cta: z.object({
     title: z.string().trim().min(1).max(180),

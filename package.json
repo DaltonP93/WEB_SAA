@@ -19,13 +19,29 @@
     "db:seed": "pnpm --filter @sa/api seed",
     "db:reset": "pnpm --filter @sa/api db:reset",
     "extract:assets": "tsx scripts/extract-assets.ts",
-    "extract:doctors": "tsx scripts/extract-doctors.ts"
+    "extract:doctors": "tsx scripts/extract-doctors.ts",
+    "typecheck": "tsc -p api/tsconfig.json --noEmit && pnpm --filter @sa/web exec tsc -b && pnpm --filter @sa/admin exec tsc -b",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check:secrets": "node scripts/check-secrets.mjs",
+    "check:icons": "vitest run tests/icons.test.ts",
+    "audit:prod": "pnpm audit --prod --audit-level high"
   },
   "devDependencies": {
     "concurrently": "^9.0.1",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
     "@types/node": "^22.9.0",
-    "cheerio": "^1.0.0"
+    "cheerio": "^1.0.0",
+    "vitest": "^2.1.8"
+  },
+  "pnpm": {
+    "overrides": {
+      "linkify-it": ">=5.0.2",
+      "markdown-it": ">=14.2.0",
+      "form-data": ">=4.0.6",
+      "body-parser": ">=1.20.6",
+      "@remix-run/router": ">=1.23.3"
+    }
   }
 }

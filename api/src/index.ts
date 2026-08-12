@@ -1,87 +1,46 @@
 import "dotenv/config";
-import express from "express";
-import cors from "cors";
-import helmet from "helmet";
-import morgan from "morgan";
-import path from "node:path";
-import { publicRouter } from "./routes/public.js";
-import { authRouter } from "./routes/auth.js";
-import { adminRouter } from "./routes/admin/index.js";
+import { createApp, PORT } from "./app.js";
 import { db } from "./db.js";
 
-const app = express();
-const PORT = Number(process.env.PORT ?? 4000);
-const UPLOAD_DIR = path.resolve(process.env.UPLOAD_DIR ?? "./uploads");
+const app = createApp();
 
-app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
-app.use(
-  cors({
-    origin: (process.env.CORS_ORIGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
-    credentials: true,
-  }),
-);
-app.use(express.json({ limit: "5mb" }));
-app.use(morgan("dev"));
-
-app.use("/uploads", express.static(UPLOAD_DIR, {
-  immutable: true,
-  maxAge: "30d",
-  setHeaders: (res) => {
-    res.setHeader("X-Content-Type-Options", "nosniff");
-  },
-}));
-
-app.get("/api/health", (_req, res) => res.json({ ok: true, ts: Date.now() }));
-app.get("/robots.txt", (_req, res) => {
-  const siteUrl = getSiteUrl();
-  res.type("text/plain").send([
-    "User-agent: *",
-    "Allow: /",
-    "Disallow: /admin/",
-    "Disallow: /api/",
-    `Sitemap: ${siteUrl}/sitemap.xml`,
-    "",
-  ].join("\n"));
-});
-app.get("/sitemap.xml", async (_req, res) => {
-  const siteUrl = getSiteUrl();
-  // La sección Noticias se retiró del sitio público, así que no se indexa.
-  const [pages, specialties, doctors] = await Promise.all([
-    db("pages").where({ status: "published" }).select("slug", "updated_at"),
-    db("specialties").select("slug"),
-    db("doctors").select("slug"),
-  ]);
-  const urls: { loc: string; lastmod?: string | Date }[] = [
-    ...pages.map((p) => ({ loc: p.slug === "home" ? "/" : `/${p.slug}`, lastmod: p.updated_at })),
-    { loc: "/profesionales" },
-    ...specialties.map((s) => ({ loc: `/especialidades/${s.slug}` })),
-    ...doctors.map((d) => ({ loc: `/profesionales/${d.slug}` })),
-  ];
-  res.type("application/xml").send(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.map((u) => sitemapUrl(siteUrl, u.loc, u.lastmod)).join("\n")}\n</urlset>`);
-});
-
-app.use("/api/public", publicRouter);
-app.use("/api/auth", authRouter);
-app.use("/api/admin", adminRouter);
-
-app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  console.error(err);
-  res.status(err.status ?? 500).json({ error: err.message ?? "internal error" });
-});
-
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`✓ API en http://localhost:${PORT}`);
 });
 
-function getSiteUrl() {
-  return (process.env.PUBLIC_SITE_URL ?? `http://localhost:${PORT}`).replace(/\/$/, "");
-}
+// Red de seguridad: si algo se escapa del wrapper, se loguea y el proceso
+// sigue vivo. Un error puntual de la base no debe tumbar toda la API.
+process.on("unhandledRejection", (reason) => {
+  console.error("[unhandledRejection]", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[uncaughtException]", err);
+});
 
-function sitemapUrl(siteUrl: string, loc: string, lastmod?: string | Date) {
-  const date = lastmod ? `\n    <lastmod>${new Date(lastmod).toISOString().slice(0, 10)}</lastmod>` : "";
-  return `  <url>\n    <loc>${escapeXml(`${siteUrl}${loc}`)}</loc>${date}\n  </url>`;
-}
+// Apagado controlado: dejamos de aceptar conexiones, cerramos el pool y
+// salimos. Si algo queda colgado, forzamos la salida a los 10s.
+let shuttingDown = false;
+async function shutdown(signal: string) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`\n→ ${signal} recibido, cerrando…`);
+  const forceExit = setTimeout(() => {
+    console.error("→ cierre forzado tras 10s");
+    process.exit(1);
+  }, 10_000);
+  forceExit.unref();
 
-function escapeXml(value: string) {
-  return value.replace(/[<>&'"]/g, (ch) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", "\"": "&quot;" }[ch]!));
+  server.close(async () => {
+    try {
+      await db.destroy();
+      console.log("→ conexiones cerradas");
+      process.exit(0);
+    } catch (err) {
+      console.error("→ error cerrando el pool:", err);
+      process.exit(1);
+    }
+  });
 }
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));
+

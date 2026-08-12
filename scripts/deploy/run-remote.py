@@ -1,22 +1,24 @@
 """
-Conecta por SSH al VPS y corre el bootstrap, streameando la salida.
-Uso:  python run-remote.py <host> <user> <password>
+Corre un comando en el VPS por SSH, streameando la salida.
+
+Uso:
+    python scripts/deploy/run-remote.py "bash /var/www/sanatorio/scripts/deploy/update-vps.sh"
+
+Sin argumento corre el update estándar. Las credenciales salen del entorno o de
+`.env.deploy` (ver `.env.deploy.example` y `scripts/deploy/ssh_utils.py`) —
+nunca de la línea de comandos, para que no queden en `ps` ni en el historial.
 """
+
 import sys
 import time
-import paramiko
 
-host = sys.argv[1]
-user = sys.argv[2]
-password = sys.argv[3]
-cmd = sys.argv[4] if len(sys.argv) > 4 else (
-    "curl -fsSL https://raw.githubusercontent.com/cacostama/WebSamap2/main/scripts/deploy/setup-vps.sh | bash"
-)
+from ssh_utils import connect
 
-client = paramiko.SSHClient()
-client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-print(f">>> conectando a {user}@{host} ...", flush=True)
-client.connect(hostname=host, username=user, password=password, timeout=30, banner_timeout=30)
+DEFAULT_CMD = "bash /var/www/sanatorio/scripts/deploy/update-vps.sh"
+
+cmd = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_CMD
+
+client = connect()
 print(">>> conectado, ejecutando comando", flush=True)
 print(f">>> $ {cmd}", flush=True)
 print("=" * 70, flush=True)

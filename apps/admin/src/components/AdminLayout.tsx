@@ -17,6 +17,8 @@ const SECTIONS: { title: string; items: NavItem[] }[] = [
       { to: "/specialties", label: "Especialidades", icon: "heart-pulse" },
       { to: "/services", label: "Servicios", icon: "hospital" },
       { to: "/studies", label: "Estudios", icon: "flask-conical" },
+      { to: "/contact-channels", label: "Canales de contacto", icon: "message-circle" },
+      { to: "/schedules", label: "Horarios", icon: "clock" },
       { to: "/media", label: "Multimedia", icon: "image" },
     ],
   },

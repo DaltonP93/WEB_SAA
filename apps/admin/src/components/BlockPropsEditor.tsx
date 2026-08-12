@@ -1,4 +1,6 @@
+import { useQuery } from "@tanstack/react-query";
 import type { BlockType } from "@sa/shared/blocks";
+import { api } from "../api";
 
 /**
  * Editor de props simplificado: genera inputs basados en un schema declarado
@@ -8,7 +10,18 @@ import type { BlockType } from "@sa/shared/blocks";
 interface FieldDef {
   key: string;
   label: string;
-  kind: "text" | "textarea" | "number" | "select" | "color" | "image" | "url" | "json" | "items" | "checkbox";
+  kind:
+    | "text"
+    | "textarea"
+    | "number"
+    | "select"
+    | "color"
+    | "image"
+    | "url"
+    | "json"
+    | "items"
+    | "checkbox"
+    | "channelKeys";
   options?: { label: string; value: any }[];
   itemFields?: FieldDef[]; // para 'items'
 }
@@ -66,8 +79,11 @@ const SCHEMAS: Record<BlockType, FieldDef[]> = {
     { key: "heading", label: "Encabezado", kind: "text" },
     { key: "intro", label: "Texto introductorio", kind: "textarea" },
     { key: "showSearch", label: "Mostrar filtros (especialidad / médico / nombre)", kind: "checkbox" },
-    { key: "specialtyFilter", label: "Especialidad preseleccionada (id)", kind: "number" },
+    { key: "specialtySlug", label: "Especialidad fija (slug, ej: odontologia)", kind: "text" },
+    { key: "lockSpecialty", label: "Bloquear especialidad (sólo esos médicos)", kind: "checkbox" },
+    { key: "specialtyFilter", label: "Especialidad preseleccionada (id, opcional)", kind: "number" },
     { key: "limit", label: "Límite", kind: "number" },
+    { key: "emptyText", label: "Texto cuando no hay profesionales", kind: "textarea" },
   ],
   specialtyGrid: [
     { key: "heading", label: "Encabezado", kind: "text" },
@@ -120,24 +136,26 @@ const SCHEMAS: Record<BlockType, FieldDef[]> = {
     { key: "heading", label: "Encabezado", kind: "text" },
     { key: "text", label: "Texto", kind: "textarea" },
     { key: "columns", label: "Columnas", kind: "select", options: [2,3,4].map(n => ({ label: String(n), value: n })) },
-    { key: "items", label: "Canales", kind: "items", itemFields: [
-      { key: "kind", label: "Tipo", kind: "select", options: [
-        { label: "WhatsApp", value: "whatsapp" },
-        { label: "Teléfono", value: "phone" },
-        { label: "Email", value: "email" },
-        { label: "Emergencias (rojo)", value: "emergency" },
-      ] },
-      { key: "label", label: "Tipo de atención", kind: "text" },
-      { key: "value", label: "Número / correo (vacío = a confirmar)", kind: "text" },
-      { key: "note", label: "Nota (horario, aclaración)", kind: "text" },
-      { key: "message", label: "Mensaje pre-cargado (WhatsApp)", kind: "text" },
-      { key: "icon", label: "Icono lucide (opcional)", kind: "text" },
-    ]},
+    { key: "keys", label: "Canales a mostrar", kind: "channelKeys" },
   ],
   socialLinks: [
     { key: "heading", label: "Encabezado", kind: "text" },
     { key: "text", label: "Texto", kind: "textarea" },
     { key: "muted", label: "Fondo gris", kind: "checkbox" },
+  ],
+  steps: [
+    { key: "heading", label: "Encabezado", kind: "text" },
+    { key: "text", label: "Texto introductorio", kind: "textarea" },
+    { key: "muted", label: "Fondo gris", kind: "checkbox" },
+    { key: "items", label: "Pasos", kind: "items", itemFields: [
+      { key: "title", label: "Título del paso", kind: "text" },
+      { key: "text", label: "Detalle", kind: "textarea" },
+      { key: "icon", label: "Icono (nombre lucide o emoji)", kind: "text" },
+    ]},
+  ],
+  scheduleTable: [
+    { key: "heading", label: "Encabezado", kind: "text" },
+    { key: "text", label: "Texto", kind: "textarea" },
   ],
   cta: [
     { key: "title", label: "Título", kind: "text" },
@@ -171,7 +189,55 @@ const SCHEMAS: Record<BlockType, FieldDef[]> = {
   spacer: [{ key: "height", label: "Alto (px)", kind: "number" }],
 };
 
+/**
+ * Selector de canales de contacto. Los datos viven en Configuración → Canales
+ * de contacto; acá sólo se elige cuáles muestra el bloque (vacío = todos).
+ */
+function ChannelKeysField({ value, onChange }: { value: any; onChange: (v: any) => void }) {
+  const q = useQuery({
+    queryKey: ["adm-contact-channels"],
+    queryFn: async () => (await api.get("/admin/contact-channels")).data as any[],
+  });
+  const selected: string[] = Array.isArray(value) ? value : [];
+  const channels = q.data ?? [];
+
+  function toggle(key: string) {
+    onChange(selected.includes(key) ? selected.filter((k) => k !== key) : [...selected, key]);
+  }
+
+  if (q.isLoading) return <p className="text-sm text-gray-500">Cargando canales…</p>;
+  if (channels.length === 0) {
+    return (
+      <p className="text-sm text-gray-500">
+        No hay canales cargados todavía. Creálos en <strong>Canales de contacto</strong>.
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <p className="text-xs text-gray-500">
+        Sin selección se muestran todos los canales activos, en su orden.
+      </p>
+      <div className="grid gap-1 sm:grid-cols-2">
+        {channels.map((c) => (
+          <label key={c.key} className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={selected.includes(c.key)} onChange={() => toggle(c.key)} />
+            <span>
+              {c.label}
+              <span className="text-gray-400"> · {c.kind}</span>
+              {!c.value && <span className="text-amber-600"> · a confirmar</span>}
+              {!c.active && <span className="text-gray-400"> · inactivo</span>}
+            </span>
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function Field({ def, value, onChange }: { def: FieldDef; value: any; onChange: (v: any) => void }) {
+  if (def.kind === "channelKeys") return <ChannelKeysField value={value} onChange={onChange} />;
   if (def.kind === "textarea") return <textarea className="input" rows={4} value={value ?? ""} onChange={(e) => onChange(e.target.value)} />;
   if (def.kind === "number") return <input type="number" className="input" value={value ?? ""} onChange={(e) => onChange(e.target.value === "" ? undefined : Number(e.target.value))} />;
   if (def.kind === "checkbox") return (
