@@ -34,6 +34,7 @@ const SCHEMAS: Record<BlockType, FieldDef[]> = {
     { key: "items", label: "Tarjetas", kind: "items", itemFields: [
       { key: "title", label: "Título", kind: "text" },
       { key: "text", label: "Texto", kind: "textarea" },
+      { key: "icon", label: "Icono (nombre lucide o emoji)", kind: "text" },
       { key: "imageUrl", label: "Imagen", kind: "image" },
       { key: "href", label: "Enlace", kind: "url" },
     ]},
@@ -62,28 +63,45 @@ const SCHEMAS: Record<BlockType, FieldDef[]> = {
     ]},
   ],
   doctorList: [
-    { key: "showSearch", label: "Mostrar buscador", kind: "checkbox" },
+    { key: "heading", label: "Encabezado", kind: "text" },
+    { key: "intro", label: "Texto introductorio", kind: "textarea" },
+    { key: "showSearch", label: "Mostrar filtros (especialidad / médico / nombre)", kind: "checkbox" },
+    { key: "specialtyFilter", label: "Especialidad preseleccionada (id)", kind: "number" },
     { key: "limit", label: "Límite", kind: "number" },
   ],
   specialtyGrid: [
+    { key: "heading", label: "Encabezado", kind: "text" },
     { key: "columns", label: "Columnas", kind: "select", options: [3,4,6].map(n => ({ label: String(n), value: n })) },
     { key: "showCount", label: "Cantidad a mostrar", kind: "number" },
+    { key: "compact", label: "Vista compacta (chips)", kind: "checkbox" },
   ],
   serviceGrid: [
+    { key: "heading", label: "Encabezado", kind: "text" },
     { key: "columns", label: "Columnas", kind: "select", options: [2,3,4].map(n => ({ label: String(n), value: n })) },
     { key: "showCount", label: "Cantidad a mostrar", kind: "number" },
+    { key: "compact", label: "Vista compacta", kind: "checkbox" },
   ],
   studyGrid: [
+    { key: "heading", label: "Encabezado", kind: "text" },
     { key: "columns", label: "Columnas", kind: "select", options: [2,3,4].map(n => ({ label: String(n), value: n })) },
     { key: "showCount", label: "Cantidad a mostrar", kind: "number" },
     { key: "grouped", label: "Agrupar por categoría (lista completa)", kind: "checkbox" },
+    { key: "category", label: "Solo una categoría", kind: "select", options: [
+      { label: "Laboratorio", value: "laboratorio" },
+      { label: "Estudios por imágenes", value: "imagenes" },
+      { label: "Estudios cardiológicos", value: "cardiologicos" },
+      { label: "Biopsias / anatomía patológica", value: "biopsias" },
+    ] },
   ],
   newsGrid: [
     { key: "limit", label: "Cantidad", kind: "number" },
     { key: "columns", label: "Columnas", kind: "select", options: [2,3,4].map(n => ({ label: String(n), value: n })) },
   ],
   mapEmbed: [
+    { key: "heading", label: "Encabezado", kind: "text" },
+    { key: "text", label: "Texto (dirección, referencias)", kind: "textarea" },
     { key: "embedHtml", label: "HTML del iframe", kind: "textarea" },
+    { key: "directionsUrl", label: "Link \"Cómo llegar\"", kind: "url" },
     { key: "height", label: "Alto (px)", kind: "number" },
   ],
   videoEmbed: [
@@ -97,6 +115,29 @@ const SCHEMAS: Record<BlockType, FieldDef[]> = {
   appointmentForm: [
     { key: "heading", label: "Encabezado", kind: "text" },
     { key: "defaultSpecialtyId", label: "Especialidad por defecto (id)", kind: "number" },
+  ],
+  contactChannels: [
+    { key: "heading", label: "Encabezado", kind: "text" },
+    { key: "text", label: "Texto", kind: "textarea" },
+    { key: "columns", label: "Columnas", kind: "select", options: [2,3,4].map(n => ({ label: String(n), value: n })) },
+    { key: "items", label: "Canales", kind: "items", itemFields: [
+      { key: "kind", label: "Tipo", kind: "select", options: [
+        { label: "WhatsApp", value: "whatsapp" },
+        { label: "Teléfono", value: "phone" },
+        { label: "Email", value: "email" },
+        { label: "Emergencias (rojo)", value: "emergency" },
+      ] },
+      { key: "label", label: "Tipo de atención", kind: "text" },
+      { key: "value", label: "Número / correo (vacío = a confirmar)", kind: "text" },
+      { key: "note", label: "Nota (horario, aclaración)", kind: "text" },
+      { key: "message", label: "Mensaje pre-cargado (WhatsApp)", kind: "text" },
+      { key: "icon", label: "Icono lucide (opcional)", kind: "text" },
+    ]},
+  ],
+  socialLinks: [
+    { key: "heading", label: "Encabezado", kind: "text" },
+    { key: "text", label: "Texto", kind: "textarea" },
+    { key: "muted", label: "Fondo gris", kind: "checkbox" },
   ],
   cta: [
     { key: "title", label: "Título", kind: "text" },
@@ -112,9 +153,11 @@ const SCHEMAS: Record<BlockType, FieldDef[]> = {
     { key: "background", label: "Color/Background (override)", kind: "color" },
   ],
   stats: [
+    { key: "heading", label: "Encabezado", kind: "text" },
     { key: "items", label: "Items", kind: "items", itemFields: [
       { key: "value", label: "Valor", kind: "text" },
       { key: "label", label: "Etiqueta", kind: "text" },
+      { key: "icon", label: "Icono (nombre lucide o emoji)", kind: "text" },
     ]},
   ],
   logos: [

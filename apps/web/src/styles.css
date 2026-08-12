@@ -76,9 +76,32 @@ h1, h2, h3, h4, h5, h6 {
 .btn-lg { @apply btn px-6 py-3 text-base; }
 .btn-primary { @apply btn bg-primary text-white hover:opacity-90 focus-visible:ring-white; }
 .btn-secondary { @apply btn bg-secondary text-white hover:opacity-90 focus-visible:ring-white; }
+/* Reserva de turnos: cyan institucional (amable, contrastado). El rojo queda
+   exclusivamente para Emergencias (.btn-emergency). */
+.btn-turno { @apply btn bg-secondary-700 text-white shadow-sm hover:bg-secondary-600 focus-visible:ring-secondary-700; }
+.btn-emergency { @apply btn bg-accent text-white hover:bg-accent-600 focus-visible:ring-accent; }
 .btn-outline { @apply btn border border-primary text-primary hover:bg-primary hover:text-white focus-visible:ring-primary; }
 .btn-ghost { @apply btn bg-transparent text-primary hover:bg-primary/10 focus-visible:ring-primary; }
 .btn-white { @apply btn bg-white text-primary hover:bg-white/90 focus-visible:ring-white shadow-sm; }
+
+/* Contenido enriquecido (bloques richText / accordion). No usamos el plugin
+   @tailwindcss/typography, así que definimos lo mínimo a mano: sin esto los
+   listados, links y tablas que carga el cliente salen sin ningún estilo. */
+.prose > * + * { margin-top: 1rem; }
+.prose h2 { @apply text-2xl font-bold text-primary; }
+.prose h3 { @apply text-xl font-semibold text-primary; }
+.prose h4 { @apply text-base font-semibold text-primary; }
+.prose a { @apply text-primary underline underline-offset-2 hover:opacity-80; }
+.prose ul { @apply list-disc pl-6 space-y-1; }
+.prose ol { @apply list-decimal pl-6 space-y-1; }
+.prose li > ul, .prose li > ol { margin-top: 0.25rem; }
+.prose strong { @apply font-semibold; }
+.prose em { @apply italic; }
+.prose blockquote { @apply border-l-4 border-primary-100 pl-4 italic text-gray-600; }
+.prose table { @apply w-full text-left text-sm border-collapse; }
+.prose th { @apply bg-gray-50 text-primary font-semibold px-3 py-2 border-b border-gray-200; }
+.prose td { @apply px-3 py-2 border-b border-gray-100 align-top; }
+.prose img { @apply rounded max-w-full h-auto; }
 
 @keyframes gradient-pan {
   0% { background-position: 0% 50%; }

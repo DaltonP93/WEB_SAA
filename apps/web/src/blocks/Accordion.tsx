@@ -13,7 +13,7 @@ export default function Accordion({ heading, items }: AccordionProps) {
               <span>{it.title}</span>
               <span>{open === i ? "−" : "+"}</span>
             </button>
-            {open === i && <div className="px-4 py-3 text-sm text-gray-700" dangerouslySetInnerHTML={{ __html: it.body }} />}
+            {open === i && <div className="prose max-w-none px-4 py-3 text-sm text-gray-700" dangerouslySetInnerHTML={{ __html: it.body }} />}
           </div>
         ))}
       </div>

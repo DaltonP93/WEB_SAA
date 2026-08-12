@@ -16,16 +16,17 @@
 
 ## ✨ Features
 
-- **Sitio público** SPA con páginas dinámicas armadas a partir de **19 tipos de bloques** renderizables (Hero, Cards, Slider, Acordeón, Galería, Grid de médicos/especialidades/servicios/estudios/noticias, Mapa, Video, Formularios de contacto y turno, CTA, Stats, Logos, etc.).
+- **Sitio público** SPA con páginas dinámicas armadas a partir de **21 tipos de bloques** renderizables (Hero, Cards, Slider, Acordeón, Galería, Grid de médicos/especialidades/servicios/estudios, Mapa, Video, Formularios de contacto y turno, Canales de contacto (WhatsApp/tel/email), Redes sociales, CTA, Stats, Logos, etc.).
 - **Page builder drag-and-drop** en el admin (dnd-kit) para componer páginas sin tocar código.
 - **Branding paramétrico**: colores, tipografías Google Fonts y border-radius se aplican al sitio en runtime — cambiar el color primario en el admin actualiza el sitio sin rebuild.
-- **Guía médica** filtrable por especialidad + buscador por nombre.
+- **Guía médica** con filtros por especialidad y por médico (al elegir una especialidad se despliegan sus profesionales) + buscador por nombre, con "Más información" y "Reservar turno" en cada ficha.
 - **Solicitud de turnos** que llega al panel admin con estado pendiente/confirmado/cancelado.
-- **Editor rich-text** Tiptap para noticias.
+- **Editor rich-text** Tiptap para noticias (sección no publicada en el sitio público).
 - **Multimedia**: uploader con validación de tipo, optimización con sharp y caché HTTP de 30 días.
 - **Auth** JWT + rate-limit por IP+email en el login.
 - **SEO**: meta tags por página, Open Graph + Twitter Cards, sitemap.xml dinámico, robots.txt, canonical URLs, JSON-LD Schema.org en fichas de médicos, y **prerender estático de `/estudios`** en el build (HTML con la lista real de estudios agrupada, para buscadores que no ejecutan JS).
-- **Iconos**: los campos de icono de Especialidades / Servicios / Estudios aceptan un nombre [lucide](https://lucide.dev/icons/) en kebab-case (`heart-pulse`) o un emoji, con preview en vivo en el editor.
+- **Iconos**: los campos de icono de Especialidades / Servicios / Estudios aceptan un nombre [lucide](https://lucide.dev/icons/) en kebab-case (`heart-pulse`) o un emoji, con preview en vivo en el editor. Cada registro trae su icono propio y `apps/web/src/lib/icons.ts` define el fallback por slug.
+- **Color con semántica**: el rojo de marca queda reservado para **Emergencias**; la reserva de turnos usa el cyan institucional.
 - **Accesibilidad**: skip-link, navegación con teclado en dropdowns, labels asociados a inputs, contraste WCAG.
 
 ## 🧱 Arquitectura

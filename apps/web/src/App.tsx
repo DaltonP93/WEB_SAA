@@ -9,8 +9,6 @@ import DynamicPage from "./pages/DynamicPage";
 import DoctorsPage from "./pages/DoctorsPage";
 import DoctorDetailPage from "./pages/DoctorDetailPage";
 import SpecialtyDetailPage from "./pages/SpecialtyDetailPage";
-import NewsListPage from "./pages/NewsListPage";
-import NewsDetailPage from "./pages/NewsDetailPage";
 import NotFoundPage from "./pages/NotFoundPage";
 
 export default function App() {
@@ -72,8 +70,8 @@ export default function App() {
               <Route path="/profesionales" element={<DoctorsPage />} />
               <Route path="/profesionales/:slug" element={<DoctorDetailPage />} />
               <Route path="/especialidades/:slug" element={<SpecialtyDetailPage />} />
-              <Route path="/noticias" element={<NewsListPage />} />
-              <Route path="/noticias/:slug" element={<NewsDetailPage />} />
+              {/* La sección Noticias se retiró del sitio público (minuta de ajustes).
+                  El CRUD sigue en el admin por si se reactiva más adelante. */}
               <Route path="/:slug" element={<DynamicPage />} />
               <Route path="*" element={<NotFoundPage />} />
             </Routes>

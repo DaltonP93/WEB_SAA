@@ -91,6 +91,12 @@ export interface SiteSettings {
     whatsapp: string;
     hours: string;
     mapEmbed: string;
+    /** Número de Emergencias 24hs, destacado en header y footer. */
+    emergencyPhone?: string;
+    /** Correo de Gestión de Talento Humano ("Trabajá con nosotros"). */
+    gthEmail?: string;
+    /** Link "Cómo llegar" (Google Maps). */
+    mapsUrl?: string;
   };
   social: {
     facebook?: string;

@@ -14,6 +14,8 @@ export type BlockType =
   | "videoEmbed"
   | "contactForm"
   | "appointmentForm"
+  | "contactChannels"
+  | "socialLinks"
   | "cta"
   | "stats"
   | "logos"
@@ -73,26 +75,39 @@ export interface GalleryProps {
 }
 
 export interface DoctorListProps {
+  /** Preselecciona una especialidad por id (el visitante puede cambiarla). */
   specialtyFilter?: number;
   showSearch?: boolean;
   limit?: number;
+  heading?: string;
+  /** Texto de ayuda debajo del título. */
+  intro?: string;
 }
 
 export interface SpecialtyGridProps {
   columns: 3 | 4 | 6;
   showCount?: number;
+  heading?: string;
+  /** Variante compacta: chips en vez de tarjetas grandes. */
+  compact?: boolean;
 }
 
 export interface ServiceGridProps {
   columns: 2 | 3 | 4;
   showCount?: number;
+  heading?: string;
+  /** Variante compacta: tarjetas de una línea con icono. */
+  compact?: boolean;
 }
 
 export interface StudyGridProps {
   columns: 2 | 3 | 4;
   showCount?: number;
-  /** Agrupa los estudios por categoría (Laboratorio / Estudios por imágenes). */
+  /** Agrupa los estudios por categoría (Laboratorio / Imágenes / Cardiológicos / Biopsias). */
   grouped?: boolean;
+  heading?: string;
+  /** Muestra solo una categoría ("laboratorio" | "imagenes" | "cardiologicos" | "biopsias"). */
+  category?: string;
 }
 
 export interface NewsGridProps {
@@ -103,6 +118,10 @@ export interface NewsGridProps {
 export interface MapEmbedProps {
   embedHtml: string;
   height?: number;
+  heading?: string;
+  text?: string;
+  /** Link "Cómo llegar" (Google Maps). Si se omite se usa el de configuración. */
+  directionsUrl?: string;
 }
 
 export interface VideoEmbedProps {
@@ -120,6 +139,35 @@ export interface AppointmentFormProps {
   defaultSpecialtyId?: number;
 }
 
+/** Canal de contacto directo (WhatsApp, teléfono, email, emergencias). */
+export type ContactChannelKind = "whatsapp" | "phone" | "email" | "emergency";
+
+export interface ContactChannelItem {
+  kind: ContactChannelKind;
+  /** Tipo de atención: "Turnos", "Estudios y laboratorio", "Trabajá con nosotros"… */
+  label: string;
+  /** Número o correo. Si queda vacío se muestra como "a confirmar" y no se linkea. */
+  value?: string;
+  note?: string;
+  /** Mensaje pre-cargado para los links de WhatsApp. */
+  message?: string;
+  icon?: string;
+}
+
+export interface ContactChannelsProps {
+  heading?: string;
+  text?: string;
+  columns?: 2 | 3 | 4;
+  items: ContactChannelItem[];
+}
+
+export interface SocialLinksProps {
+  heading?: string;
+  text?: string;
+  /** Fondo suave en vez de blanco. */
+  muted?: boolean;
+}
+
 export interface CtaProps {
   title: string;
   text?: string;
@@ -130,7 +178,8 @@ export interface CtaProps {
 }
 
 export interface StatsProps {
-  items: { value: string; label: string }[];
+  heading?: string;
+  items: { value: string; label: string; icon?: string }[];
 }
 
 export interface LogosProps {
@@ -158,6 +207,8 @@ export type Block =
   | BaseBlock<"videoEmbed", VideoEmbedProps>
   | BaseBlock<"contactForm", ContactFormProps>
   | BaseBlock<"appointmentForm", AppointmentFormProps>
+  | BaseBlock<"contactChannels", ContactChannelsProps>
+  | BaseBlock<"socialLinks", SocialLinksProps>
   | BaseBlock<"cta", CtaProps>
   | BaseBlock<"stats", StatsProps>
   | BaseBlock<"logos", LogosProps>
@@ -174,12 +225,17 @@ export const BLOCK_REGISTRY: { type: BlockType; label: string; defaults: unknown
   { type: "specialtyGrid", label: "Grid de especialidades", defaults: { columns: 4 } satisfies SpecialtyGridProps },
   { type: "serviceGrid", label: "Grid de servicios", defaults: { columns: 3 } satisfies ServiceGridProps },
   { type: "studyGrid", label: "Grid de estudios", defaults: { columns: 3 } satisfies StudyGridProps },
-  { type: "newsGrid", label: "Grid de noticias", defaults: { limit: 6, columns: 3 } satisfies NewsGridProps },
   { type: "mapEmbed", label: "Mapa Google", defaults: { embedHtml: "", height: 400 } satisfies MapEmbedProps },
   { type: "videoEmbed", label: "Video", defaults: { url: "" } satisfies VideoEmbedProps },
   { type: "contactForm", label: "Form Contacto", defaults: {} satisfies ContactFormProps },
   { type: "appointmentForm", label: "Form Turno", defaults: {} satisfies AppointmentFormProps },
-  { type: "cta", label: "Llamado a la accion", defaults: { title: "", ctaLabel: "Ver mas", ctaHref: "#" } satisfies CtaProps },
+  {
+    type: "contactChannels",
+    label: "Canales de contacto (WhatsApp / tel / email)",
+    defaults: { heading: "Canales de atención", columns: 3, items: [] } satisfies ContactChannelsProps,
+  },
+  { type: "socialLinks", label: "Redes sociales", defaults: { heading: "Conócenos en nuestras redes" } satisfies SocialLinksProps },
+  { type: "cta", label: "Llamado a la accion", defaults: { title: "", ctaLabel: "Ver mas", ctaHref: "#", variant: "primary" } satisfies CtaProps },
   { type: "stats", label: "Estadisticas", defaults: { items: [] } satisfies StatsProps },
   { type: "logos", label: "Logos", defaults: { logos: [] } satisfies LogosProps },
   { type: "spacer", label: "Espacio", defaults: { height: 40 } satisfies SpacerProps },

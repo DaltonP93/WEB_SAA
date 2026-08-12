@@ -1,4 +1,23 @@
 import type { Knex } from "knex";
+// Las páginas y la estructura definitiva del sitio viven en las migraciones.
+// El seed borra páginas y bloques, así que después de re-crear la base vuelve
+// a aplicar esas migraciones (son idempotentes) para que una instalación
+// nueva quede igual que producción.
+// Se importan dinámicamente (el CLI de knex ejecuta los .ts directamente).
+const CONTENT_MIGRATIONS = [
+  "20260520000000_add_placeholder_pages",
+  "20260521000000_patient_menu_pages",
+  "20260523000000_specialties_and_studies_detail",
+  "20260523000001_add_service_detail_placeholders",
+  "20260812000000_web_minuta_ajustes",
+];
+
+async function applyContentMigrations(knex: Knex) {
+  for (const name of CONTENT_MIGRATIONS) {
+    const mod = await import(new URL(`../migrations/${name}.ts`, import.meta.url).href);
+    await mod.up(knex);
+  }
+}
 
 const SANATORIO_MAP_EMBED =
   '<iframe src="https://www.google.com/maps/embed?output=embed&q=Sanatorio%20Adventista%20de%20Asunci%C3%B3n%2C%20Asunci%C3%B3n%2C%20Paraguay" width="100%" height="400" style="border:0;" allowfullscreen loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>';
@@ -49,15 +68,9 @@ export async function seed(knex: Knex): Promise<void> {
     { slug: "uti", name: "Terapia Intensiva", icon: "heart-pulse", description: "Unidad de cuidados intensivos adultos y pediátricos.", order: 5 },
   ]);
 
+  // El listado completo de estudios (laboratorio, imágenes, cardiológicos y
+  // biopsias, con categoría e icono) lo carga la migración de la minuta.
   await knex("studies").del();
-  await knex("studies").insert([
-    { slug: "laboratorio", name: "Laboratorio clínico", category: "laboratorio", description: "Análisis clínicos y bioquímicos.", order: 0 },
-    { slug: "ecografias", name: "Ecografías", category: "imagenes", description: "Estudios ecográficos generales y especializados.", order: 1 },
-    { slug: "tomografia", name: "Tomografía", category: "imagenes", description: "Tomografía computada multicorte.", order: 2 },
-    { slug: "resonancia", name: "Resonancia magnética", category: "imagenes", description: "Estudios de RM de alta definición.", order: 3 },
-    { slug: "rayos-x", name: "Rayos X", category: "imagenes", description: "Radiografías digitales.", order: 4 },
-    { slug: "endoscopia", name: "Endoscopía", category: "imagenes", description: "Estudios endoscópicos digestivos.", order: 5 },
-  ]);
 
   await knex("blocks").del();
   await knex("pages").del();
@@ -136,11 +149,6 @@ export async function seed(knex: Knex): Promise<void> {
     { type: "studyGrid", props: { columns: 3, grouped: true } },
   ], 5);
 
-  await insertPage("noticias", "Noticias", [
-    { type: "hero", props: { title: "Noticias", variant: "centered" } },
-    { type: "newsGrid", props: { limit: 12, columns: 3 } },
-  ], 6);
-
   await insertPage("contacto", "Contacto", [
     { type: "hero", props: { title: "Contacto", variant: "centered" } },
     { type: "contactForm", props: { heading: "Escribinos", showPhone: true } },
@@ -175,4 +183,7 @@ export async function seed(knex: Knex): Promise<void> {
       },
     ], 300 + i);
   }
+
+  // Re-aplicar el contenido que vive en las migraciones (todas idempotentes).
+  await applyContentMigrations(knex);
 }

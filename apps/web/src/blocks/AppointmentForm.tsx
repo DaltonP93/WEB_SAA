@@ -97,7 +97,7 @@ export default function AppointmentForm({ heading = "Solicitar turno", defaultSp
           <label htmlFor="appt-message" className="block text-sm font-medium mb-1">Mensaje / detalles (opcional)</label>
           <textarea id="appt-message" rows={3} value={form.message} onChange={(e) => setForm({ ...form, message: e.target.value })} className={inputClass} />
         </div>
-        <button disabled={!waNumber || submitting} className="btn-primary self-start inline-flex items-center gap-2 disabled:opacity-50">
+        <button disabled={!waNumber || submitting} className="btn-turno btn-lg self-start inline-flex items-center gap-2 disabled:opacity-50">
           {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <span aria-hidden>💬</span>}
           {waNumber ? (submitting ? "Enviando…" : "Solicitar turno por WhatsApp") : "WhatsApp no disponible"}
         </button>

@@ -16,6 +16,8 @@ import type {
   VideoEmbedProps,
   ContactFormProps,
   AppointmentFormProps,
+  ContactChannelsProps,
+  SocialLinksProps,
   CtaProps,
   StatsProps,
   LogosProps,
@@ -37,6 +39,8 @@ const MapEmbed = lazy(() => import("./MapEmbed"));
 const VideoEmbed = lazy(() => import("./VideoEmbed"));
 const ContactForm = lazy(() => import("./ContactForm"));
 const AppointmentForm = lazy(() => import("./AppointmentForm"));
+const ContactChannels = lazy(() => import("./ContactChannels"));
+const SocialLinks = lazy(() => import("./SocialLinks"));
 const Cta = lazy(() => import("./Cta"));
 const Stats = lazy(() => import("./Stats"));
 const Logos = lazy(() => import("./Logos"));
@@ -58,6 +62,8 @@ type BlockPropsMap = {
   videoEmbed: VideoEmbedProps;
   contactForm: ContactFormProps;
   appointmentForm: AppointmentFormProps;
+  contactChannels: ContactChannelsProps;
+  socialLinks: SocialLinksProps;
   cta: CtaProps;
   stats: StatsProps;
   logos: LogosProps;
@@ -80,6 +86,8 @@ const MAP: Record<BlockType, React.ComponentType<any>> = {
   videoEmbed: VideoEmbed,
   contactForm: ContactForm,
   appointmentForm: AppointmentForm,
+  contactChannels: ContactChannels,
+  socialLinks: SocialLinks,
   cta: Cta,
   stats: Stats,
   logos: Logos,

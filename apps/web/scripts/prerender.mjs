@@ -15,9 +15,12 @@ const DIST = path.resolve(__dirname, "../dist");
 const API_BASE = (process.env.PRERENDER_API_BASE ?? "http://127.0.0.1:4000").replace(/\/$/, "");
 const SITE_URL = (process.env.PUBLIC_SITE_URL ?? "https://sanatorioadventista.com.py").replace(/\/$/, "");
 
+// Mismos grupos y títulos que apps/web/src/blocks/StudyGrid.tsx
 const GROUPS = [
-  { key: "laboratorio", title: "Laboratorio" },
+  { key: "laboratorio", title: "Laboratorio clínico y bacteriológico" },
   { key: "imagenes", title: "Estudios por imágenes" },
+  { key: "cardiologicos", title: "Estudios cardiológicos" },
+  { key: "biopsias", title: "Biopsias y anatomía patológica" },
 ];
 
 function esc(s) {

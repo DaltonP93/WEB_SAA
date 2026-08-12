@@ -69,6 +69,9 @@ export default function SettingsPage() {
           <div><label className="label">Teléfonos (separados por coma)</label>
             <input className="input" value={(s.contact?.phones ?? []).join(", ")} onChange={(e) => setKey("contact", { phones: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })} />
           </div>
+          <div><label className="label">Emergencias 24hs (teléfono)</label><input className="input" value={s.contact?.emergencyPhone ?? ""} onChange={(e) => setKey("contact", { emergencyPhone: e.target.value })} placeholder="+595 21 000 000" /></div>
+          <div><label className="label">Correo de GTH (Trabajá con nosotros)</label><input className="input" value={s.contact?.gthEmail ?? ""} onChange={(e) => setKey("contact", { gthEmail: e.target.value })} placeholder="gth@…" /></div>
+          <div className="md:col-span-2"><label className="label">Link "Cómo llegar" (Google Maps)</label><input className="input" value={s.contact?.mapsUrl ?? ""} onChange={(e) => setKey("contact", { mapsUrl: e.target.value })} placeholder="https://www.google.com/maps/…" /></div>
           <div className="md:col-span-2"><label className="label">Horarios</label><input className="input" value={s.contact?.hours ?? ""} onChange={(e) => setKey("contact", { hours: e.target.value })} /></div>
           <div className="md:col-span-2"><label className="label">Embed de mapa (HTML)</label>
             <textarea className="input" rows={3} value={s.contact?.mapEmbed ?? ""} onChange={(e) => setKey("contact", { mapEmbed: e.target.value })} />

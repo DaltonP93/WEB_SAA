@@ -14,15 +14,28 @@ const cardItemSchema = z.object({
   href: urlLike,
 }).strip();
 
+const contactChannelSchema = z.object({
+  kind: z.enum(["whatsapp", "phone", "email", "emergency"]),
+  label: z.string().trim().min(1).max(120),
+  value: z.string().trim().max(120).optional().or(z.literal("")),
+  note: z.string().max(240).optional().or(z.literal("")),
+  message: z.string().max(500).optional().or(z.literal("")),
+  icon: z.string().trim().max(64).optional().or(z.literal("")),
+}).strip();
+
 export const blockPropsSchemas = {
   hero: z.object({
     title: z.string().trim().min(1).max(180),
+    eyebrow: z.string().max(120).optional().or(z.literal("")),
     subtitle: z.string().max(500).optional().or(z.literal("")),
     imageUrl: urlLike,
     ctaLabel: z.string().max(80).optional().or(z.literal("")),
     ctaHref: urlLike,
+    secondaryCtaLabel: z.string().max(80).optional().or(z.literal("")),
+    secondaryCtaHref: urlLike,
     variant: z.enum(["centered", "left", "split"]).optional(),
     overlay: z.number().min(0).max(100).optional(),
+    animatedBg: z.boolean().optional(),
   }).strip(),
   richText: z.object({ html }).strip(),
   cards: z.object({
@@ -57,18 +70,27 @@ export const blockPropsSchemas = {
     specialtyFilter: z.number().int().positive().optional(),
     showSearch: z.boolean().optional(),
     limit: z.number().int().positive().max(100).optional(),
+    heading: z.string().max(180).optional().or(z.literal("")),
+    intro: z.string().max(500).optional().or(z.literal("")),
   }).strip(),
   specialtyGrid: z.object({
     columns: z.union([z.literal(3), z.literal(4), z.literal(6)]),
     showCount: z.number().int().positive().max(100).optional(),
+    heading: z.string().max(180).optional().or(z.literal("")),
+    compact: z.boolean().optional(),
   }).strip(),
   serviceGrid: z.object({
     columns: columns2to4,
     showCount: z.number().int().positive().max(100).optional(),
+    heading: z.string().max(180).optional().or(z.literal("")),
+    compact: z.boolean().optional(),
   }).strip(),
   studyGrid: z.object({
     columns: columns2to4,
     showCount: z.number().int().positive().max(100).optional(),
+    grouped: z.boolean().optional(),
+    heading: z.string().max(180).optional().or(z.literal("")),
+    category: z.string().trim().max(32).optional().or(z.literal("")),
   }).strip(),
   newsGrid: z.object({
     limit: z.number().int().positive().max(50),
@@ -77,6 +99,9 @@ export const blockPropsSchemas = {
   mapEmbed: z.object({
     embedHtml: html,
     height: z.number().int().min(160).max(900).optional(),
+    heading: z.string().max(180).optional().or(z.literal("")),
+    text: z.string().max(500).optional().or(z.literal("")),
+    directionsUrl: urlLike,
   }).strip(),
   videoEmbed: z.object({
     url: z.string().trim().min(1).max(500),
@@ -90,17 +115,31 @@ export const blockPropsSchemas = {
     heading: z.string().max(180).optional().or(z.literal("")),
     defaultSpecialtyId: z.number().int().positive().optional(),
   }).strip(),
+  contactChannels: z.object({
+    heading: z.string().max(180).optional().or(z.literal("")),
+    text: z.string().max(500).optional().or(z.literal("")),
+    columns: columns2to4.optional(),
+    items: z.array(contactChannelSchema).max(12),
+  }).strip(),
+  socialLinks: z.object({
+    heading: z.string().max(180).optional().or(z.literal("")),
+    text: z.string().max(500).optional().or(z.literal("")),
+    muted: z.boolean().optional(),
+  }).strip(),
   cta: z.object({
     title: z.string().trim().min(1).max(180),
     text: z.string().max(500).optional().or(z.literal("")),
     ctaLabel: z.string().trim().min(1).max(80),
     ctaHref: z.string().trim().min(1).max(500),
     background: z.string().max(80).optional().or(z.literal("")),
+    variant: z.enum(["accent", "primary", "secondary", "muted"]).optional(),
   }).strip(),
   stats: z.object({
+    heading: z.string().max(180).optional().or(z.literal("")),
     items: z.array(z.object({
       value: z.string().trim().min(1).max(40),
       label: z.string().trim().min(1).max(120),
+      icon: z.string().trim().max(64).optional().or(z.literal("")),
     }).strip()).max(12),
   }).strip(),
   logos: z.object({
