@@ -220,6 +220,13 @@ server {
   location = /robots.txt    { proxy_pass http://127.0.0.1:4000; }
   location = /sitemap.xml   { proxy_pass http://127.0.0.1:4000; }
 
+  # Portal del paciente: las rutas viejas redirigen de verdad (301), no con
+  # JavaScript. La misma lista vive en api/src/legacy-redirects.ts.
+  location = /portal-resultados-diagnostico   { return 301 /portal-paciente; }
+  location = /portal-resultados-laboratorio   { return 301 /portal-paciente; }
+  location = /portal-presupuestos-cirugia     { return 301 /portal-paciente; }
+  location = /portal-facturacion-electronica  { return 301 /portal-paciente; }
+
 ${ADMIN_BLOCK}
 
   # Sitio público (catch-all)

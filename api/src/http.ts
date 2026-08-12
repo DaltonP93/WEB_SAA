@@ -43,6 +43,24 @@ export function asyncHandler(handler: RequestHandler): RequestHandler {
   };
 }
 
+/**
+ * Acota cuánto puede tardar una consulta antes de dar por perdida la request.
+ *
+ * `acquireConnectionTimeout` cubre esperar una conexión libre del pool, pero
+ * no una consulta que quedó colgada con la conexión ya tomada. Sin esto una
+ * base que no responde deja la request abierta hasta que corte el cliente.
+ */
+export function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: NodeJS.Timeout;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      console.error(`[timeout] ${label} superó ${ms}ms`);
+      reject(new HttpError(503, "servicio no disponible temporalmente"));
+    }, ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer)) as Promise<T>;
+}
+
 interface ExpressLayer {
   handle?: unknown;
   route?: { stack?: ExpressLayer[] };

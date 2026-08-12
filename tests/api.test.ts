@@ -61,6 +61,59 @@ describe("rutas que dependen de la base", () => {
   });
 });
 
+describe("sitemap con la base caída", () => {
+  it("responde 503 acotado en vez de quedar colgado", async () => {
+    // Estaba montado fuera de wrapRouterAsync: su promesa se rechazaba sin
+    // dueño, la request no terminaba nunca y el rechazo subía como
+    // unhandledRejection.
+    const started = Date.now();
+    const res = await fetch(`${baseUrl}/sitemap.xml`);
+    expect(res.status).toBe(503);
+    expect((await res.json()).error).toBe("servicio no disponible temporalmente");
+    // Responde dentro del timeout, no cuando corta el cliente.
+    expect(Date.now() - started).toBeLessThan(15_000);
+  }, 20_000);
+
+  it("robots.txt sigue respondiendo: no depende de la base", async () => {
+    const res = await fetch(`${baseUrl}/robots.txt`);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("Sitemap:");
+  });
+
+  it("el proceso sigue en pie después del sitemap fallido", async () => {
+    const res = await fetch(`${baseUrl}/api/health`);
+    expect(res.status).toBe(503);
+  });
+});
+
+describe("redirects 301 de las rutas viejas del portal", () => {
+  const LEGACY = [
+    "/portal-resultados-diagnostico",
+    "/portal-resultados-laboratorio",
+    "/portal-presupuestos-cirugia",
+    "/portal-facturacion-electronica",
+  ];
+
+  it.each(LEGACY)("%s responde 301 a /portal-paciente", async (from) => {
+    const res = await fetch(`${baseUrl}${from}`, { redirect: "manual" });
+    expect(res.status).toBe(301);
+    expect(res.headers.get("location")).toBe("/portal-paciente");
+  });
+
+  it("tolera la barra final y las mayúsculas", async () => {
+    for (const from of ["/portal-resultados-diagnostico/", "/Portal-Resultados-Diagnostico"]) {
+      const res = await fetch(`${baseUrl}${from}`, { redirect: "manual" });
+      expect(res.status, from).toBe(301);
+      expect(res.headers.get("location"), from).toBe("/portal-paciente");
+    }
+  });
+
+  it("no redirige la ruta canónica ni funciona con la base caída como excusa", async () => {
+    const res = await fetch(`${baseUrl}/portal-paciente`, { redirect: "manual" });
+    expect(res.status).not.toBe(301);
+  });
+});
+
 describe("rutas inexistentes", () => {
   it("devuelven 404 con JSON", async () => {
     const res = await fetch(`${baseUrl}/api/no-existe`);
