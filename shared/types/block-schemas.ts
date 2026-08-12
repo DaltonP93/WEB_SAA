@@ -6,16 +6,52 @@ import {
   isInstitutionalRed,
   mentionsEmergency,
 } from "./institutional-red";
+import { isLucideIconName } from "./lucide-icons";
 
 const urlLike = z.string().trim().max(500).optional().or(z.literal(""));
 const html = z.string().max(100_000);
 const columns2to4 = z.union([z.literal(2), z.literal(3), z.literal(4)]);
 const itemText = z.string().max(500).optional().or(z.literal(""));
 
+/**
+ * Icono dentro de un bloque: mismo criterio que en las entidades del panel.
+ * Un nombre inexistente no dibuja nada y el error sólo se ve en el sitio ya
+ * publicado, así que se rechaza al guardar.
+ */
+const blockIcon = z
+  .string()
+  .trim()
+  .max(64)
+  .refine((v) => v === "" || isLucideIconName(v), {
+    message: "icono inexistente en lucide: elegí uno del selector del panel",
+  })
+  .optional()
+  .or(z.literal(""));
+
+/** Dos ítems de la misma grilla con el mismo icono se leen como error de carga. */
+function noRepeatedIcons(
+  items: { icon?: string | null }[] | undefined,
+  ctx: z.RefinementCtx,
+) {
+  const seen = new Set<string>();
+  (items ?? []).forEach((item, index) => {
+    const icon = item?.icon;
+    if (!icon) return;
+    if (seen.has(icon)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["items", index, "icon"],
+        message: `el icono "${icon}" ya se usa en esta grilla: elegí otro`,
+      });
+    }
+    seen.add(icon);
+  });
+}
+
 const cardItemSchema = z.object({
   title: z.string().trim().min(1).max(160),
   text: itemText,
-  icon: z.string().trim().max(64).optional().or(z.literal("")),
+  icon: blockIcon,
   imageUrl: urlLike,
   href: urlLike,
 }).strip();
@@ -66,7 +102,7 @@ export const blockPropsSchemas = {
     columns: columns2to4,
     heading: z.string().max(180).optional().or(z.literal("")),
     items: z.array(cardItemSchema).max(24),
-  }).strip(),
+  }).strip().superRefine((value, ctx) => noRepeatedIcons(value.items, ctx)),
   accordion: z.object({
     heading: z.string().max(180).optional().or(z.literal("")),
     items: z.array(z.object({
@@ -157,9 +193,9 @@ export const blockPropsSchemas = {
     items: z.array(z.object({
       title: z.string().trim().min(1).max(160),
       text: itemText,
-      icon: z.string().trim().max(64).optional().or(z.literal("")),
+      icon: blockIcon,
     }).strip()).max(8),
-  }).strip(),
+  }).strip().superRefine((value, ctx) => noRepeatedIcons(value.items, ctx)),
   scheduleTable: z.object({
     heading: z.string().max(180).optional().or(z.literal("")),
     text: z.string().max(500).optional().or(z.literal("")),
@@ -171,9 +207,9 @@ export const blockPropsSchemas = {
     items: z.array(z.object({
       value: z.string().trim().min(1).max(40),
       label: z.string().trim().min(1).max(120),
-      icon: z.string().trim().max(64).optional().or(z.literal("")),
+      icon: blockIcon,
     }).strip()).max(12),
-  }).strip(),
+  }).strip().superRefine((value, ctx) => noRepeatedIcons(value.items, ctx)),
   logos: z.object({
     heading: z.string().max(180).optional().or(z.literal("")),
     logos: z.array(z.object({

@@ -1,12 +1,13 @@
-import { crudRouter, z } from "./crud.js";
+import { crudRouter, iconSchema, z } from "./crud.js";
 
 export const servicesRouter = crudRouter({
   table: "services",
+  uniqueIcon: true,
   defaultOrderBy: "order",
   schema: z.object({
     slug: z.string().min(1),
     name: z.string().min(1),
-    icon: z.string().nullable().optional(),
+    icon: iconSchema,
     description: z.string().nullable().optional(),
     body: z.string().nullable().optional(),
     order: z.number().int().optional(),
