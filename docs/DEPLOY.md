@@ -153,6 +153,8 @@ bash /var/www/sanatorio/scripts/deploy/update-vps.sh
 
 Pasos que ejecuta:
 
+0. Requisito: **Node 20+**. Las migraciones corren con `tsx` (dependencia del
+   workspace), así que no dependen de que Node sepa cargar TypeScript.
 1. `git fetch` + `reset --hard origin/main` (o al SHA de `ROLLBACK_TO`).
 2. `pnpm install --frozen-lockfile` — **sin fallback**: si el lockfile no
    coincide, el deploy se detiene en vez de instalar otra cosa.

@@ -26,13 +26,36 @@ const describeDb = ENABLED ? describe : describe.skip;
 
 let db: Knex;
 
+/**
+ * Fuente de migraciones propia.
+ *
+ * El migrador de knex hace `import()` de los archivos en runtime, y eso
+ * depende de que la versión de Node sepa cargar TypeScript (Node 20 no).
+ * Vite sí transpila, así que importamos las migraciones acá y se las pasamos
+ * ya resueltas: la prueba corre igual en Node 20 y en Node 22.
+ */
+const migrationModules = import.meta.glob("../api/migrations/*.ts");
+
+const migrationSource = {
+  getMigrations: async () =>
+    Object.keys(migrationModules)
+      .map((p) => p.split("/").pop() as string)
+      .sort(),
+  getMigrationName: (name: string) => name,
+  getMigration: async (name: string) => {
+    const key = Object.keys(migrationModules).find((p) => p.endsWith(`/${name}`));
+    if (!key) throw new Error(`migración no encontrada: ${name}`);
+    return (await migrationModules[key]()) as { up: (k: Knex) => Promise<void>; down: (k: Knex) => Promise<void> };
+  },
+};
+
 async function migrateLatest() {
-  await db.migrate.latest({ directory: "api/migrations", extension: "ts", loadExtensions: [".ts"] });
+  await db.migrate.latest({ migrationSource });
 }
 
 /** Revierte UNA migración (rollback() volvería todo el batch de una). */
 async function rollbackOne() {
-  await db.migrate.down({ directory: "api/migrations", extension: "ts", loadExtensions: [".ts"] });
+  await db.migrate.down({ migrationSource });
 }
 
 describeDb("migraciones", () => {

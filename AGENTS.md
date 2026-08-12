@@ -273,6 +273,11 @@ Si la IA que abre el repo está corriendo en Claude Code con la configuración a
   migraciones (estas últimas con `TEST_DATABASE=1`).
 - **Build**: `api` arranca con `dist/src/index.js`; el lockfile es v9 y
   `pnpm install --frozen-lockfile` funciona con el pnpm declarado.
+- **Migraciones y Node**: `pnpm db:migrate` / `db:seed` corren knex **a través de
+  `tsx`**. Antes dependían de que Node supiera cargar `.ts` por su cuenta (sólo
+  Node ≥22.18), y en Node 20 fallaban con `Unknown file extension ".ts"`. La
+  prueba de migraciones usa un `migrationSource` propio armado con
+  `import.meta.glob` por el mismo motivo.
 
 ### Base previa (al 2026-08-12)
 
