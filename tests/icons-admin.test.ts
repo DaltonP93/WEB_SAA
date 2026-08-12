@@ -8,6 +8,7 @@ import {
   dropTestDatabase,
   migrateLatest,
   runSeeds,
+  TEST_ADMIN_PASSWORD,
 } from "./helpers/db";
 
 /**
@@ -23,7 +24,6 @@ import {
  */
 
 const DB_NAME = `${process.env.TEST_DB_NAME ?? "sanatorio_test"}_icons`;
-const ADMIN_PASSWORD = "prueba-de-iconos-1234";
 const describeDb = DB_TESTS_ENABLED ? describe : describe.skip;
 
 describeDb("iconos administrables", () => {
@@ -37,7 +37,7 @@ describeDb("iconos administrables", () => {
   beforeAll(async () => {
     db = await createTestDatabase(DB_NAME);
     await migrateLatest(db);
-    process.env.SEED_ADMIN_PASSWORD = ADMIN_PASSWORD;
+    process.env.SEED_ADMIN_PASSWORD = TEST_ADMIN_PASSWORD;
     await runSeeds(db);
 
     applyDbEnv(DB_NAME);
@@ -54,7 +54,7 @@ describeDb("iconos administrables", () => {
     const login = await fetch(`${baseUrl}/api/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: "admin@sanatorio.local", password: ADMIN_PASSWORD }),
+      body: JSON.stringify({ email: "admin@sanatorio.local", password: TEST_ADMIN_PASSWORD }),
     });
     expect(login.status, await login.clone().text()).toBe(200);
     token = (await login.json()).token;

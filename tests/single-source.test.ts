@@ -10,6 +10,7 @@ import {
   dropTestDatabase,
   migrateLatest,
   runSeeds,
+  TEST_ADMIN_PASSWORD,
 } from "./helpers/db";
 
 /**
@@ -28,7 +29,6 @@ import {
 
 const ROOT = resolve(__dirname, "..");
 const DB_NAME = `${process.env.TEST_DB_NAME ?? "sanatorio_test"}_source`;
-const ADMIN_PASSWORD = "prueba-fuente-unica-1234";
 const describeDb = DB_TESTS_ENABLED ? describe : describe.skip;
 
 /** Campos que ya no viven en `settings`. */
@@ -99,7 +99,7 @@ describeDb("un cambio en la tabla llega a todos los consumidores", () => {
   beforeAll(async () => {
     db = await createTestDatabase(DB_NAME);
     await migrateLatest(db);
-    process.env.SEED_ADMIN_PASSWORD = ADMIN_PASSWORD;
+    process.env.SEED_ADMIN_PASSWORD = TEST_ADMIN_PASSWORD;
     await runSeeds(db);
 
     applyDbEnv(DB_NAME);
@@ -116,7 +116,7 @@ describeDb("un cambio en la tabla llega a todos los consumidores", () => {
     const login = await fetch(`${baseUrl}/api/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: "admin@sanatorio.local", password: ADMIN_PASSWORD }),
+      body: JSON.stringify({ email: "admin@sanatorio.local", password: TEST_ADMIN_PASSWORD }),
     });
     token = (await login.json()).token;
   }, 180_000);
@@ -221,7 +221,10 @@ describeDb("un cambio en la tabla llega a todos los consumidores", () => {
 
   it("los ajustes públicos no filtran los snapshots de las migraciones", async () => {
     const settings = await (await fetch(`${baseUrl}/api/public/settings`)).json();
-    expect(Object.keys(settings).sort()).toEqual(["brand", "contact", "seo", "theme"]);
+    // `captcha` no sale de la base: es la config pública del entorno (null
+    // mientras el sanatorio no cargue las claves).
+    expect(Object.keys(settings).sort()).toEqual(["brand", "captcha", "contact", "seo", "theme"]);
+    expect(settings.captcha).toBeNull();
     // En la tabla sí están: lo que cambió es qué se publica.
     const internos = await db("settings").where("key", "like", "snapshot_%");
     expect(internos.length).toBeGreaterThan(0);

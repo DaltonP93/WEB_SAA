@@ -10,6 +10,7 @@ import { adminRouter } from "./routes/admin/index.js";
 import { db, checkDatabase } from "./db.js";
 import { asyncHandler, errorHandler, withTimeout, wrapRouterAsync } from "./http.js";
 import { legacyRedirects } from "./legacy-redirects.js";
+import { warnIfCaptchaMisconfigured } from "./captcha.js";
 
 export const PORT = Number(process.env.PORT ?? 4000);
 const UPLOAD_DIR = path.resolve(process.env.UPLOAD_DIR ?? "./uploads");
@@ -20,6 +21,11 @@ const UPLOAD_DIR = path.resolve(process.env.UPLOAD_DIR ?? "./uploads");
  */
 export function createApp() {
   const app = express();
+
+  // Una configuración de CAPTCHA a medias no rompe el arranque, pero tiene que
+  // verse en los logs: si no, el síntoma aparece recién como formularios que
+  // nadie puede enviar.
+  warnIfCaptchaMisconfigured();
 
   // La API sólo devuelve JSON y archivos de /uploads: no necesita ejecutar
   // nada, así que la CSP puede ser máximamente restrictiva.

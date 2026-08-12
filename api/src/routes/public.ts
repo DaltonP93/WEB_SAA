@@ -3,7 +3,7 @@ import { z } from "zod";
 import { db } from "../db.js";
 import { sanitizeHtml, stripHtml, sanitizeMapEmbed, safeLinkHref } from "../html.js";
 import { rateLimit } from "../rate-limit.js";
-import { verifyCaptcha } from "../captcha.js";
+import { captchaPublicConfig, verifyCaptcha } from "../captcha.js";
 import { badRequest, notFound } from "../http.js";
 
 export const publicRouter = Router();
@@ -43,6 +43,10 @@ publicRouter.get("/settings", async (_req, res) => {
   const rows = await db("settings").whereIn("key", PUBLIC_SETTING_KEYS).select("key", "value");
   const out: Record<string, unknown> = {};
   for (const r of rows) out[r.key] = r.value;
+  // No sale de la base: es configuración del entorno. Sólo el proveedor y la
+  // site key —la clave secreta nunca se envía—. `null` = sin verificación, y
+  // el front no dibuja ningún widget.
+  out.captcha = captchaPublicConfig();
   res.json(out);
 });
 

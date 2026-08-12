@@ -9,7 +9,10 @@
 #
 # Rollback (ver docs/DEPLOY.md §Rollback):
 #   BRANCH=main ROLLBACK_TO=<sha> bash scripts/deploy/update-vps.sh
-#   (además: pnpm --filter @sa/api exec knex --knexfile knexfile.ts migrate:rollback)
+#   Para revertir migraciones, usar el script del paquete —que corre knex a
+#   través de tsx—, NO knex directo: el migrador hace import() en runtime y
+#   Node 20 no sabe leer .ts sin ayuda.
+#     pnpm --filter @sa/api migrate:rollback
 # ============================================================================
 set -euo pipefail
 
@@ -68,9 +71,23 @@ if MYSQL_PWD="$(grep -E '^DB_PASS=' "$APP_DIR/api/.env" | cut -d= -f2-)" \
   # Conservar sólo los 10 más recientes
   ls -1t "$BACKUP_DIR"/*.sql.gz 2>/dev/null | tail -n +11 | xargs -r rm -f
 else
-  warn_msg="no se pudo generar el backup de la DB"
-  echo -e "\033[1;33m⚠\033[0m ${warn_msg}" >&2
+  # Sin backup no se migra. Las migraciones tocan contenido que el sanatorio
+  # editó desde el panel; si algo sale mal y no hay backup, no hay vuelta
+  # atrás. Se aborta ANTES de migrar, con el deploy anterior intacto.
   rm -f "$BACKUP_FILE"
+  echo "" >&2
+  echo "  Causas habituales: credenciales de api/.env desactualizadas," >&2
+  echo "  mysqldump no instalado, o disco lleno en ${BACKUP_DIR}." >&2
+  echo "  Verificalo con:" >&2
+  echo "    MYSQL_PWD=\"\$(grep -E '^DB_PASS=' $APP_DIR/api/.env | cut -d= -f2-)\" \\" >&2
+  echo "      mysqldump -u${DB_USER_ENV} ${DB_NAME_ENV} > /dev/null" >&2
+  echo "  Si el backup no es posible y aceptás el riesgo:" >&2
+  echo "    SKIP_DB_BACKUP=1 bash \$0" >&2
+  if [ "${SKIP_DB_BACKUP:-0}" = "1" ]; then
+    echo -e "\033[1;33m⚠\033[0m SKIP_DB_BACKUP=1: se migra SIN backup, bajo tu responsabilidad." >&2
+  else
+    die "no se pudo generar el backup de la DB: se aborta antes de migrar (nada quedó a medias)."
+  fi
 fi
 
 log "4/6  Migraciones de DB (idempotente)"

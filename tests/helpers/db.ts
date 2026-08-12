@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import knexFactory, { type Knex } from "knex";
 
 /**
@@ -10,6 +11,15 @@ import knexFactory, { type Knex } from "knex";
  */
 
 export const DB_TESTS_ENABLED = process.env.TEST_DATABASE === "1";
+
+/**
+ * Contraseña del admin sembrado en las pruebas.
+ *
+ * Se genera al vuelo a propósito: una constante literal con pinta de
+ * contraseña queda indexada por los escáneres de secretos (y los hace ruido
+ * inútil), además de invitar a copiarla a un entorno real.
+ */
+export const TEST_ADMIN_PASSWORD = `prueba-${randomUUID()}`;
 
 export const baseConnection = {
   host: process.env.DB_HOST ?? "127.0.0.1",

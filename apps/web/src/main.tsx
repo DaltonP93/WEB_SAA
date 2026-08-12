@@ -14,7 +14,12 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <HelmetProvider>
       <QueryClientProvider client={queryClient}>
-        <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        {/*
+          Los flags `future` v7_* eran el opt-in de React Router 6 al
+          comportamiento de la v7. Con la v7 instalada ese comportamiento ya es
+          el único y la prop no existe.
+        */}
+        <BrowserRouter>
           <App />
         </BrowserRouter>
       </QueryClientProvider>

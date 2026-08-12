@@ -48,6 +48,14 @@ SERVER_IP="${SERVER_IP:-$(curl -s4 ifconfig.me 2>/dev/null || hostname -I | awk 
 DOMAIN="${DOMAIN:-}"
 ADMIN_ALLOW_INSECURE_HTTP="${ADMIN_ALLOW_INSECURE_HTTP:-0}"
 SERVER_NAME="${DOMAIN:-_}"
+# URL canónica del sitio. Con dominio siempre es HTTPS: certbot deja el 301 de
+# HTTP a HTTPS, así que publicar http:// como base generaría un salto extra en
+# cada enlace y un canonical que no coincide con la URL servida.
+if [ -n "$DOMAIN" ]; then
+  SITE_ORIGIN="https://${DOMAIN}"
+else
+  SITE_ORIGIN="http://${SERVER_IP}"
+fi
 
 log()  { echo -e "\033[1;34m==>\033[0m $*"; }
 warn() { echo -e "\033[1;33m!!\033[0m $*"; }
@@ -116,9 +124,9 @@ JWT_EXPIRES_IN=7d
 UPLOAD_DIR=${APP_DIR}/api/uploads
 MAX_UPLOAD_MB=10
 
-CORS_ORIGINS=http://${SERVER_IP}
-PUBLIC_BASE_URL=http://${SERVER_IP}
-PUBLIC_SITE_URL=http://${SERVER_IP}
+CORS_ORIGINS=${SITE_ORIGIN}
+PUBLIC_BASE_URL=${SITE_ORIGIN}
+PUBLIC_SITE_URL=${SITE_ORIGIN}
 
 SEED_ADMIN_EMAIL=${ADMIN_EMAIL}
 SEED_ADMIN_PASSWORD=${ADMIN_PASS}
@@ -149,7 +157,7 @@ log "    Building API"
 pnpm --filter @sa/api build
 
 log "    Building web (raíz /) + prerender SEO"
-PUBLIC_SITE_URL="${PUBLIC_SITE_URL:-http://${SERVER_IP}}" pnpm --filter @sa/web build
+PUBLIC_SITE_URL="${PUBLIC_SITE_URL:-$SITE_ORIGIN}" pnpm --filter @sa/web build
 
 log "    Building admin (raíz /admin/)"
 pnpm --filter @sa/admin exec vite build --base=/admin/
@@ -194,7 +202,10 @@ server {
   add_header X-Frame-Options "DENY" always;
   add_header Referrer-Policy "strict-origin-when-cross-origin" always;
   add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
-  add_header Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https:; connect-src 'self'; form-action 'self'; frame-src https://www.google.com https://maps.google.com; frame-ancestors 'none'" always;
+  # frame-src/script-src incluyen los hosts del desafío anti-spam. Sólo se
+  # usan si el sanatorio configura CAPTCHA_PROVIDER y las claves; sin eso el
+  # front no carga ningún script de terceros.
+  add_header Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self' https://challenges.cloudflare.com https://www.google.com https://www.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https:; connect-src 'self' https://challenges.cloudflare.com; form-action 'self'; frame-src https://www.google.com https://maps.google.com https://challenges.cloudflare.com; frame-ancestors 'none'" always;
 
   # API (^~ para que gane prioridad sobre la regex de assets estáticos)
   location ^~ /api/ {
@@ -250,12 +261,42 @@ rm -f /etc/nginx/sites-enabled/default
 nginx -t
 systemctl reload nginx
 
+TLS_OK=0
 if [ -n "$DOMAIN" ]; then
   log "    Emitiendo certificado TLS para ${DOMAIN} (Let's Encrypt)"
   apt install -y -qq certbot python3-certbot-nginx
-  certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos \
-    -m "${CERTBOT_EMAIL:-$ADMIN_EMAIL}" --redirect \
-    || warn "certbot falló. El sitio queda en HTTP; volvé a intentar cuando el DNS apunte al servidor."
+  if certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos \
+       -m "${CERTBOT_EMAIL:-$ADMIN_EMAIL}" --redirect; then
+    TLS_OK=1
+  else
+    # Sin TLS el panel no puede quedar publicado: el login viajaría en texto
+    # plano. La config de Nginx ya se escribió con /admin habilitado, así que
+    # hay que cerrarlo explícitamente antes de seguir.
+    warn "certbot falló: el sitio queda en HTTP."
+    if [ "$ADMIN_ALLOW_INSECURE_HTTP" = "1" ]; then
+      warn "ADMIN_ALLOW_INSECURE_HTTP=1: el panel queda publicado SIN HTTPS y las"
+      warn "credenciales viajan en texto plano. Emití el certificado cuanto antes."
+    else
+      warn "Se cierra /admin hasta que haya certificado. Cuando el DNS apunte al"
+      warn "servidor, volvé a correr este script para reintentar."
+      python3 - "$DOMAIN" <<'PYCLOSE' || die "no se pudo cerrar /admin tras el fallo de TLS"
+import io, re, sys
+path = "/etc/nginx/sites-available/sanatorio"
+conf = io.open(path, encoding="utf-8").read()
+blocked = (
+    "  location ^~ /admin {\n"
+    "    default_type text/plain;\n"
+    "    return 403 'El panel admin requiere HTTPS. Reintentá setup-vps.sh cuando el DNS resuelva.';\n"
+    "  }"
+)
+conf, n = re.subn(r"  location \^~ /admin \{[^}]*\}", blocked, conf)
+if n == 0:
+    sys.exit("no se encontró el bloque /admin en el nginx.conf")
+io.open(path, "w", encoding="utf-8").write(conf)
+PYCLOSE
+      nginx -t && systemctl reload nginx
+    fi
+  fi
 fi
 
 # --- 9. PM2 + firewall ----------------------------------------------------
@@ -288,9 +329,27 @@ else
   echo "  Revisá:  pm2 logs sanatorio-api"
 fi
 echo "========================================================"
-echo "Sitio público:   http://${SERVER_IP}"
-echo "Panel admin:     http://${SERVER_IP}/admin"
-echo "API health:      http://${SERVER_IP}/api/health"
+if [ -n "$DOMAIN" ] && [ "$TLS_OK" != "1" ]; then
+  # Imprimir una URL http:// del panel como si fuera el resultado esperado
+  # invita a entrar y loguearse sin cifrado.
+  echo -e "\033[1;31m✗ TLS no quedó configurado para ${DOMAIN}\033[0m"
+  echo "  El sitio responde en http://${SERVER_IP} pero NO es la URL definitiva."
+  if [ "$ADMIN_ALLOW_INSECURE_HTTP" = "1" ]; then
+    echo "  El panel quedó publicado sin HTTPS por pedido explícito"
+    echo "  (ADMIN_ALLOW_INSECURE_HTTP=1). No lo uses hasta emitir el certificado."
+  else
+    echo "  El panel /admin está cerrado hasta que haya certificado."
+  fi
+  echo "  Cuando ${DOMAIN} resuelva a este servidor, volvé a correr setup-vps.sh."
+else
+  echo "Sitio público:   ${SITE_ORIGIN}"
+  if [ -n "$DOMAIN" ] || [ "$ADMIN_ALLOW_INSECURE_HTTP" = "1" ]; then
+    echo "Panel admin:     ${SITE_ORIGIN}/admin"
+  else
+    echo "Panel admin:     cerrado (requiere DOMAIN + HTTPS)"
+  fi
+  echo "API health:      ${SITE_ORIGIN}/api/health"
+fi
 echo ""
 # Las credenciales NO se imprimen: quedarían en la terminal, en el historial y
 # en los logs de quien haya lanzado el deploy.

@@ -68,6 +68,19 @@ jobs:
           DB_PASS: root
         run: pnpm test
 
+      # El paso "Build web" corre el prerender, pero sin API disponible se
+      # omite con un aviso y el build sigue verde: eso no verificaba nada.
+      # Acá se levanta la API contra una base migrada y sembrada y se
+      # comprueba el archivo generado.
+      - name: Verificar el prerender de SEO (con API y base reales)
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: "3306"
+          DB_USER: root
+          DB_PASS: root
+          PRERENDER_DB_NAME: sanatorio_prerender
+        run: node scripts/ci/verify-prerender.mjs
+
   secrets:
     name: Detección de secretos
     runs-on: ubuntu-latest
@@ -85,13 +98,69 @@ jobs:
       - name: check-secrets (árbol actual)
         run: node scripts/check-secrets.mjs
 
-      # Escaneo del historial. Informativo: el secreto ya filtrado se purga
-      # aparte, de forma coordinada con el propietario del repo.
-      - name: gitleaks (historial)
-        uses: gitleaks/gitleaks-action@v2
-        continue-on-error: true
+      # El binario directo, no la action: gitleaks-action llama a la API de
+      # GitHub y en este repo devolvía 403 "Resource not accessible by
+      # integration". Con continue-on-error el job igual quedaba verde, así que
+      # el escaneo aparentaba correr sin haber corrido nunca.
+      - name: Instalar gitleaks
+        run: |
+          set -euo pipefail
+          curl -sSfL -o /tmp/gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo install -m 0755 /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_VERSION: "8.28.0"
+
+      # Bloqueante: ningún commit nuevo puede introducir un secreto.
+      - name: gitleaks (árbol actual)
+        run: gitleaks detect --no-git --source . --config .gitleaks.toml --redact --verbose
+
+      # Informativo, pero con el resultado real a la vista. El secreto que ya
+      # está en el historial no se puede sacar sin reescribirlo, y eso lo
+      # decide el propietario del repo: acá no se purga ni se reescribe nada.
+      - name: gitleaks (historial)
+        id: gitleaks_history
+        continue-on-error: true
+        run: gitleaks detect --config .gitleaks.toml --redact --verbose --report-format json --report-path /tmp/gitleaks-history.json
+
+      - name: Resultado real del escaneo histórico
+        if: always()
+        run: |
+          set -uo pipefail
+          COUNT=0
+          if [ -f /tmp/gitleaks-history.json ]; then
+            COUNT=$(node -e "const r=require('/tmp/gitleaks-history.json');console.log(Array.isArray(r)?r.length:0)")
+          fi
+          {
+            echo "### gitleaks — historial"
+            echo ""
+            if [ "${{ steps.gitleaks_history.outcome }}" = "success" ]; then
+              echo "Sin hallazgos en el historial."
+            elif [ "$COUNT" -gt 0 ]; then
+              echo "**$COUNT hallazgo(s) en el historial.** No se purgan acá:"
+              echo "reescribir la historia es decisión del propietario del repo."
+              echo ""
+              echo "Acción pendiente: rotar la credencial afectada y coordinar la"
+              echo "purga (\`git filter-repo\`) con quienes tengan clones."
+              echo ""
+              node -e "
+                const r = require('/tmp/gitleaks-history.json');
+                const seen = new Set();
+                for (const f of r) {
+                  const k = f.RuleID + '|' + f.File;
+                  if (seen.has(k)) continue;
+                  seen.add(k);
+                  console.log('- \`' + f.File + '\` — regla \`' + f.RuleID + '\`, desde ' + f.Commit.slice(0, 8));
+                }
+              "
+            else
+              echo "El escaneo del historial no pudo completarse (ver el log del paso anterior)."
+              echo "No se interpreta como 'sin hallazgos'."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$GITHUB_STEP_SUMMARY"
 
   audit:
     name: Auditoría de dependencias

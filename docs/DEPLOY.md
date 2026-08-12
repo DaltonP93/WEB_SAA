@@ -159,6 +159,9 @@ Pasos que ejecuta:
 2. `pnpm install --frozen-lockfile` — **sin fallback**: si el lockfile no
    coincide, el deploy se detiene en vez de instalar otra cosa.
 3. `mysqldump | gzip` a `/var/www/sanatorio/.db-backups/` (guarda los 10 últimos).
+   **Si el backup falla, el deploy se aborta antes de migrar**: las migraciones
+   tocan contenido editado desde el panel y sin backup no habría vuelta atrás.
+   Para forzarlo igual (bajo tu responsabilidad): `SKIP_DB_BACKUP=1`.
 4. `pnpm db:migrate`.
 5. Builds de api, web (con prerender SEO) y admin.
 6. Reload de Nginx + restart de PM2 (`sanatorio-api`).
@@ -171,18 +174,53 @@ Pasos que ejecuta:
 # 1. Volver el código a la versión anterior (el script imprime el SHA previo)
 ROLLBACK_TO=<sha-anterior> bash /var/www/sanatorio/scripts/deploy/update-vps.sh
 
-# 2. Si la versión nueva agregó migraciones, revertirlas de a una
-cd /var/www/sanatorio/api
-pnpm exec knex --knexfile knexfile.ts migrate:down     # repetir por migración
+# 2. Si la versión nueva agregó migraciones, revertirlas de a una.
+#    Siempre por el script del paquete: corre knex a través de tsx. Invocar
+#    knex directo falla en Node 20 con "Unknown file extension .ts", porque el
+#    migrador hace import() en runtime y sólo Node >= 22.18 lee TypeScript solo.
+cd /var/www/sanatorio
+pnpm --filter @sa/api migrate:rollback   # revierte el último batch
+# o, para ir de a una migración:
+pnpm --filter @sa/api exec tsx ./node_modules/knex/bin/cli.js \
+  --knexfile knexfile.ts migrate:down
 
 # 3. Si hace falta restaurar datos, usar el backup previo al deploy
 gunzip < /var/www/sanatorio/.db-backups/sanatorio-<fecha>.sql.gz \
   | mysql -u sanatorio -p sanatorio
 ```
 
-Las migraciones de contenido de esta fase guardan el estado anterior de los
-bloques en la tabla `settings` (`minuta_blocks_backup_*`), así que su `down()`
-restaura las páginas tal como estaban.
+Las migraciones de contenido guardan el estado anterior en la tabla `settings`
+(`minuta_blocks_backup_*` y `snapshot_*`), así que su `down()` restaura las
+páginas tal como estaban. Esas claves son internas: `GET /api/public/settings`
+no las publica, y el seed no las borra —si se perdieran, el `down()` se
+quedaría sin con qué restaurar—.
+
+Las migraciones correctivas son además idempotentes por snapshot: si ya
+corrieron, un segundo `up()` no vuelve a tocar contenido, así que no pisan lo
+que el sanatorio haya editado desde el panel después del deploy.
+
+### Verificación anti-spam (CAPTCHA)
+
+Está integrada de punta a punta pero **desactivada**: hace falta que el
+sanatorio cree las claves. Mientras las tres variables estén vacías, el
+formulario de contacto funciona igual y no se carga ningún script de terceros.
+
+Para activarla, en `api/.env`:
+
+```bash
+CAPTCHA_PROVIDER=turnstile        # o recaptcha
+CAPTCHA_SITE_KEY=<clave pública>
+CAPTCHA_SECRET_KEY=<clave-secreta>
+```
+
+Las tres van juntas. Con sólo una parte cargada la API avisa en el arranque:
+con site key y sin secreto el visitante resuelve el desafío pero el servidor no
+valida nada; con secreto y sin site key el formulario se vuelve imposible de
+enviar. En ninguno de esos casos se rompe el arranque: la verificación queda
+desactivada y los envíos siguen pasando.
+
+La clave secreta nunca sale del servidor: `/api/public/settings` sólo publica
+`{ provider, siteKey }`.
 
 ### Verificación de salud
 
@@ -222,7 +260,9 @@ credenciales ni datos de conexión.
 | `JWT_SECRET` | `<random ≥32 chars>` — la API no arranca en producción con el valor de ejemplo |
 | `SEED_ADMIN_PASSWORD` | obligatoria al sembrar con `NODE_ENV=production` |
 | `PUBLIC_FORMS_RATE_MAX` | `10` envíos por IP en `PUBLIC_FORMS_RATE_WINDOW_MS` |
-| `CAPTCHA_PROVIDER` / `CAPTCHA_SECRET_KEY` | opcional (`turnstile`/`recaptcha`); vacío = verificación desactivada |
+| `CAPTCHA_PROVIDER` | opcional: `turnstile` o `recaptcha`; vacío = verificación desactivada |
+| `CAPTCHA_SITE_KEY` | clave pública del proveedor; la usa el widget del formulario |
+| `CAPTCHA_SECRET_KEY` | clave secreta; sólo la usa la API para validar el token |
 | `CORS_ORIGINS` | `https://sanatorioadventista.com.py` |
 | `PUBLIC_BASE_URL` | `https://sanatorioadventista.com.py` |
 | `UPLOAD_DIR` | `/var/www/sanatorio/api/uploads` |
