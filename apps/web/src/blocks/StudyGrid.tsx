@@ -63,6 +63,23 @@ export default function StudyGrid({ columns = 3, showCount, grouped, heading, ca
     );
   }
 
+  // Sin estudios publicados no inventamos un catálogo: se avisa que la
+  // información está en confirmación.
+  if (all.length === 0) {
+    return (
+      <section className="container-x section-y-md">
+        {heading && <h2 className="text-2xl md:text-3xl font-bold text-center mb-6 text-primary">{heading}</h2>}
+        <div className="rounded border border-dashed border-gray-300 bg-gray-50 p-6 text-center">
+          <p className="font-semibold text-primary">Información a confirmar con el sanatorio</p>
+          <p className="text-sm text-gray-600 mt-1">
+            Estamos revisando el listado de estudios disponibles. Consultanos por los canales de
+            contacto y te confirmamos el estudio que necesitás.
+          </p>
+        </div>
+      </section>
+    );
+  }
+
   if (!grouped) {
     const items = showCount ? all.slice(0, showCount) : all;
     return (

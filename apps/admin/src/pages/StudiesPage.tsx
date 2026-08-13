@@ -18,6 +18,7 @@ export default function StudiesPage() {
         { key: "icon", label: "Icono", kind: "icon" },
         { key: "description", label: "Descripción", kind: "textarea" },
         { key: "body", label: "Cuerpo (HTML)", kind: "textarea" },
+        { key: "published", label: "Publicar en el sitio", kind: "checkbox" },
       ]}
     />
   );

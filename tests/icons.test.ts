@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import dynamicIconImports from "lucide-react/dynamicIconImports";
 import { SPECIALTY_ICON, SERVICE_ICON, STUDY_ICON } from "../apps/web/src/lib/icons";
+import { LUCIDE_ICON_NAMES, isLucideIconName } from "../api/src/lucide-icons";
 
 /**
  * El mapa de iconos falla en silencio: un nombre que no existe en la versión
@@ -76,5 +77,34 @@ describe("mapa de iconos", () => {
       for (const icon of names) if (!LUCIDE_NAMES.has(icon)) bad.push(`${file}: ${icon}`);
     }
     expect(bad, `iconos inexistentes: ${bad.join(", ")}`).toEqual([]);
+  });
+});
+
+/**
+ * La API valida nombres de iconos con una lista generada, porque
+ * `lucide-react` es dependencia del front y no del servidor. Si alguien
+ * actualiza lucide sin regenerar, la validación empieza a rechazar iconos
+ * nuevos (o a aceptar iconos que ya no existen) sin que nadie se entere.
+ */
+describe("lista de iconos generada para la API", () => {
+  it("coincide con la versión instalada de lucide-react", () => {
+    const installed = [...LUCIDE_NAMES].sort();
+    expect(
+      [...LUCIDE_ICON_NAMES],
+      "regenerá con: node scripts/generate-lucide-names.mjs",
+    ).toEqual(installed);
+  });
+
+  it("las dos copias (api y shared) son idénticas byte a byte", () => {
+    const api = readFileSync(path.join(ROOT, "api/src/lucide-icons.ts"), "utf8");
+    const shared = readFileSync(path.join(ROOT, "shared/types/lucide-icons.ts"), "utf8");
+    expect(shared).toBe(api);
+  });
+
+  it("isLucideIconName acepta nombres reales y rechaza inventados", () => {
+    expect(isLucideIconName("heart-pulse")).toBe(true);
+    expect(isLucideIconName("estetoscopio-magico")).toBe(false);
+    expect(isLucideIconName("")).toBe(false);
+    expect(isLucideIconName(undefined)).toBe(false);
   });
 });

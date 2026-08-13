@@ -7,6 +7,7 @@ import toast from "react-hot-toast";
 import { api } from "../api";
 import { useConfirm } from "./ConfirmDialog";
 import LucideIcon, { isIconName } from "./LucideIcon";
+import IconPicker from "./IconPicker";
 
 /** Muestra el icono: lucide si es un nombre conocido, si no el texto/emoji tal cual. */
 function IconBadge({ value, className = "w-5 h-5 text-gray-500" }: { value: string; className?: string }) {
@@ -201,12 +202,15 @@ export default function EntityManager({
                     <span>Activado</span>
                   </label>
                 ) : f.kind === "icon" ? (
-                  <div className="flex items-center gap-2">
-                    <span className="w-9 h-9 flex items-center justify-center flex-shrink-0 border rounded bg-gray-50 text-primary">
-                      {editing[f.key] ? <IconBadge value={editing[f.key]} className="w-5 h-5 text-primary" /> : <span className="text-gray-300 text-xs">?</span>}
-                    </span>
-                    <input className="input" value={editing[f.key] ?? ""} onChange={(e) => setEditing({ ...editing, [f.key]: e.target.value })} placeholder="nombre lucide (ej: heart-pulse) o emoji" />
-                  </div>
+                  <IconPicker
+                    value={editing[f.key]}
+                    onChange={(v) => setEditing({ ...editing, [f.key]: v })}
+                    // La API rechaza con 409 un icono repetido: conviene verlo acá.
+                    taken={rows
+                      .filter((r) => r.id !== editing.id)
+                      .map((r) => r[f.key])
+                      .filter(Boolean)}
+                  />
                 ) : (
                   <input className="input" value={editing[f.key] ?? ""} onChange={(e) => setEditing({ ...editing, [f.key]: e.target.value })} />
                 )}

@@ -2,10 +2,33 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 import { z, ZodSchema, ZodObject } from "zod";
 import { db } from "../../db.js";
+import { isLucideIconName } from "../../lucide-icons.js";
+
+/**
+ * Icono administrable: o vacío, o un nombre que existe de verdad en la versión
+ * instalada de lucide. Un nombre inventado no rompe nada visible —el
+ * componente simplemente no dibuja— y así el error aparecía recién en el sitio
+ * publicado. Acá se rechaza al guardar.
+ */
+export const iconSchema = z
+  .string()
+  .trim()
+  .max(64)
+  .refine((v) => v === "" || isLucideIconName(v), {
+    message: "icono inexistente en lucide: elegí uno del selector del panel",
+  })
+  .nullable()
+  .optional();
 
 export interface CrudOpts {
   table: string;
   schema: ZodSchema<any>;
+  /**
+   * Impide repetir el mismo icono dentro de la tabla: las grillas de
+   * servicios, estudios y especialidades se ven juntas y dos filas con el
+   * mismo icono se leen como un error de carga.
+   */
+  uniqueIcon?: boolean;
   /** columnas a devolver en list */
   listColumns?: string[];
   /** ordering por defecto */
@@ -39,9 +62,23 @@ export function crudRouter(opts: CrudOpts): Router {
     res.json(serialize(row));
   });
 
+  /** Devuelve el slug/nombre de la fila que ya usa ese icono, si la hay. */
+  async function iconTakenBy(icon: unknown, excludeId?: string): Promise<string | null> {
+    if (!opts.uniqueIcon || typeof icon !== "string" || !icon) return null;
+    let qb = db(opts.table).where({ icon });
+    if (excludeId) qb = qb.whereNot({ id: excludeId });
+    const row = await qb.first();
+    if (!row) return null;
+    return (row.slug as string) ?? (row.name as string) ?? String(row.id);
+  }
+
   r.post("/", async (req, res) => {
     const parsed = opts.schema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "payload invalido", issues: parsed.error.issues });
+    const taken = await iconTakenBy((parsed.data as any).icon);
+    if (taken) {
+      return res.status(409).json({ error: `el icono ya lo usa "${taken}": elegí otro` });
+    }
     const [id] = await db(opts.table).insert(prepare(parsed.data));
     const row = await db(opts.table).where({ id }).first();
     res.status(201).json(serialize(row));
@@ -51,6 +88,10 @@ export function crudRouter(opts: CrudOpts): Router {
     const partialSchema = (opts.schema as ZodObject<any>).partial();
     const parsed = partialSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "payload invalido", issues: parsed.error.issues });
+    const taken = await iconTakenBy((parsed.data as any).icon, req.params.id);
+    if (taken) {
+      return res.status(409).json({ error: `el icono ya lo usa "${taken}": elegí otro` });
+    }
     await db(opts.table).where({ id: req.params.id }).update(prepare(parsed.data));
     const row = await db(opts.table).where({ id: req.params.id }).first();
     res.json(serialize(row));

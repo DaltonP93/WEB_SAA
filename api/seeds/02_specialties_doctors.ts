@@ -48,6 +48,25 @@ export async function seed(knex: Knex): Promise<void> {
     "Medicina Interna",
     "Medicina Familiar",
     "Anestesiología",
+    // Especialidades agregadas en la minuta. Van en el seed para que una
+    // instalación limpia tenga el mismo catálogo que producción (entre ellas
+    // Odontología, que el sitio enlaza desde Servicios).
+    "Clínica médica",
+    "Coloproctología",
+    "Diabetología",
+    "Hematología",
+    "Infectología",
+    "Rehabilitación cardíaca",
+    "Fisioterapia",
+    "Flebología",
+    "Geriatría",
+    "Mastología",
+    "Odontología",
+    "Nutrición",
+    "Neonatología",
+    "Neurocirugía",
+    "Psicología",
+    "Ayuda espiritual",
   ].map((name) => ({ name, slug: slugify(name) }));
 
   const specsFromFile = await tryReadJSON<{ name: string; slug: string }[]>(

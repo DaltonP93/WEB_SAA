@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { db } from "../../db.js";
-import { sanitizeHtml } from "../../html.js";
+import { sanitizeHtml, sanitizeMapEmbed, safeLinkHref } from "../../html.js";
 import { validateBlockProps } from "../../block-validation.js";
 
 export const pagesRouter = Router();
@@ -96,13 +96,35 @@ pagesRouter.put("/:id/blocks", async (req, res) => {
   res.json({ ok: true });
 });
 
+/**
+ * Saneo profundo de los props de un bloque.
+ *
+ * - `html`/`body`: HTML con allowlist.
+ * - `embedHtml`: sólo el iframe del mapa, reconstruido y validado.
+ * - claves de enlace (`href`, `ctaHref`, `directionsUrl`…): se descartan si el
+ *   destino no es seguro, para que un `javascript:` nunca llegue al front.
+ */
+const HTML_KEYS = new Set(["html", "body"]);
+const LINK_KEYS = new Set([
+  "href",
+  "ctaHref",
+  "secondaryCtaHref",
+  "directionsUrl",
+  "imageUrl",
+  "url",
+]);
+
 function sanitizeBlockProps(props: unknown): unknown {
   if (Array.isArray(props)) return props.map(sanitizeBlockProps);
   if (!props || typeof props !== "object") return props;
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(props)) {
-    if (typeof value === "string" && (key === "html" || key === "body" || key === "embedHtml")) {
+    if (typeof value === "string" && HTML_KEYS.has(key)) {
       out[key] = sanitizeHtml(value) ?? "";
+    } else if (typeof value === "string" && key === "embedHtml") {
+      out[key] = sanitizeMapEmbed(value);
+    } else if (typeof value === "string" && LINK_KEYS.has(key)) {
+      out[key] = safeLinkHref(value) ?? "";
     } else {
       out[key] = sanitizeBlockProps(value);
     }

@@ -11,7 +11,6 @@ import type {
   SpecialtyGridProps,
   ServiceGridProps,
   StudyGridProps,
-  NewsGridProps,
   MapEmbedProps,
   VideoEmbedProps,
   ContactFormProps,
@@ -36,7 +35,6 @@ const DoctorList = lazy(() => import("./DoctorList"));
 const SpecialtyGrid = lazy(() => import("./SpecialtyGrid"));
 const ServiceGrid = lazy(() => import("./ServiceGrid"));
 const StudyGrid = lazy(() => import("./StudyGrid"));
-const NewsGrid = lazy(() => import("./NewsGrid"));
 const MapEmbed = lazy(() => import("./MapEmbed"));
 const VideoEmbed = lazy(() => import("./VideoEmbed"));
 const ContactForm = lazy(() => import("./ContactForm"));
@@ -61,7 +59,6 @@ type BlockPropsMap = {
   specialtyGrid: SpecialtyGridProps;
   serviceGrid: ServiceGridProps;
   studyGrid: StudyGridProps;
-  newsGrid: NewsGridProps;
   mapEmbed: MapEmbedProps;
   videoEmbed: VideoEmbedProps;
   contactForm: ContactFormProps;
@@ -87,7 +84,6 @@ const MAP: Record<BlockType, React.ComponentType<any>> = {
   specialtyGrid: SpecialtyGrid,
   serviceGrid: ServiceGrid,
   studyGrid: StudyGrid,
-  newsGrid: NewsGrid,
   mapEmbed: MapEmbed,
   videoEmbed: VideoEmbed,
   contactForm: ContactForm,

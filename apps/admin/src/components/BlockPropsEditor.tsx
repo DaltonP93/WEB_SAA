@@ -1,6 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import type { BlockType } from "@sa/shared/blocks";
+import { RED_RESERVED_MESSAGE, isInstitutionalRed } from "@sa/shared/institutional-red";
 import { api } from "../api";
+import IconPicker from "./IconPicker";
 
 /**
  * Editor de props simplificado: genera inputs basados en un schema declarado
@@ -21,9 +23,12 @@ interface FieldDef {
     | "json"
     | "items"
     | "checkbox"
+    | "icon"
     | "channelKeys";
   options?: { label: string; value: any }[];
   itemFields?: FieldDef[]; // para 'items'
+  /** Aclaración corta debajo del campo (reglas que además valida el servidor). */
+  help?: string;
 }
 
 const SCHEMAS: Record<BlockType, FieldDef[]> = {
@@ -47,7 +52,7 @@ const SCHEMAS: Record<BlockType, FieldDef[]> = {
     { key: "items", label: "Tarjetas", kind: "items", itemFields: [
       { key: "title", label: "Título", kind: "text" },
       { key: "text", label: "Texto", kind: "textarea" },
-      { key: "icon", label: "Icono (nombre lucide o emoji)", kind: "text" },
+      { key: "icon", label: "Icono", kind: "icon" },
       { key: "imageUrl", label: "Imagen", kind: "image" },
       { key: "href", label: "Enlace", kind: "url" },
     ]},
@@ -109,10 +114,6 @@ const SCHEMAS: Record<BlockType, FieldDef[]> = {
       { label: "Biopsias / anatomía patológica", value: "biopsias" },
     ] },
   ],
-  newsGrid: [
-    { key: "limit", label: "Cantidad", kind: "number" },
-    { key: "columns", label: "Columnas", kind: "select", options: [2,3,4].map(n => ({ label: String(n), value: n })) },
-  ],
   mapEmbed: [
     { key: "heading", label: "Encabezado", kind: "text" },
     { key: "text", label: "Texto (dirección, referencias)", kind: "textarea" },
@@ -150,7 +151,7 @@ const SCHEMAS: Record<BlockType, FieldDef[]> = {
     { key: "items", label: "Pasos", kind: "items", itemFields: [
       { key: "title", label: "Título del paso", kind: "text" },
       { key: "text", label: "Detalle", kind: "textarea" },
-      { key: "icon", label: "Icono (nombre lucide o emoji)", kind: "text" },
+      { key: "icon", label: "Icono", kind: "icon" },
     ]},
   ],
   scheduleTable: [
@@ -163,19 +164,19 @@ const SCHEMAS: Record<BlockType, FieldDef[]> = {
     { key: "ctaLabel", label: "Label del botón", kind: "text" },
     { key: "ctaHref", label: "Href", kind: "url" },
     { key: "variant", label: "Variante", kind: "select", options: [
-      { label: "Acento (default)", value: "accent" },
-      { label: "Primario", value: "primary" },
+      { label: "Primario (default)", value: "primary" },
       { label: "Secundario", value: "secondary" },
       { label: "Suave", value: "muted" },
-    ] },
-    { key: "background", label: "Color/Background (override)", kind: "color" },
+      { label: "Emergencias (rojo)", value: "emergency" },
+    ], help: "El rojo es exclusivo de Emergencias: la variante sólo se guarda si el bloque habla de Emergencias." },
+    { key: "background", label: "Color/Background (override)", kind: "color", help: "No admite el rojo institucional, reservado para Emergencias." },
   ],
   stats: [
     { key: "heading", label: "Encabezado", kind: "text" },
     { key: "items", label: "Items", kind: "items", itemFields: [
       { key: "value", label: "Valor", kind: "text" },
       { key: "label", label: "Etiqueta", kind: "text" },
-      { key: "icon", label: "Icono (nombre lucide o emoji)", kind: "text" },
+      { key: "icon", label: "Icono", kind: "icon" },
     ]},
   ],
   logos: [
@@ -236,8 +237,9 @@ function ChannelKeysField({ value, onChange }: { value: any; onChange: (v: any) 
   );
 }
 
-function Field({ def, value, onChange }: { def: FieldDef; value: any; onChange: (v: any) => void }) {
+function Field({ def, value, onChange, taken }: { def: FieldDef; value: any; onChange: (v: any) => void; taken?: string[] }) {
   if (def.kind === "channelKeys") return <ChannelKeysField value={value} onChange={onChange} />;
+  if (def.kind === "icon") return <IconPicker value={value} onChange={(v) => onChange(v ?? "")} taken={taken} />;
   if (def.kind === "textarea") return <textarea className="input" rows={4} value={value ?? ""} onChange={(e) => onChange(e.target.value)} />;
   if (def.kind === "number") return <input type="number" className="input" value={value ?? ""} onChange={(e) => onChange(e.target.value === "" ? undefined : Number(e.target.value))} />;
   if (def.kind === "checkbox") return (
@@ -266,11 +268,22 @@ function Field({ def, value, onChange }: { def: FieldDef; value: any; onChange: 
             {def.itemFields?.map((f) => (
               <div key={f.key} className="mb-2">
                 <label className="label">{f.label}</label>
-                <Field def={f} value={item[f.key]} onChange={(v) => {
-                  const next = [...arr];
-                  next[idx] = { ...item, [f.key]: v };
-                  onChange(next);
-                }} />
+                <Field
+                  def={f}
+                  value={item[f.key]}
+                  // Dos ítems de la misma grilla no pueden repetir icono: la
+                  // API lo rechaza, así que se marcan ocupados en el selector.
+                  taken={
+                    f.kind === "icon"
+                      ? arr.filter((_, i) => i !== idx).map((o) => o?.[f.key]).filter(Boolean)
+                      : undefined
+                  }
+                  onChange={(v) => {
+                    const next = [...arr];
+                    next[idx] = { ...item, [f.key]: v };
+                    onChange(next);
+                  }}
+                />
               </div>
             ))}
           </div>
@@ -290,6 +303,10 @@ export default function BlockPropsEditor({ type, props, onChange }: { type: Bloc
         <div key={f.key}>
           <label className="label">{f.label}</label>
           <Field def={f} value={props?.[f.key]} onChange={(v) => onChange({ ...props, [f.key]: v })} />
+          {f.help && <p className="mt-1 text-xs text-gray-500">{f.help}</p>}
+          {f.kind === "color" && isInstitutionalRed(props?.[f.key]) && (
+            <p className="mt-1 text-xs font-medium text-red-700">{RED_RESERVED_MESSAGE}</p>
+          )}
         </div>
       ))}
     </div>

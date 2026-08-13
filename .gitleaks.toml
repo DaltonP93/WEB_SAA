@@ -1,0 +1,59 @@
+# Configuración de gitleaks.
+#
+# Extiende el set de reglas por defecto y agrega la forma concreta en que este
+# repo filtró una credencial: un valor por defecto literal en un script de
+# bash (`VAR="${VAR:-<valor>}"`). Las reglas por defecto no la detectaban
+# —no tiene entropía de token— así que el escaneo del historial daba limpio
+# mientras la credencial seguía ahí.
+#
+# Uso:
+#   gitleaks detect --no-git --source .    # árbol actual (bloqueante en CI)
+#   gitleaks detect                        # historial completo (informativo)
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "shell-default-credential"
+description = "Credencial literal como valor por defecto en un script de shell"
+# VAR="${VAR:-valor}" / VAR=${VAR:-valor}
+regex = '''(?i)\b(?:[A-Z_]*(?:PASS|PASSWORD|SECRET|TOKEN|APIKEY|API_KEY)[A-Z_]*)\s*=\s*["']?\$\{[A-Za-z_][A-Za-z0-9_]*:-([^}"'\s]{6,})\}'''
+secretGroup = 1
+tags = ["password", "shell", "deploy"]
+
+[rules.allowlist]
+# Los valores generados en el momento no son credenciales fijas.
+regexes = [
+  '''\$\(openssl''',
+  '''\$\(head''',
+  '''\$\(date''',
+  '''\$\(hostname''',
+  '''\$\(curl''',
+]
+
+[[rules]]
+id = "env-file-committed-credential"
+description = "Credencial con valor real en un archivo .env versionado"
+# RE2 no soporta lookahead: los .env de ejemplo se excluyen en el allowlist.
+path = '''(^|/)\.env(\.[A-Za-z0-9_.-]+)?$'''
+regex = '''(?i)^\s*[A-Z_]*(?:PASS|PASSWORD|SECRET|TOKEN)[A-Z_]*\s*=\s*(.{8,})$'''
+secretGroup = 1
+tags = ["password", "env"]
+
+[allowlist]
+description = "Rutas que no son código propio ni pueden contener secretos reales"
+# Las contraseñas de las pruebas se generan al vuelo con el prefijo `prueba-`
+# (ver tests/helpers/db.ts). Quedaron literales en el historial y no son
+# credenciales de ningún entorno.
+regexes = ['''prueba-[A-Za-z0-9-]+''']
+paths = [
+  '''(^|/)node_modules/''',
+  '''(^|/)dist/''',
+  '''(^|/)pnpm-lock\.yaml$''',
+  '''(^|/)assets-extracted/''',
+  # Documentación de terceros vendoreada: ejemplos de librerías, no código propio.
+  '''(^|/)\.agents/skills/''',
+  # Plantillas: sus valores son marcadores, no credenciales.
+  '''(^|/)\.env\.example$''',
+  '''(^|/)\.env\.deploy\.example$''',
+]

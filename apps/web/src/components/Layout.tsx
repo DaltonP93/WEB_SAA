@@ -4,8 +4,8 @@ import { Link, NavLink } from "react-router-dom";
 import { api } from "../api";
 import type { SiteSettings } from "@sa/shared";
 import SocialIcon, { type SocialKind } from "./SocialIcon";
-import { CHANNEL_KEYS, channelHref, useContactChannels } from "../lib/contact-channels";
-import { safeInternalHref } from "../lib/url";
+import { CHANNEL_KEYS, channelHref, useContactChannels, socialChannels, useSchedules } from "../lib/contact-channels";
+import { isSafeExternalHref, safeInternalHref } from "../lib/url";
 
 interface Props {
   children: ReactNode;
@@ -205,11 +205,14 @@ export default function Layout({ children, settings }: Props) {
   const footer = menusQ.data?.footer ?? [];
   const brand = settings?.brand;
   const contact = settings?.contact;
-  const social = settings?.social ?? {};
-  const mapsUrl = contact?.mapsUrl?.trim() || MAPS_URL_FALLBACK;
+  // Un enlace mal cargado en el panel no puede convertirse en javascript:
+  const mapsUrl = isSafeExternalHref(contact?.mapsUrl) ? contact!.mapsUrl!.trim() : MAPS_URL_FALLBACK;
 
   // Header y footer leen de la misma tabla que los bloques de contacto.
   const { channels, get, firstWithValue } = useContactChannels();
+  // Los horarios del pie salen de la tabla `schedules`, igual que la página
+  // de Horarios: no hay una copia suelta en settings.
+  const { schedules } = useSchedules();
   const emergency = get(CHANNEL_KEYS.emergencias);
   const emergencyHref = emergency ? channelHref(emergency) : undefined;
   const emergencyPhone = emergency?.value ?? null;
@@ -222,9 +225,11 @@ export default function Layout({ children, settings }: Props) {
     (c) => c.value && c.key !== CHANNEL_KEYS.emergencias && c.key !== CHANNEL_KEYS.gth,
   );
 
-  const socialLinks = (["facebook", "instagram", "youtube", "linkedin"] as SocialKind[])
-    .map((kind) => ({ kind, href: (social as Record<string, string | undefined>)[kind] }))
-    .filter((s): s is { kind: SocialKind; href: string } => !!s.href);
+  // Las redes también salen de Canales de contacto: antes vivían aparte en
+  // settings.social y se podían editar por duplicado.
+  const socialLinks = socialChannels(channels)
+    .map((s) => ({ kind: s.key as SocialKind, href: s.href }))
+    .filter((s) => isSafeExternalHref(s.href));
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
@@ -391,8 +396,14 @@ export default function Layout({ children, settings }: Props) {
           </div>
           <div>
             <h4 className="text-xs font-semibold uppercase tracking-wider opacity-80 mb-3">Horarios</h4>
-            {contact?.hours ? (
-              <p className="text-sm opacity-90 whitespace-pre-line mb-6">{contact.hours}</p>
+            {schedules.length > 0 ? (
+              <ul className="text-sm opacity-90 mb-6 space-y-1">
+                {schedules.slice(0, 4).map((s) => (
+                  <li key={s.id}>
+                    <span className="font-medium">{s.area}:</span> {s.hours}
+                  </li>
+                ))}
+              </ul>
             ) : (
               /* Sin horarios confirmados no publicamos ninguno: enlazamos a la
                  página donde se cargan a medida que el sanatorio los define. */

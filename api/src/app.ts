@@ -8,7 +8,9 @@ import { publicRouter } from "./routes/public.js";
 import { authRouter } from "./routes/auth.js";
 import { adminRouter } from "./routes/admin/index.js";
 import { db, checkDatabase } from "./db.js";
-import { errorHandler, wrapRouterAsync } from "./http.js";
+import { asyncHandler, errorHandler, withTimeout, wrapRouterAsync } from "./http.js";
+import { legacyRedirects } from "./legacy-redirects.js";
+import { warnIfCaptchaMisconfigured } from "./captcha.js";
 
 export const PORT = Number(process.env.PORT ?? 4000);
 const UPLOAD_DIR = path.resolve(process.env.UPLOAD_DIR ?? "./uploads");
@@ -20,7 +22,29 @@ const UPLOAD_DIR = path.resolve(process.env.UPLOAD_DIR ?? "./uploads");
 export function createApp() {
   const app = express();
 
-  app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
+  // Una configuración de CAPTCHA a medias no rompe el arranque, pero tiene que
+  // verse en los logs: si no, el síntoma aparece recién como formularios que
+  // nadie puede enviar.
+  warnIfCaptchaMisconfigured();
+
+  // La API sólo devuelve JSON y archivos de /uploads: no necesita ejecutar
+  // nada, así que la CSP puede ser máximamente restrictiva.
+  app.use(
+    helmet({
+      crossOriginResourcePolicy: { policy: "cross-origin" },
+      contentSecurityPolicy: {
+        useDefaults: false,
+        directives: {
+          "default-src": ["'none'"],
+          "img-src": ["'self'", "data:"],
+          "base-uri": ["'none'"],
+          "form-action": ["'none'"],
+          "frame-ancestors": ["'none'"],
+        },
+      },
+      referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+    }),
+  );
   app.use(
     cors({
       origin: (process.env.CORS_ORIGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
@@ -62,6 +86,9 @@ export function createApp() {
       },
     });
   });
+  // Rutas viejas del portal: 301 real antes de cualquier otra cosa.
+  app.use(legacyRedirects);
+
   app.get("/robots.txt", (_req, res) => {
     const siteUrl = getSiteUrl();
     res.type("text/plain").send([
@@ -73,14 +100,25 @@ export function createApp() {
       "",
     ].join("\n"));
   });
-  app.get("/sitemap.xml", async (_req, res) => {
+  /*
+   * El sitemap quedaba fuera de `wrapRouterAsync` (está montado en la app, no
+   * en un router), así que con la base caída su promesa se rechazaba sin
+   * dueño: la request quedaba colgada hasta el timeout del cliente y el
+   * rechazo subía como `unhandledRejection`. Va envuelto y con un límite de
+   * tiempo propio para responder un error acotado en vez de nunca responder.
+   */
+  app.get("/sitemap.xml", asyncHandler(async (_req, res) => {
     const siteUrl = getSiteUrl();
     // La sección Noticias se retiró del sitio público, así que no se indexa.
-    const [pages, specialties, doctors] = await Promise.all([
-      db("pages").where({ status: "published" }).select("slug", "updated_at"),
-      db("specialties").select("slug"),
-      db("doctors").select("slug"),
-    ]);
+    const [pages, specialties, doctors] = await withTimeout(
+      Promise.all([
+        db("pages").where({ status: "published" }).select("slug", "updated_at"),
+        db("specialties").select("slug"),
+        db("doctors").select("slug"),
+      ]),
+      Number(process.env.SITEMAP_TIMEOUT_MS ?? 8_000),
+      "sitemap",
+    );
     const urls: { loc: string; lastmod?: string | Date }[] = [
       ...pages.map((p) => ({ loc: p.slug === "home" ? "/" : `/${p.slug}`, lastmod: p.updated_at })),
       { loc: "/profesionales" },
@@ -88,7 +126,7 @@ export function createApp() {
       ...doctors.map((d) => ({ loc: `/profesionales/${d.slug}` })),
     ];
     res.type("application/xml").send(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.map((u) => sitemapUrl(siteUrl, u.loc, u.lastmod)).join("\n")}\n</urlset>`);
-  });
+  }));
 
 
   // wrapRouterAsync captura los rechazos de los handlers async y los deriva al

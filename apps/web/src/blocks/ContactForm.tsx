@@ -3,6 +3,7 @@ import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
 import { api } from "../api";
 import type { ContactFormProps } from "@sa/shared/blocks";
+import Captcha, { useCaptchaConfig } from "../components/Captcha";
 
 const inputClass =
   "border rounded px-3 py-2 w-full bg-white focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition";
@@ -13,14 +14,34 @@ export default function ContactForm({ heading = "Contacto", showPhone = true }: 
   const [shakeKey, setShakeKey] = useState(0);
   const reduced = useReducedMotion();
 
+  // Verificación anti-spam. Sin configurar, `config` es null: no se dibuja
+  // nada y el formulario funciona igual.
+  const { config: captcha } = useCaptchaConfig();
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
+  const [captchaError, setCaptchaError] = useState<string | null>(null);
+  const [captchaKey, setCaptchaKey] = useState(0);
+  const captchaPending = Boolean(captcha) && !captchaToken;
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setState("loading");
     try {
-      await api.post("/public/contact-messages", form);
+      await api.post("/public/contact-messages", {
+        ...form,
+        captchaToken: captchaToken ?? undefined,
+      });
       setState("ok");
       setForm({ name: "", email: "", phone: "", message: "" });
-    } catch {
+      // El token es de un solo uso: se rehace el widget para poder enviar otro.
+      setCaptchaToken(null);
+      setCaptchaKey((k) => k + 1);
+    } catch (err) {
+      const message = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      if (message?.includes("anti-spam")) {
+        setCaptchaError("La verificación anti-spam no pasó. Probá de nuevo.");
+        setCaptchaToken(null);
+        setCaptchaKey((k) => k + 1);
+      }
       setState("error");
       setShakeKey((k) => k + 1);
     }
@@ -59,8 +80,13 @@ export default function ContactForm({ heading = "Contacto", showPhone = true }: 
             <textarea id="contact-message" required rows={4} value={form.message} onChange={(e) => setForm({ ...form, message: e.target.value })} className={inputClass} />
           </div>
         </motion.div>
+        <Captcha key={captchaKey} onToken={setCaptchaToken} onError={setCaptchaError} />
+        {captchaError && (
+          <p role="alert" className="text-sm text-accent-700">{captchaError}</p>
+        )}
         <button
-          disabled={state === "loading"}
+          disabled={state === "loading" || captchaPending}
+          title={captchaPending ? "Completá la verificación anti-spam" : undefined}
           className="btn-primary self-start inline-flex items-center gap-2 disabled:opacity-50"
         >
           {state === "loading" ? (

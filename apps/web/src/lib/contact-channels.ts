@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api";
-import type { ContactChannel } from "@sa/shared";
+import type { ContactChannel, Schedule } from "@sa/shared";
 
 /**
  * Canales de contacto: fuente única (tabla `contact_channels`, administrable
@@ -15,7 +15,17 @@ export const CHANNEL_KEYS = {
   turnos: "whatsapp-turnos",
   general: "whatsapp-general",
   gth: "gth",
+  email: "email-general",
+  recepcion: "recepcion",
 } as const;
+
+/**
+ * Redes sociales. También son canales: antes vivían en `settings.social` y el
+ * panel dejaba editarlas por duplicado, así que un perfil podía quedar
+ * distinto según dónde se mirara.
+ */
+export const SOCIAL_KEYS = ["facebook", "instagram", "youtube", "linkedin"] as const;
+export type SocialKey = (typeof SOCIAL_KEYS)[number];
 
 export function useContactChannels() {
   const { data, isLoading } = useQuery({
@@ -75,3 +85,30 @@ export function channelHref(channel: Pick<ContactChannel, "kind" | "value" | "me
 }
 
 export const PENDING_LABEL = "A confirmar";
+
+/** Los canales de redes con URL válida, en el orden en que se muestran. */
+export function socialChannels(
+  channels: Pick<ContactChannel, "key" | "kind" | "value" | "href" | "message">[],
+): { key: SocialKey; href: string }[] {
+  const byKey = new Map(channels.map((c) => [c.key, c]));
+  return SOCIAL_KEYS.flatMap((key) => {
+    const channel = byKey.get(key);
+    if (!channel) return [];
+    const href = channelHref(channel);
+    return href ? [{ key, href }] : [];
+  });
+}
+
+/**
+ * Horarios publicados: fuente única (tabla `schedules`). Devuelve sólo los que
+ * el sanatorio marcó activos y con horario cargado; mientras no haya ninguno,
+ * el sitio avisa que están en confirmación en vez de mostrar horas inventadas.
+ */
+export function useSchedules() {
+  const { data, isLoading } = useQuery({
+    queryKey: ["schedules"],
+    queryFn: async () => (await api.get("/public/schedules")).data as Schedule[],
+    staleTime: 5 * 60_000,
+  });
+  return { schedules: data ?? [], isLoading };
+}

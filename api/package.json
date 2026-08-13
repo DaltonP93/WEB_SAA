@@ -27,6 +27,7 @@
     "morgan": "^1.11.0",
     "multer": "^1.4.5-lts.1",
     "mysql2": "^3.11.4",
+    "sanitize-html": "^2.13.1",
     "sharp": "^0.35.0",
     "zod": "^3.23.8"
   },
@@ -37,6 +38,7 @@
     "@types/jsonwebtoken": "^9.0.7",
     "@types/morgan": "^1.9.9",
     "@types/multer": "^1.4.12",
+    "@types/sanitize-html": "^2.13.0",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3"
   }

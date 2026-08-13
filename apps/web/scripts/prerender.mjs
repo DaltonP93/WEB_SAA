@@ -75,6 +75,13 @@ async function prerenderStudies(shell) {
     fetchJson(`${API_BASE}/api/public/studies`),
   ]);
   const all = Array.isArray(studies) ? studies : [];
+  if (all.length === 0) {
+    // Sin estudios publicados el prerender escribiría una página vacía, que es
+    // peor que servir el shell del SPA: el buscador indexaría el hueco. Se
+    // deja el index.html normal y se avisa, no se falla el build.
+    console.log("✓ prerender: /estudios omitido (no hay estudios publicados)");
+    return;
+  }
   const seo = page?.seo ?? {};
   const title = seo.title ?? page?.title ?? "Estudios";
   const description = seo.description ?? "";

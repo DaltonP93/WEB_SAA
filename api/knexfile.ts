@@ -26,8 +26,17 @@ const base: Knex.Config = {
   },
 };
 
+/**
+ * La CLI de knex elige la entrada por `NODE_ENV` y falla con un
+ * "Required configuration option 'client' is missing" si el nombre no está
+ * listado. La conexión sale toda de variables de entorno, así que cualquier
+ * entorno usa la misma configuración: se enumeran los nombres habituales para
+ * que `pnpm db:migrate` no dependa de cómo quedó NODE_ENV en el servidor.
+ */
 const config: Record<string, Knex.Config> = {
   development: base,
+  test: base,
+  staging: base,
   production: base,
 };
 

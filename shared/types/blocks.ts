@@ -9,7 +9,6 @@ export type BlockType =
   | "specialtyGrid"
   | "serviceGrid"
   | "studyGrid"
-  | "newsGrid"
   | "mapEmbed"
   | "videoEmbed"
   | "contactForm"
@@ -121,11 +120,6 @@ export interface StudyGridProps {
   category?: string;
 }
 
-export interface NewsGridProps {
-  limit: number;
-  columns: 2 | 3 | 4;
-}
-
 export interface MapEmbedProps {
   embedHtml: string;
   height?: number;
@@ -207,8 +201,16 @@ export interface CtaProps {
   text?: string;
   ctaLabel: string;
   ctaHref: string;
+  /**
+   * Override de fondo. Nunca puede ser el rojo institucional: el schema lo
+   * rechaza (ver `institutional-red.ts`).
+   */
   background?: string;
-  variant?: "accent" | "primary" | "secondary" | "muted";
+  /**
+   * `emergency` es la única variante roja y sólo se acepta en bloques que
+   * hablan de Emergencias. La variante histórica `accent` quedó retirada.
+   */
+  variant?: "emergency" | "primary" | "secondary" | "muted";
 }
 
 export interface StatsProps {
@@ -236,7 +238,6 @@ export type Block =
   | BaseBlock<"specialtyGrid", SpecialtyGridProps>
   | BaseBlock<"serviceGrid", ServiceGridProps>
   | BaseBlock<"studyGrid", StudyGridProps>
-  | BaseBlock<"newsGrid", NewsGridProps>
   | BaseBlock<"mapEmbed", MapEmbedProps>
   | BaseBlock<"videoEmbed", VideoEmbedProps>
   | BaseBlock<"contactForm", ContactFormProps>
