@@ -2,6 +2,12 @@ import { Router } from "express";
 import { z } from "zod";
 import { db } from "../../db.js";
 import { sanitizeMapEmbed } from "../../html.js";
+import {
+  THEME_COLOR_KEYS,
+  THEME_COLOR_MESSAGE,
+  THEME_PALETTE,
+  isApprovedThemeColor,
+} from "../../institutional-red.js";
 
 export const settingsRouter = Router();
 
@@ -16,6 +22,10 @@ const putSchema = z.record(z.string(), z.unknown());
 settingsRouter.put("/", async (req, res) => {
   const parsed = putSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "payload invalido" });
+  const themeErrors = "theme" in parsed.data ? assertThemeColors(parsed.data.theme) : [];
+  if (themeErrors.length > 0) {
+    return res.status(400).json({ error: "payload invalido", issues: themeErrors });
+  }
   for (const [key, value] of Object.entries(parsed.data)) {
     if (RETIRED_SETTING_KEYS.includes(key)) continue;
     const cleanValue = sanitizeSettingValue(key, value);
@@ -30,9 +40,11 @@ settingsRouter.put("/", async (req, res) => {
 settingsRouter.put("/:key", async (req, res) => {
   const key = req.params.key;
   if (RETIRED_SETTING_KEYS.includes(key)) {
-    return res.status(410).json({
-      error: `"${key}" ya no se administra desde Ajustes: se carga en Canales de contacto`,
-    });
+    return res.status(410).json({ error: RETIRED_SETTING_MESSAGE[key] ?? `"${key}" ya no se administra` });
+  }
+  if (key === "theme") {
+    const errors = assertThemeColors(req.body);
+    if (errors.length > 0) return res.status(400).json({ error: "payload invalido", issues: errors });
   }
   const cleanValue = sanitizeSettingValue(key, req.body);
   await db("settings")
@@ -62,11 +74,44 @@ const RETIRED_CONTACT_FIELDS = [
   "gthEmail",
 ];
 
-/** Claves de settings que ya no existen como tales. */
-export const RETIRED_SETTING_KEYS = ["social"];
+/**
+ * Claves de settings retiradas.
+ *
+ * `scripts` era un campo de "JavaScript personalizado" que el panel ofrecía y
+ * la API vaciaba siempre: se guardaba, decía "Guardado" y no conservaba nada.
+ * Meta Pixel, Google Ads y Analytics van a entrar por módulos propios, no por
+ * un textarea de JS arbitrario.
+ */
+export const RETIRED_SETTING_KEYS = ["social", "scripts"];
+
+const RETIRED_SETTING_MESSAGE: Record<string, string> = {
+  social: '"social" ya no se administra desde Ajustes: las redes se cargan en Canales de contacto',
+  scripts:
+    '"scripts" se retiró: no se inyecta JavaScript arbitrario en el sitio. Las integraciones de medición van a entrar por módulos propios.',
+};
+
+/**
+ * El tema sólo acepta colores de la paleta institucional.
+ *
+ * Con un campo de color libre alcanzaba con pintar `primary` de rojo para
+ * romper la regla de que el rojo es exclusivo de Emergencias, sin tocar
+ * ningún bloque. Una allowlist evita además tener que reconocer todas las
+ * sintaxis de color que existen o van a existir.
+ */
+function assertThemeColors(value: unknown): string[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  const theme = value as Record<string, unknown>;
+  const errors: string[] = [];
+  for (const slot of THEME_COLOR_KEYS) {
+    if (!(slot in theme)) continue;
+    if (!isApprovedThemeColor(slot, theme[slot])) {
+      errors.push(`theme.${slot}: ${THEME_COLOR_MESSAGE} (${(THEME_PALETTE[slot] ?? []).join(", ")})`);
+    }
+  }
+  return errors;
+}
 
 function sanitizeSettingValue(key: string, value: unknown): unknown {
-  if (key === "scripts") return { head: "", bodyEnd: "" };
   if (key === "contact" && value && typeof value === "object" && !Array.isArray(value)) {
     const contact = { ...(value as Record<string, unknown>) };
     for (const field of RETIRED_CONTACT_FIELDS) delete contact[field];

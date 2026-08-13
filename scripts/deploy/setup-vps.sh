@@ -13,7 +13,8 @@
 # Variables opcionales:
 #   REPO_URL   repo a clonar (default: DaltonP93/WEB_SAA)
 #   DOMAIN     dominio para HTTPS con Let's Encrypt. Sin dominio el panel
-#              /admin NO se publica (ver ADMIN_ALLOW_INSECURE_HTTP).
+#              Sin dominio el panel /admin NO se publica: el login viajaría
+#              en texto plano y eso no tiene excepción en este proyecto.
 #   ADMIN_EMAIL / ADMIN_PASS  credenciales del superadmin sembrado. Si no se
 #              pasa ADMIN_PASS se genera una aleatoria y se guarda en un
 #              archivo sólo-root; nunca se imprime en pantalla.
@@ -44,9 +45,10 @@ CREDENTIALS_FILE="${APP_DIR}/.deploy-credentials"
 
 SERVER_IP="${SERVER_IP:-$(curl -s4 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')}"
 # Con DOMAIN se configura HTTPS (certbot) y el panel /admin queda publicado
-# sólo sobre TLS. Sin dominio hay que habilitarlo explícitamente.
+# sólo sobre TLS. Sin certificado emitido y verificado, /admin responde 403.
+# No hay variable para saltear esto: el panel nunca transmite credenciales sin
+# TLS, ni siquiera "temporalmente".
 DOMAIN="${DOMAIN:-}"
-ADMIN_ALLOW_INSECURE_HTTP="${ADMIN_ALLOW_INSECURE_HTTP:-0}"
 SERVER_NAME="${DOMAIN:-_}"
 # URL canónica del sitio. Con dominio siempre es HTTPS: certbot deja el 301 de
 # HTTP a HTTPS, así que publicar http:// como base generaría un salto extra en
@@ -167,27 +169,36 @@ chown -R www-data:www-data "${APP_DIR}/api/uploads" || true
 
 # --- 8. Nginx -------------------------------------------------------------
 log "8/9  Configurando Nginx"
-if [ -n "$DOMAIN" ]; then
-  ADMIN_BLOCK="  # Panel admin (^~ para que /admin/assets/*.js no caigan en la regex global)
+# El panel se sirve desde un snippet aparte que arranca cerrado. Se abre
+# recién después de que el certificado exista, `nginx -t` pase y el servidor
+# HTTPS esté escuchando. Antes, la primera configuración ya publicaba /admin
+# por HTTP y sólo se cerraba si certbot fallaba: durante esa ventana el panel
+# estaba accesible sin TLS.
+mkdir -p /etc/nginx/snippets
+ADMIN_SNIPPET=/etc/nginx/snippets/sanatorio-admin.conf
+
+write_admin_closed() {
+  cat > "$ADMIN_SNIPPET" <<'ADMINCLOSED'
+  # Cerrado hasta que haya TLS verificado. Lo reescribe setup-vps.sh.
+  location ^~ /admin {
+    default_type text/plain;
+    return 403 'El panel admin requiere HTTPS. Configura DOMAIN y volve a correr setup-vps.sh.';
+  }
+ADMINCLOSED
+}
+
+write_admin_open() {
+  cat > "$ADMIN_SNIPPET" <<ADMINOPEN
+  # Panel admin (^~ para que /admin/assets/*.js no caigan en la regex global).
+  # Habilitado sólo con TLS verificado; en HTTP certbot deja el 301 a HTTPS.
   location ^~ /admin {
     alias ${APP_DIR}/apps/admin/dist;
     try_files \$uri \$uri/ /admin/index.html;
-  }"
-elif [ "$ADMIN_ALLOW_INSECURE_HTTP" = "1" ]; then
-  warn "El panel /admin se va a publicar SIN HTTPS (ADMIN_ALLOW_INSECURE_HTTP=1)."
-  warn "Las credenciales del admin viajan en texto plano. Configurá DOMAIN y TLS cuanto antes."
-  ADMIN_BLOCK="  location ^~ /admin {
-    alias ${APP_DIR}/apps/admin/dist;
-    try_files \$uri \$uri/ /admin/index.html;
-  }"
-else
-  warn "Sin DOMAIN configurado: el panel /admin NO se publica (evita login sin HTTPS)."
-  warn "Para publicarlo igual: ADMIN_ALLOW_INSECURE_HTTP=1 bash setup-vps.sh"
-  ADMIN_BLOCK="  location ^~ /admin {
-    default_type text/plain;
-    return 403 'El panel admin requiere HTTPS. Configurá DOMAIN y volvé a correr setup-vps.sh.';
-  }"
-fi
+  }
+ADMINOPEN
+}
+
+write_admin_closed
 
 cat > /etc/nginx/sites-available/sanatorio <<NGINX
 server {
@@ -238,7 +249,7 @@ server {
   location = /portal-presupuestos-cirugia     { return 301 /portal-paciente; }
   location = /portal-facturacion-electronica  { return 301 /portal-paciente; }
 
-${ADMIN_BLOCK}
+  include /etc/nginx/snippets/sanatorio-admin.conf;
 
   # Sitio público (catch-all)
   location / {
@@ -265,37 +276,43 @@ TLS_OK=0
 if [ -n "$DOMAIN" ]; then
   log "    Emitiendo certificado TLS para ${DOMAIN} (Let's Encrypt)"
   apt install -y -qq certbot python3-certbot-nginx
+  # --redirect: certbot deja el server HTTP devolviendo 301 a HTTPS, así que
+  # /admin por HTTP nunca sirve el panel aunque el snippet esté abierto.
   if certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos \
        -m "${CERTBOT_EMAIL:-$ADMIN_EMAIL}" --redirect; then
-    TLS_OK=1
-  else
-    # Sin TLS el panel no puede quedar publicado: el login viajaría en texto
-    # plano. La config de Nginx ya se escribió con /admin habilitado, así que
-    # hay que cerrarlo explícitamente antes de seguir.
-    warn "certbot falló: el sitio queda en HTTP."
-    if [ "$ADMIN_ALLOW_INSECURE_HTTP" = "1" ]; then
-      warn "ADMIN_ALLOW_INSECURE_HTTP=1: el panel queda publicado SIN HTTPS y las"
-      warn "credenciales viajan en texto plano. Emití el certificado cuanto antes."
+    log "    Certificado emitido. Verificando antes de publicar /admin"
+    # Tres condiciones, en este orden, antes de abrir el panel:
+    #   1. el certificado existe en disco;
+    #   2. hay un server TLS escuchando en 443;
+    #   3. `nginx -t` valida la configuración con el snippet abierto.
+    # Si alguna falla, el snippet se queda en 403 y el deploy sigue sin panel.
+    if [ ! -s "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ]; then
+      warn "certbot dijo OK pero no hay fullchain.pem: /admin queda cerrado."
+    elif ! grep -q "listen.*443" /etc/nginx/sites-available/sanatorio; then
+      warn "no hay server TLS en la configuración: /admin queda cerrado."
     else
-      warn "Se cierra /admin hasta que haya certificado. Cuando el DNS apunte al"
-      warn "servidor, volvé a correr este script para reintentar."
-      python3 - "$DOMAIN" <<'PYCLOSE' || die "no se pudo cerrar /admin tras el fallo de TLS"
-import io, re, sys
-path = "/etc/nginx/sites-available/sanatorio"
-conf = io.open(path, encoding="utf-8").read()
-blocked = (
-    "  location ^~ /admin {\n"
-    "    default_type text/plain;\n"
-    "    return 403 'El panel admin requiere HTTPS. Reintentá setup-vps.sh cuando el DNS resuelva.';\n"
-    "  }"
-)
-conf, n = re.subn(r"  location \^~ /admin \{[^}]*\}", blocked, conf)
-if n == 0:
-    sys.exit("no se encontró el bloque /admin en el nginx.conf")
-io.open(path, "w", encoding="utf-8").write(conf)
-PYCLOSE
-      nginx -t && systemctl reload nginx
+      write_admin_open
+      if nginx -t && systemctl reload nginx; then
+        # Última comprobación: que 443 esté realmente aceptando conexiones.
+        if curl -sk --max-time 10 -o /dev/null "https://${DOMAIN}/api/health"; then
+          TLS_OK=1
+          log "    HTTPS activo: /admin publicado sólo sobre TLS"
+        else
+          warn "HTTPS no respondió: se vuelve a cerrar /admin."
+          write_admin_closed
+          nginx -t && systemctl reload nginx
+        fi
+      else
+        warn "nginx -t falló con /admin habilitado: se revierte a 403."
+        write_admin_closed
+        nginx -t && systemctl reload nginx
+      fi
     fi
+  else
+    # El snippet nunca se abrió, así que no hay nada que cerrar: /admin siguió
+    # en 403 durante todo el proceso.
+    warn "certbot falló: el sitio queda en HTTP y /admin sigue cerrado (403)."
+    warn "Cuando ${DOMAIN} resuelva a este servidor, volvé a correr setup-vps.sh."
   fi
 fi
 
@@ -334,20 +351,15 @@ if [ -n "$DOMAIN" ] && [ "$TLS_OK" != "1" ]; then
   # invita a entrar y loguearse sin cifrado.
   echo -e "\033[1;31m✗ TLS no quedó configurado para ${DOMAIN}\033[0m"
   echo "  El sitio responde en http://${SERVER_IP} pero NO es la URL definitiva."
-  if [ "$ADMIN_ALLOW_INSECURE_HTTP" = "1" ]; then
-    echo "  El panel quedó publicado sin HTTPS por pedido explícito"
-    echo "  (ADMIN_ALLOW_INSECURE_HTTP=1). No lo uses hasta emitir el certificado."
-  else
-    echo "  El panel /admin está cerrado hasta que haya certificado."
-  fi
+  echo "  El panel /admin está cerrado (403) hasta que haya certificado."
   echo "  Cuando ${DOMAIN} resuelva a este servidor, volvé a correr setup-vps.sh."
+elif [ -z "$DOMAIN" ]; then
+  echo "Sitio público:   ${SITE_ORIGIN}"
+  echo "Panel admin:     cerrado (403). Requiere DOMAIN + certificado TLS."
+  echo "API health:      ${SITE_ORIGIN}/api/health"
 else
   echo "Sitio público:   ${SITE_ORIGIN}"
-  if [ -n "$DOMAIN" ] || [ "$ADMIN_ALLOW_INSECURE_HTTP" = "1" ]; then
-    echo "Panel admin:     ${SITE_ORIGIN}/admin"
-  else
-    echo "Panel admin:     cerrado (requiere DOMAIN + HTTPS)"
-  fi
+  echo "Panel admin:     ${SITE_ORIGIN}/admin"
   echo "API health:      ${SITE_ORIGIN}/api/health"
 fi
 echo ""

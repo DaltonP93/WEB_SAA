@@ -70,7 +70,6 @@ export async function seed(knex: Knex): Promise<void> {
         "Sanatorio Adventista de Asunción — atención médica integral con valores cristianos.",
       ogImage: "",
     },
-    scripts: { head: "", bodyEnd: "" },
   };
   for (const [key, value] of Object.entries(settings)) {
     await knex("settings").insert({ key, value: JSON.stringify(value) });

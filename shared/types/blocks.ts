@@ -121,7 +121,14 @@ export interface StudyGridProps {
 }
 
 export interface MapEmbedProps {
+  /**
+   * Lo que pega quien administra: el `<iframe>` que da Google, o la URL sola.
+   * Se guarda ya normalizado a URL y **no se publica**: la API expone
+   * `embedUrl`. El front no recibe HTML del mapa en ningún caso.
+   */
   embedHtml: string;
+  /** URL validada de Google Maps. Sólo la escribe la salida pública. */
+  embedUrl?: string;
   height?: number;
   heading?: string;
   text?: string;
@@ -202,13 +209,10 @@ export interface CtaProps {
   ctaLabel: string;
   ctaHref: string;
   /**
-   * Override de fondo. Nunca puede ser el rojo institucional: el schema lo
-   * rechaza (ver `institutional-red.ts`).
-   */
-  background?: string;
-  /**
-   * `emergency` es la única variante roja y sólo se acepta en bloques que
-   * hablan de Emergencias. La variante histórica `accent` quedó retirada.
+   * `emergency` es la única variante roja, y sólo se acepta cuando el CTA
+   * apunta a `/emergencias` y su texto lo dice. No hay override de color
+   * libre: el `background` arbitrario se retiró porque era la vía para meter
+   * rojo sin pedir la variante.
    */
   variant?: "emergency" | "primary" | "secondary" | "muted";
 }

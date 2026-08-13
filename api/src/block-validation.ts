@@ -2,9 +2,7 @@ import { z } from "zod";
 import type { BlockType } from "@sa/shared/blocks";
 import {
   EMERGENCY_VARIANT_MESSAGE,
-  RED_RESERVED_MESSAGE,
-  isInstitutionalRed,
-  mentionsEmergency,
+  isEmergencyCta,
 } from "./institutional-red.js";
 import { isLucideIconName } from "./lucide-icons.js";
 
@@ -69,16 +67,12 @@ const ctaSchema = z.object({
   text: z.string().max(500).optional().or(z.literal("")),
   ctaLabel: z.string().trim().min(1).max(80),
   ctaHref: z.string().trim().min(1).max(500),
-  background: z.string().max(80).optional().or(z.literal("")),
   variant: z.enum(["emergency", "primary", "secondary", "muted"]).optional(),
 }).strip().superRefine((value, ctx) => {
-  if (isInstitutionalRed(value.background)) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["background"], message: RED_RESERVED_MESSAGE });
-  }
-  if (
-    value.variant === "emergency" &&
-    !mentionsEmergency(value.title, value.text, value.ctaLabel, value.ctaHref)
-  ) {
+  // `.strip()` descarta `background` si todavía llega de un panel viejo: el
+  // color lo define la variante y no hay override libre. Perseguir "todos los
+  // rojos" en CSS es una carrera perdida; no aceptar color arbitrario, no.
+  if (value.variant === "emergency" && !isEmergencyCta(value)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["variant"], message: EMERGENCY_VARIANT_MESSAGE });
   }
 });
@@ -141,7 +135,10 @@ const blockPropsSchemas = {
     category: z.string().trim().max(32).optional().or(z.literal("")),
   }).strip(),
   mapEmbed: z.object({
+    // Se acepta el iframe que pega el administrador; se guarda normalizado a
+    // URL (`sanitizeMapEmbed`). La salida pública publica `embedUrl`.
     embedHtml: html,
+    embedUrl: z.string().max(500).optional().or(z.literal("")),
     height: z.number().int().min(160).max(900).optional(),
     heading: z.string().max(180).optional().or(z.literal("")),
     text: z.string().max(500).optional().or(z.literal("")),

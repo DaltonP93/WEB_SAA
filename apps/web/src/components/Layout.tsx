@@ -214,6 +214,9 @@ export default function Layout({ children, settings }: Props) {
   // de Horarios: no hay una copia suelta en settings.
   const { schedules } = useSchedules();
   const emergency = get(CHANNEL_KEYS.emergencias);
+  // El rótulo sale del canal: "Emergencias 24hs" estaba escrito a mano acá y
+  // afirmaba una cobertura horaria que el sanatorio no confirmó.
+  const emergencyLabel = emergency?.label ?? "Emergencias";
   const emergencyHref = emergency ? channelHref(emergency) : undefined;
   const emergencyPhone = emergency?.value ?? null;
   const whatsapp = firstWithValue(CHANNEL_KEYS.turnos, CHANNEL_KEYS.general);
@@ -293,7 +296,7 @@ export default function Layout({ children, settings }: Props) {
             <a
               href={emergencyHref ?? "/emergencias"}
               className="btn-emergency btn-sm gap-1.5 whitespace-nowrap"
-              aria-label={emergencyPhone ? `Emergencias 24hs: ${emergencyPhone}` : "Emergencias 24hs"}
+              aria-label={emergencyPhone ? `${emergencyLabel}: ${emergencyPhone}` : emergencyLabel}
             >
               <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
                 <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.79 19.79 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.9.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z" />
@@ -339,11 +342,11 @@ export default function Layout({ children, settings }: Props) {
                   href={emergencyHref}
                   className="mt-4 inline-flex items-center gap-2 rounded bg-accent px-3 py-2 text-sm font-semibold hover:bg-accent-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white transition"
                 >
-                  Emergencias 24hs · {emergencyPhone}
+                  {emergencyLabel} · {emergencyPhone}
                 </a>
               ) : (
                 <span className="mt-4 inline-flex items-center gap-2 rounded bg-white/10 px-3 py-2 text-sm">
-                  Emergencias 24hs · número a confirmar
+                  {emergencyLabel} · número a confirmar
                 </span>
               )
             )}
@@ -503,7 +506,7 @@ export default function Layout({ children, settings }: Props) {
               onClick={() => setDrawerOpen(false)}
               className="btn-emergency btn-sm w-full text-center block"
             >
-              {emergencyPhone ? `Emergencias ${emergencyPhone}` : "Emergencias 24hs"}
+              {emergencyPhone ? `${emergencyLabel} ${emergencyPhone}` : emergencyLabel}
             </a>
           </div>
         </div>

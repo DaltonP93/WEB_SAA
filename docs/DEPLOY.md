@@ -243,10 +243,13 @@ credenciales ni datos de conexión.
 - [ ] Cargar **Horarios de atención** y activarlos (hasta entonces el sitio dice "en proceso de confirmación")
 - [ ] Crear contenido inicial (médicos) desde el admin
 
-> El panel `/admin` **no se publica sin HTTPS**: `setup-vps.sh` sólo lo expone
-> si se pasa `DOMAIN` (y emite el certificado con certbot). Para publicarlo sin
-> TLS hay que pedirlo explícitamente con `ADMIN_ALLOW_INSECURE_HTTP=1`, lo que
-> deja las credenciales del admin viajando en texto plano.
+> El panel `/admin` **no se publica sin HTTPS, y no hay forma de saltearlo**.
+> `setup-vps.sh` escribe la configuración de Nginx con `/admin` en 403 y recién
+> lo abre cuando se cumplen las tres condiciones, en este orden: certbot emitió
+> el certificado, existe un server TLS en 443 y `nginx -t` valida la
+> configuración con el panel habilitado. Si alguna falla, el snippet vuelve a
+> 403 y el deploy termina sin panel. Por HTTP, certbot deja un 301 a HTTPS, así
+> que `/admin` sobre texto plano responde siempre 301 o 403 — nunca el panel.
 
 ## Variables de entorno producción
 

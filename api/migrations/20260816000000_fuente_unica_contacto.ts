@@ -62,9 +62,42 @@ interface Snapshot {
   hadSocial: boolean;
   /** Canales que existían antes, para saber cuáles creó la migración. */
   existingChannelKeys: string[];
-  /** Valores previos de los canales que se completaron desde settings. */
-  channelValues: { key: string; value: string | null }[];
+  /**
+   * Filas completas de los canales previos.
+   *
+   * Guardar sólo `value` no alcanzaba: `up()` también puede tocar `href` y
+   * `active` de un canal social que ya existía, y `down()` los dejaba
+   * modificados. Se guarda la fila entera.
+   */
+  channels: ChannelRow[];
 }
+
+/** Columnas administrables de un canal. `id` no se restaura: no cambia. */
+interface ChannelRow {
+  key: string;
+  label: string;
+  kind: string;
+  value: string | null;
+  href: string | null;
+  note: string | null;
+  message: string | null;
+  icon: string | null;
+  active: number | boolean;
+  order: number;
+}
+
+const CHANNEL_COLUMNS = [
+  "key",
+  "label",
+  "kind",
+  "value",
+  "href",
+  "note",
+  "message",
+  "icon",
+  "active",
+  "order",
+] as const;
 
 function parseJson(value: unknown): any {
   if (typeof value !== "string") return value;
@@ -84,14 +117,16 @@ export async function up(knex: Knex): Promise<void> {
   const contact = (parseJson(contactRow?.value) ?? {}) as Record<string, unknown>;
   const social = (parseJson(socialRow?.value) ?? {}) as Record<string, unknown>;
 
-  const existing = await knex("contact_channels").select("key", "value");
+  const existing = (await knex("contact_channels").select(
+    ...CHANNEL_COLUMNS,
+  )) as unknown as ChannelRow[];
   const snapshot: Snapshot = {
     createdAt: new Date().toISOString(),
     contact,
     social,
     hadSocial: Boolean(socialRow),
-    existingChannelKeys: existing.map((c) => c.key as string),
-    channelValues: existing.map((c) => ({ key: c.key as string, value: c.value ?? null })),
+    existingChannelKeys: existing.map((c) => c.key),
+    channels: existing,
   };
 
   await knex("settings").insert({
@@ -174,9 +209,11 @@ export async function down(knex: Knex): Promise<void> {
     }
   }
 
-  // Y se devuelven los valores previos de los canales que se completaron.
-  for (const channel of snapshot.channelValues ?? []) {
-    await knex("contact_channels").where({ key: channel.key }).update({ value: channel.value });
+  // Y las filas previas vuelven completas: `up()` puede haber tocado `value`,
+  // `href` y `active` del mismo canal.
+  for (const channel of snapshot.channels ?? []) {
+    const { key, ...columns } = channel;
+    await knex("contact_channels").where({ key }).update(columns);
   }
 
   await knex("settings").where({ key: SNAPSHOT_KEY }).del();

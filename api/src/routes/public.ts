@@ -1,9 +1,10 @@
 import { Router } from "express";
 import { z } from "zod";
 import { db } from "../db.js";
-import { sanitizeHtml, stripHtml, sanitizeMapEmbed, safeLinkHref } from "../html.js";
+import { sanitizeHtml, stripHtml, mapEmbedUrl, safeLinkHref } from "../html.js";
 import { rateLimit } from "../rate-limit.js";
 import { captchaPublicConfig, verifyCaptcha } from "../captcha.js";
+import { publicChannelValues } from "../contact-values.js";
 import { badRequest, notFound } from "../http.js";
 
 export const publicRouter = Router();
@@ -39,10 +40,38 @@ const plainText = (max: number) =>
  */
 const PUBLIC_SETTING_KEYS = ["brand", "theme", "contact", "seo"];
 
+/**
+ * `contact` se sanea al salir, no sólo al guardarse.
+ *
+ * El saneo del panel no alcanza: una fila vieja —o escrita directo en la
+ * base— llega tal cual a la respuesta pública. El mapa deja de viajar como
+ * HTML: se publica únicamente la URL validada, y el enlace "Cómo llegar"
+ * pasa por la misma validación que cualquier destino administrable.
+ */
+function publicContact(value: unknown): Record<string, unknown> {
+  const raw = typeof value === "string" ? safeParse(value) : value;
+  const contact = { ...((raw ?? {}) as Record<string, unknown>) };
+  // `mapEmbed` no se publica: sólo su URL, ya validada contra Google Maps.
+  const embedUrl = mapEmbedUrl(typeof contact.mapEmbed === "string" ? contact.mapEmbed : "");
+  delete contact.mapEmbed;
+  contact.mapEmbedUrl = embedUrl;
+  contact.mapsUrl = safeLinkHref(typeof contact.mapsUrl === "string" ? contact.mapsUrl : "") ?? "";
+  if (typeof contact.address === "string") contact.address = stripHtml(contact.address);
+  return contact;
+}
+
+function safeParse(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return {};
+  }
+}
+
 publicRouter.get("/settings", async (_req, res) => {
   const rows = await db("settings").whereIn("key", PUBLIC_SETTING_KEYS).select("key", "value");
   const out: Record<string, unknown> = {};
-  for (const r of rows) out[r.key] = r.value;
+  for (const r of rows) out[r.key] = r.key === "contact" ? publicContact(r.value) : r.value;
   // No sale de la base: es configuración del entorno. Sólo el proveedor y la
   // site key —la clave secreta nunca se envía—. `null` = sin verificación, y
   // el front no dibuja ningún widget.
@@ -74,7 +103,10 @@ publicRouter.get("/pages/:slug", async (req, res) => {
       id: b.id,
       type: b.type,
       order,
-      props: sanitizeBlockProps(b.props),
+      // `props` se parsea antes de sanear: MySQL devuelve la columna JSON ya
+      // parseada pero MariaDB la devuelve como string, y sobre un string el
+      // saneo no recorre nada y el HTML sale intacto.
+      props: sanitizeBlockProps(parseJson(b.props)),
     })),
   });
 });
@@ -169,12 +201,9 @@ publicRouter.get("/contact-channels", async (_req, res) => {
     .orderBy("order")
     .orderBy("id")
     .select("id", "key", "label", "kind", "value", "note", "message", "href", "icon", "order");
-  res.json(
-    rows.map((r) => ({
-      ...r,
-      value: r.value?.trim() ? r.value.trim() : null,
-    })),
-  );
+  // Segunda capa: lo que no valide contra su `kind` no se publica. Cubre las
+  // filas que se escribieron antes de que la API validara, o directo en la base.
+  res.json(rows.map((r) => publicChannelValues(r)));
 });
 
 /**
@@ -250,7 +279,8 @@ function sanitizeBlockProps(props: unknown): unknown {
     if (typeof value === "string" && HTML_KEYS.has(key)) {
       out[key] = sanitizeHtml(value) ?? "";
     } else if (typeof value === "string" && key === "embedHtml") {
-      out[key] = sanitizeMapEmbed(value);
+      // El bloque publica la URL, no el iframe: el front no inserta HTML.
+      out.embedUrl = mapEmbedUrl(value);
     } else if (typeof value === "string" && LINK_KEYS.has(key)) {
       out[key] = safeLinkHref(value) ?? "";
     } else {

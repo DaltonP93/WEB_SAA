@@ -1,4 +1,5 @@
 import axios from "axios";
+import { isApprovedThemeColor } from "@sa/shared/institutional-red";
 
 export const api = axios.create({ baseURL: "/api" });
 
@@ -89,23 +90,40 @@ function applyScale(r: CSSStyleDeclaration, prefix: string, base: string | undef
   }
 }
 
+/**
+ * Sólo se aplican colores de la paleta institucional.
+ *
+ * Tercera capa: el panel ofrece nada más los aprobados y la API rechaza el
+ * resto, pero una fila vieja —o escrita fuera de la API— podía repintar el
+ * sitio entero, incluido el rojo que identifica a Emergencias. Lo que no está
+ * en la paleta se ignora y queda el valor de `styles.css`.
+ */
+function approved(slot: string, value: unknown): string | undefined {
+  return isApprovedThemeColor(slot, value) ? (value as string) : undefined;
+}
+
 export function applyTheme(theme: any) {
   if (!theme) return;
   const r = document.documentElement.style;
-  if (theme.primary) {
-    r.setProperty("--c-primary", hex(theme.primary));
-    applyScale(r, "--c-primary", theme.primary, "#005587");
+  const primary = approved("primary", theme.primary);
+  const secondary = approved("secondary", theme.secondary);
+  const accent = approved("accent", theme.accent);
+  if (primary) {
+    r.setProperty("--c-primary", hex(primary));
+    applyScale(r, "--c-primary", primary, "#005587");
   }
-  if (theme.secondary) {
-    r.setProperty("--c-secondary", hex(theme.secondary));
-    applyScale(r, "--c-secondary", theme.secondary, "#00b5da");
+  if (secondary) {
+    r.setProperty("--c-secondary", hex(secondary));
+    applyScale(r, "--c-secondary", secondary, "#00b5da");
   }
-  if (theme.accent) {
-    r.setProperty("--c-accent", hex(theme.accent));
-    applyScale(r, "--c-accent", theme.accent, "#f5543f");
+  if (accent) {
+    r.setProperty("--c-accent", hex(accent));
+    applyScale(r, "--c-accent", accent, "#f5543f");
   }
-  if (theme.bg) r.setProperty("--c-bg", hex(theme.bg));
-  if (theme.text) r.setProperty("--c-text", hex(theme.text));
+  const bg = approved("bg", theme.bg);
+  const text = approved("text", theme.text);
+  if (bg) r.setProperty("--c-bg", hex(bg));
+  if (text) r.setProperty("--c-text", hex(text));
   if (theme.fontHeading) r.setProperty("--f-heading", `"${theme.fontHeading}"`);
   if (theme.fontBody) r.setProperty("--f-body", `"${theme.fontBody}"`);
   if (theme.radius) r.setProperty("--radius", theme.radius);

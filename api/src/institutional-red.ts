@@ -97,40 +97,144 @@ function isRedRgb([r, g, b]: Rgb): boolean {
  * revisa cada token de color por separado para que una parada roja dentro de
  * un degradado tampoco pase.
  */
+/** `hsl(0 90% 60%)` / `hsla(350,90%,60%,.8)` → RGB aproximado. */
+function fromHsl(token: string): Rgb | null {
+  const m = /^hsla?\(([^)]+)\)$/.exec(token);
+  if (!m) return null;
+  const parts = m[1].split(/[\s,/]+/).filter(Boolean);
+  if (parts.length < 3) return null;
+  let h = parseFloat(parts[0]);
+  if (Number.isNaN(h)) return null;
+  if (/turn$/.test(parts[0])) h *= 360;
+  else if (/rad$/.test(parts[0])) h = (h * 180) / Math.PI;
+  const sat = parseFloat(parts[1]) / 100;
+  const light = parseFloat(parts[2]) / 100;
+  if (Number.isNaN(sat) || Number.isNaN(light)) return null;
+  h = ((h % 360) + 360) % 360;
+  const c = (1 - Math.abs(2 * light - 1)) * sat;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m2 = light - c / 2;
+  const [r, g, b] =
+    h < 60 ? [c, x, 0] :
+    h < 120 ? [x, c, 0] :
+    h < 180 ? [0, c, x] :
+    h < 240 ? [0, x, c] :
+    h < 300 ? [x, 0, c] : [c, 0, x];
+  return [(r + m2) * 255, (g + m2) * 255, (b + m2) * 255];
+}
+
+/**
+ * `oklch()` y `color-mix()` no se intentan convertir.
+ *
+ * Convertir oklch bien exige el pipeline completo de color; y `color-mix()`
+ * depende de lo que haya adentro. En vez de aproximar mal, se tratan como
+ * sospechosos: un color administrable no necesita esas sintaxis, así que
+ * rechazarlas es más seguro que interpretarlas.
+ */
+const OPAQUE_SYNTAX = /\b(oklch|oklab|lch|lab|color-mix|color)\s*\(/i;
+
 export function isInstitutionalRed(value: string | undefined | null): boolean {
   if (!value) return false;
   const text = value.toLowerCase();
+  if (OPAQUE_SYNTAX.test(text)) return true;
   const tokens = [
     ...(text.match(/#[0-9a-f]{3,8}\b/g) ?? []),
     ...(text.match(/rgba?\([^)]*\)/g) ?? []),
+    ...(text.match(/hsla?\([^)]*\)/g) ?? []),
     ...(text.match(/[a-z]+/g) ?? []).filter((w) => NAMED_REDS.has(w)),
   ];
   for (const token of tokens) {
     if (NAMED_REDS.has(token)) return true;
-    const rgb = token.startsWith("#") ? fromHex(token) : fromFunctional(token);
+    const rgb = token.startsWith("#")
+      ? fromHex(token)
+      : token.startsWith("hsl")
+        ? fromHsl(token)
+        : fromFunctional(token);
     if (rgb && rgb.every((n) => Number.isFinite(n)) && isRedRgb(rgb)) return true;
   }
   return false;
 }
 
-/**
- * ¿El bloque habla de Emergencias?
- *
- * Se compara sin tildes ni mayúsculas para que "Emergencias", "emergencia" y
- * "EMERGENCIAS 24" pasen igual, y se acepta también un destino `/emergencias`.
- */
-export function mentionsEmergency(...parts: (string | undefined | null)[]): boolean {
-  const text = parts
+function normalizeText(parts: (string | undefined | null)[]): string {
+  return parts
     .filter(Boolean)
     .join(" ")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase();
-  return /emergenc|urgenc/.test(text);
+}
+
+/**
+ * ¿El texto habla de Emergencias?
+ *
+ * Sólo "emergencia(s)". Antes también valía "urgencia", que aparece en
+ * descripciones de cualquier servicio ("cirugías de urgencia") y alcanzaba
+ * para pedir el rojo desde un bloque que no era de Emergencias.
+ */
+export function mentionsEmergency(...parts: (string | undefined | null)[]): boolean {
+  return /emergenc/.test(normalizeText(parts));
+}
+
+/** Destino canónico de Emergencias. */
+export const EMERGENCY_HREF = "/emergencias";
+
+/**
+ * ¿El CTA es realmente de Emergencias?
+ *
+ * Hacen falta las dos cosas: que apunte a `/emergencias` y que el texto lo
+ * diga. Con sólo una, cualquier bloque que mencionara la palabra podía pedir
+ * el rojo institucional.
+ */
+export function isEmergencyCta(props: {
+  title?: string | null;
+  text?: string | null;
+  ctaLabel?: string | null;
+  ctaHref?: string | null;
+}): boolean {
+  const href = (props.ctaHref ?? "").trim().toLowerCase().replace(/\/+$/, "");
+  if (href !== EMERGENCY_HREF) return false;
+  return mentionsEmergency(props.title, props.text, props.ctaLabel);
 }
 
 /** Mensajes usados por los schemas (duplicados en la API). */
 export const RED_RESERVED_MESSAGE =
   "El rojo institucional está reservado para Emergencias: no se puede cargar como fondo.";
 export const EMERGENCY_VARIANT_MESSAGE =
-  "La variante 'emergency' sólo se permite en bloques de Emergencias.";
+  "La variante 'emergency' requiere que el CTA apunte a /emergencias y que su texto hable de Emergencias.";
+
+/**
+ * Paleta institucional: los únicos colores que el panel puede elegir.
+ *
+ * Reconocer "todos los rojos posibles" es una carrera perdida: siempre queda
+ * una sintaxis nueva (`oklch`, `color-mix`, un espacio de color futuro). Con
+ * una allowlist el problema se invierte — lo que no está listado no entra— y
+ * además protege la identidad de marca, que es lo que la regla busca en
+ * primer lugar.
+ *
+ * `accent` es el rojo de Emergencias y por eso no es configurable: cambiarlo
+ * sería pintar de otro color el único elemento que debe destacarse.
+ */
+export const THEME_PALETTE: Record<string, readonly string[]> = {
+  // Adventist Health: Pantone 7462 C.
+  primary: ["#005587"],
+  // Adventist Health: Pantone 311 C.
+  secondary: ["#00b5da"],
+  // Rojo de Emergencias. No se cambia.
+  accent: ["#f5543f"],
+  bg: ["#ffffff", "#f9fafb"],
+  text: ["#1a1a1a", "#111827"],
+};
+
+/** Slots de `settings.theme` que son colores (el resto son fuentes y radios). */
+export const THEME_COLOR_KEYS = Object.keys(THEME_PALETTE);
+
+/** ¿El color está aprobado para ese slot del tema? */
+export function isApprovedThemeColor(slot: string, value: unknown): boolean {
+  const allowed = THEME_PALETTE[slot];
+  if (!allowed) return true; // no es un slot de color
+  if (typeof value !== "string") return false;
+  return allowed.includes(value.trim().toLowerCase());
+}
+
+export const THEME_COLOR_MESSAGE =
+  "color fuera de la paleta institucional: elegí uno de los aprobados para ese campo";

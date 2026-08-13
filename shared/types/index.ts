@@ -143,10 +143,6 @@ export interface SiteSettings {
     description: string;
     ogImage?: string;
   };
-  scripts: {
-    head?: string;
-    bodyEnd?: string;
-  };
 }
 
 export interface Page {

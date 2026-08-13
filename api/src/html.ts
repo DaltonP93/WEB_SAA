@@ -34,7 +34,10 @@ const BASE_OPTIONS: sanitizeHtmlLib.IOptions = {
     th: ["colspan", "rowspan", "scope"],
     td: ["colspan", "rowspan"],
     col: ["span"],
-    "*": ["class"],
+    // Sin `class` libre: una clase arbitraria puede pintar cualquier cosa con
+    // el CSS del sitio (incluido `text-accent-*`, el rojo de Emergencias) sin
+    // pasar por ninguna validación de color. El contenido administrable no
+    // necesita elegir clases; el estilo lo pone el bloque.
   },
   allowedSchemes: ALLOWED_SCHEMES,
   allowedSchemesByTag: { img: ["http", "https"] },
@@ -145,24 +148,41 @@ const MAP_HOSTS = new Set([
   "google.com.py",
 ]);
 
+/** `srcdoc` o cualquier `onalgo=`: el valor guardado fue manipulado. */
+const TAMPERED_EMBED = /\bsrcdoc\s*=|\son[a-z]+\s*=/i;
+
 /**
- * Saneo del único iframe permitido en todo el sitio: el mapa.
+ * URL de mapa válida, que es lo **único** que viaja al navegador.
  *
- * Se extrae el `src`, se valida host y ruta contra Google Maps y se
- * **reconstruye** el iframe con atributos fijos. Nada del HTML original
- * sobrevive, así que no hay forma de colar `srcdoc`, `onload` ni otro iframe.
+ * Acepta las dos formas en que llega el dato: el `<iframe>` que copia y pega
+ * quien administra el sitio, o una URL suelta. De cualquiera de las dos se
+ * extrae la URL, se valida host y ruta contra Google Maps, y se devuelve sólo
+ * eso. El HTML original no sobrevive en ninguna forma.
+ *
+ * Antes la salida pública era un iframe reconstruido y el front lo insertaba
+ * con `dangerouslySetInnerHTML`. El saneo era correcto para lo que se guardaba
+ * desde el panel, pero un valor viejo —o escrito directo en la base— llegaba
+ * crudo hasta ese `innerHTML`. Con una URL no hay HTML que insertar: el front
+ * arma el `<iframe>` con atributos fijos.
  */
-export function sanitizeMapEmbed(value: string | null | undefined): string {
+export function mapEmbedUrl(value: string | null | undefined): string {
   if (!value) return "";
-  const raw = String(value);
+  const raw = String(value).trim();
 
+  // Un iframe con `srcdoc` o con manejadores de evento no es un pegado de
+  // Google Maps: es una fila manipulada. No se le extrae nada, se descarta
+  // entero aunque el `src` que traiga parezca legítimo.
+  if (TAMPERED_EMBED.test(raw)) return "";
+
+  // `<iframe … src="…">` o la URL sola.
   const srcMatch = raw.match(/<iframe[^>]*\ssrc\s*=\s*["']([^"']+)["']/i);
-  if (!srcMatch) return "";
+  const candidate = (srcMatch ? srcMatch[1] : raw).replace(/&amp;/g, "&").trim();
+  // Un valor que trae HTML sin ser un iframe con src no se intenta interpretar.
+  if (!srcMatch && /[<>]/.test(candidate)) return "";
 
-  const src = srcMatch[1].replace(/&amp;/g, "&").trim();
   let url: URL;
   try {
-    url = new URL(src);
+    url = new URL(candidate);
   } catch {
     return "";
   }
@@ -175,15 +195,14 @@ export function sanitizeMapEmbed(value: string | null | undefined): string {
   if (!url.pathname.startsWith("/maps/embed") && url.searchParams.get("output") !== "embed") {
     return "";
   }
+  return url.toString();
+}
 
-  const height = Number(raw.match(/height\s*=\s*["'](\d+)["']/i)?.[1] ?? 450);
-  const safeHeight = Number.isFinite(height) ? Math.min(Math.max(height, 160), 900) : 450;
-
-  return (
-    `<iframe src="${url.toString().replace(/"/g, "&quot;")}" ` +
-    `width="100%" height="${safeHeight}" style="border:0;" ` +
-    `loading="lazy" referrerpolicy="no-referrer-when-downgrade" ` +
-    `sandbox="allow-scripts allow-same-origin allow-popups" ` +
-    `title="Mapa de ubicación"></iframe>`
-  );
+/**
+ * Normaliza lo que se guarda desde el panel: si el valor es un mapa válido se
+ * conserva la URL, si no queda vacío. Se usa al escribir; la salida pública
+ * vuelve a pasar por `mapEmbedUrl()` para cubrir lo que ya estaba en la base.
+ */
+export function sanitizeMapEmbed(value: string | null | undefined): string {
+  return mapEmbedUrl(value);
 }

@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api";
 import type { ContactChannel, Schedule } from "@sa/shared";
+import { isValidChannelUrl, isValidChannelValue } from "@sa/shared/contact-values";
 
 /**
  * Canales de contacto: fuente única (tabla `contact_channels`, administrable
@@ -57,16 +58,18 @@ export function waDigits(value: string): string {
  */
 export function channelHref(channel: Pick<ContactChannel, "kind" | "value" | "message" | "href">): string | undefined {
   if (channel.kind === "url") {
+    // Tercera capa: la API valida al guardar y al publicar, pero el destino de
+    // un <a href> no se toma de la respuesta sin volver a mirarlo.
     const href = channel.href?.trim();
-    return href || undefined;
+    return href && isValidChannelUrl(href) ? href : undefined;
   }
 
   const value = channel.value?.trim();
   if (!value) return undefined;
+  if (!isValidChannelValue(channel.kind, value)) return undefined;
 
   if (channel.kind === "email") {
-    // Un correo mal cargado no debe generar un mailto: roto.
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) ? `mailto:${value}` : undefined;
+    return `mailto:${value}`;
   }
 
   if (channel.kind === "whatsapp") {

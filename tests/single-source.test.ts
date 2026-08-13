@@ -58,6 +58,25 @@ describe("el front no lee datos de contacto desde settings", () => {
     expect(offenders).toEqual([]);
   });
 
+  it("el panel ya no ofrece cargar scripts personalizados", () => {
+    // El formulario prometía algo que la API nunca guardaba, y lo que prometía
+    // era inyectar JavaScript arbitrario en el sitio. Meta Pixel, Google Ads y
+    // Analytics van a entrar por módulos propios.
+    const page = read("apps/admin/src/pages/SettingsPage.tsx");
+    expect(page).not.toMatch(/scripts/i);
+    expect(page).not.toMatch(/headScripts|bodyEnd/);
+
+    const files = import.meta.glob("../apps/admin/src/**/*.{ts,tsx}", {
+      query: "?raw",
+      import: "default",
+      eager: true,
+    }) as Record<string, string>;
+    const offenders = Object.entries(files)
+      .filter(([, source]) => /settings\??\.scripts\b|"scripts"|'scripts'/.test(source))
+      .map(([path]) => path);
+    expect(offenders).toEqual([]);
+  });
+
   it("el pie, el header y el JSON-LD leen de los canales y los horarios", () => {
     const layout = read("apps/web/src/components/Layout.tsx");
     expect(layout).toContain("useContactChannels");
@@ -220,6 +239,25 @@ describeDb("un cambio en la tabla llega a todos los consumidores", () => {
       body: JSON.stringify({ social: { facebook: "https://facebook.com/otro" } }),
     });
     expect(await db("settings").where({ key: "social" }).first()).toBeUndefined();
+  });
+
+  it("la clave scripts tampoco se puede escribir", async () => {
+    // El panel ofrecía "Scripts personalizados" y la API los vaciaba siempre:
+    // se guardaba, decía "Guardado" y no quedaba nada. Ahora el campo no está
+    // y la clave se rechaza explícitamente.
+    const direct = await fetch(`${baseUrl}/api/admin/settings/scripts`, {
+      method: "PUT",
+      headers: auth(),
+      body: JSON.stringify({ head: "<script>alert(1)</script>", bodyEnd: "" }),
+    });
+    expect(direct.status).toBe(410);
+
+    await fetch(`${baseUrl}/api/admin/settings`, {
+      method: "PUT",
+      headers: auth(),
+      body: JSON.stringify({ scripts: { head: "<script>alert(1)</script>" } }),
+    });
+    expect(await db("settings").where({ key: "scripts" }).first()).toBeUndefined();
   });
 
   it("los ajustes públicos no filtran los snapshots de las migraciones", async () => {

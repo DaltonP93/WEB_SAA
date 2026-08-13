@@ -97,37 +97,122 @@ describe("configurada", () => {
   });
 });
 
-describe("configuración a medias", () => {
-  it("avisa si hay site key pero no secreto: el servidor no verificaría nada", () => {
-    process.env.CAPTCHA_PROVIDER = "turnstile";
-    process.env.CAPTCHA_SITE_KEY = "site-key";
+/**
+ * Todas las combinaciones posibles de las tres variables.
+ *
+ * La regla es una sola: o están las tres y son válidas, o la verificación
+ * queda desactivada. Nunca un estado intermedio en el que el backend exija un
+ * token que el front no puede obtener —ahí el formulario deja de poder
+ * enviarse—, ni uno en el que el visitante resuelva un desafío que el servidor
+ * no verifica.
+ */
+describe("matriz de configuración", () => {
+  const P = "CAPTCHA_PROVIDER";
+  const S = "CAPTCHA_SITE_KEY";
+  const K = "CAPTCHA_SECRET_KEY";
+
+  type Case = {
+    name: string;
+    env: Partial<Record<typeof P | typeof S | typeof K, string>>;
+    enabled: boolean;
+    /** Fragmentos que el aviso tiene que nombrar; `[]` = no debe avisar. */
+    warns: string[];
+  };
+
+  const cases: Case[] = [
+    { name: "ninguna variable", env: {}, enabled: false, warns: [] },
+
+    { name: "sólo el proveedor", env: { [P]: "turnstile" }, enabled: false, warns: [S, K, "DESACTIVADA"] },
+    { name: "sólo la site key", env: { [S]: "site" }, enabled: false, warns: [P, K, "DESACTIVADA"] },
+    { name: "sólo el secreto", env: { [K]: "secreto" }, enabled: false, warns: [P, S, "DESACTIVADA"] },
+
+    {
+      name: "proveedor + site key (el servidor no verificaría nada)",
+      env: { [P]: "turnstile", [S]: "site" },
+      enabled: false,
+      warns: [K, "DESACTIVADA"],
+    },
+    {
+      name: "proveedor + secreto (nadie podría enviar el formulario)",
+      env: { [P]: "turnstile", [K]: "secreto" },
+      enabled: false,
+      warns: [S, "DESACTIVADA"],
+    },
+    {
+      name: "site key + secreto sin proveedor",
+      env: { [S]: "site", [K]: "secreto" },
+      enabled: false,
+      warns: [P, "DESACTIVADA"],
+    },
+
+    {
+      name: "proveedor inválido con las dos claves",
+      env: { [P]: "inventado", [S]: "site", [K]: "secreto" },
+      enabled: false,
+      warns: ["no es válido"],
+    },
+    {
+      name: "proveedor inválido y nada más",
+      env: { [P]: "inventado" },
+      enabled: false,
+      warns: ["no es válido"],
+    },
+    {
+      name: "las tres, con proveedor válido",
+      env: { [P]: "turnstile", [S]: "site", [K]: "secreto" },
+      enabled: true,
+      warns: [],
+    },
+    {
+      name: "las tres, con recaptcha",
+      env: { [P]: "recaptcha", [S]: "site", [K]: "secreto" },
+      enabled: true,
+      warns: [],
+    },
+    {
+      name: "las tres pero en blanco",
+      env: { [P]: "  ", [S]: " ", [K]: "  " },
+      enabled: false,
+      warns: [],
+    },
+  ];
+
+  it.each(cases)("$name", async ({ env, enabled, warns }) => {
+    Object.assign(process.env, env);
+
+    expect(captchaEnabled()).toBe(enabled);
+    // El front sólo dibuja el widget si la config está completa.
+    expect(captchaPublicConfig() !== null).toBe(enabled);
+
     const warn = vi.fn();
     warnIfCaptchaMisconfigured({ warn });
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("NO verifica"));
-    // Y mientras tanto la verificación queda desactivada, no rota.
-    expect(captchaEnabled()).toBe(false);
+    if (warns.length === 0) {
+      expect(warn).not.toHaveBeenCalled();
+    } else {
+      for (const fragment of warns) {
+        expect(warn, `el aviso no nombra ${fragment}`).toHaveBeenCalledWith(
+          expect.stringContaining(fragment),
+        );
+      }
+    }
+
+    // Lo que no puede pasar en ninguna combinación: que el formulario quede
+    // imposible de enviar. Sin verificación activa, un envío sin token pasa.
+    if (!enabled) {
+      expect(await verifyCaptcha(undefined)).toBe(true);
+    } else {
+      expect(await verifyCaptcha(undefined)).toBe(false);
+    }
   });
 
-  it("avisa si hay secreto pero no site key: nadie podría enviar el formulario", () => {
-    process.env.CAPTCHA_PROVIDER = "turnstile";
-    process.env.CAPTCHA_SECRET_KEY = "secreto";
+  it("el secreto nunca aparece en lo que se publica ni en el aviso", () => {
+    process.env[P] = "turnstile";
+    process.env[S] = "site";
+    process.env[K] = "secreto-que-no-debe-salir";
     const warn = vi.fn();
     warnIfCaptchaMisconfigured({ warn });
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("falta CAPTCHA_SITE_KEY"));
-    // Con secreto y sin site key el front no puede mostrar el widget.
-    expect(captchaPublicConfig()).toBeNull();
-  });
-
-  it("avisa si el proveedor no es válido", () => {
-    process.env.CAPTCHA_PROVIDER = "inventado";
-    process.env.CAPTCHA_SECRET_KEY = "secreto";
-    process.env.CAPTCHA_SITE_KEY = "site-key";
-    const warn = vi.fn();
-    warnIfCaptchaMisconfigured({ warn });
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("no es válido"));
-    expect(captchaEnabled()).toBe(false);
-    // Y sin verificación activa los formularios siguen funcionando.
-    expect(captchaPublicConfig()).toBeNull();
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("secreto-que-no-debe-salir");
+    expect(JSON.stringify(captchaPublicConfig())).not.toContain("secreto-que-no-debe-salir");
   });
 });
 

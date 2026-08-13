@@ -107,13 +107,30 @@ describe("isSafeLinkHref", () => {
 });
 
 describe("sanitizeMapEmbed", () => {
-  it("acepta el embed oficial de Google Maps y lo reconstruye", () => {
+  it("del iframe se queda sólo con la URL: no devuelve HTML", () => {
     const input =
-      '<iframe src="https://www.google.com/maps/embed?pb=!1m18!1m12" width="600" height="450" onload="alert(1)"></iframe>';
+      '<iframe src="https://www.google.com/maps/embed?pb=!1m18!1m12" width="600" height="450" loading="lazy"></iframe>';
     const out = sanitizeMapEmbed(input);
-    expect(out).toContain("https://www.google.com/maps/embed?pb=");
-    expect(out).not.toContain("onload");
-    expect(out).toContain("sandbox=");
+    expect(out).toBe("https://www.google.com/maps/embed?pb=!1m18!1m12");
+    // Nada de HTML sobrevive: el front arma el iframe con atributos fijos.
+    expect(out).not.toContain("<");
+  });
+
+  it("un iframe con manejadores de evento se descarta entero", () => {
+    // No se le extrae el src: un `onload` es señal de que el valor fue
+    // manipulado, y no hay razón para rescatar nada de ahí.
+    expect(
+      sanitizeMapEmbed(
+        '<iframe src="https://www.google.com/maps/embed?pb=!1m18" onload="alert(1)"></iframe>',
+      ),
+    ).toBe("");
+    expect(sanitizeMapEmbed('<iframe srcdoc="<script>alert(1)</script>"></iframe>')).toBe("");
+  });
+
+  it("acepta la URL sola, sin iframe", () => {
+    expect(sanitizeMapEmbed("https://www.google.com/maps/embed?pb=!1m18")).toBe(
+      "https://www.google.com/maps/embed?pb=!1m18",
+    );
   });
 
   it("acepta el formato legacy con output=embed", () => {
@@ -130,6 +147,8 @@ describe("sanitizeMapEmbed", () => {
     ["ruta que no es embed", '<iframe src="https://www.google.com/search?q=x"></iframe>'],
     ["sin output=embed", '<iframe src="https://maps.google.com/maps?q=x"></iframe>'],
     ["no es iframe", '<script>alert(1)</script>'],
+    ["HTML suelto sin src", '<div onclick="alert(1)">mapa</div>'],
+    ["iframe con srcdoc y sin src", '<iframe srcdoc="<img src=x onerror=alert(1)>"></iframe>'],
   ];
 
   it.each(rejected)("rechaza: %s", (_name, input) => {

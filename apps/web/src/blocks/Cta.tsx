@@ -1,6 +1,5 @@
 import { Link } from "react-router-dom";
 import type { CtaProps } from "@sa/shared/blocks";
-import { isInstitutionalRed } from "@sa/shared/institutional-red";
 import LucideIcon from "../components/LucideIcon";
 import { isInternalHref, safeInternalHref } from "../lib/url";
 
@@ -23,25 +22,20 @@ const VARIANT_BTN: Record<Variant, string> = {
 export default function Cta(p: CtaProps) {
   /*
    * El rojo institucional es exclusivo de Emergencias y sólo lo enciende
-   * `variant: "emergency"`. Cualquier otro valor (incluida la variante
-   * histórica "accent" que quedó en contenido viejo) cae en primary. El
-   * schema ya rechaza un `background` rojo; acá se vuelve a filtrar por si
-   * la fila viene de antes de esa validación.
+   * `variant: "emergency"`. Cualquier otro valor —incluida la variante
+   * histórica "accent" que quedó en contenido viejo— cae en primary. No hay
+   * override de color: el `background` libre se retiró.
    */
   const requested = p.variant as string | undefined;
   const variant: Variant = requested && requested in VARIANT_BG ? (requested as Variant) : "primary";
   const sectionBg = VARIANT_BG[variant];
   const btnClass = VARIANT_BTN[variant];
-  const background = p.background && !isInstitutionalRed(p.background) ? p.background : undefined;
   const href = p.ctaHref ?? "#";
   const isInternal = isInternalHref(href);
   const linkClass = `px-6 py-3 rounded font-semibold transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 whitespace-nowrap ${btnClass}`;
 
   return (
-    <section
-      className={`${sectionBg} section-y-md`}
-      style={background ? { background } : undefined}
-    >
+    <section className={`${sectionBg} section-y-md`}>
       <div className="container-x flex flex-col md:flex-row items-center justify-between gap-4">
         <div className="flex items-start gap-3">
           {variant === "emergency" && (

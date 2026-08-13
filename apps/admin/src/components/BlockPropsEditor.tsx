@@ -1,6 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
 import type { BlockType } from "@sa/shared/blocks";
-import { RED_RESERVED_MESSAGE, isInstitutionalRed } from "@sa/shared/institutional-red";
 import { api } from "../api";
 import IconPicker from "./IconPicker";
 
@@ -117,7 +116,8 @@ const SCHEMAS: Record<BlockType, FieldDef[]> = {
   mapEmbed: [
     { key: "heading", label: "Encabezado", kind: "text" },
     { key: "text", label: "Texto (dirección, referencias)", kind: "textarea" },
-    { key: "embedHtml", label: "HTML del iframe", kind: "textarea" },
+    { key: "embedHtml", label: "Mapa de Google", kind: "textarea",
+      help: "Pegá el iframe que da Google Maps (Compartir → Insertar un mapa) o la URL sola. Se guarda sólo la URL: el sitio arma el mapa por su cuenta." },
     { key: "directionsUrl", label: "Link \"Cómo llegar\"", kind: "url" },
     { key: "height", label: "Alto (px)", kind: "number" },
   ],
@@ -168,8 +168,7 @@ const SCHEMAS: Record<BlockType, FieldDef[]> = {
       { label: "Secundario", value: "secondary" },
       { label: "Suave", value: "muted" },
       { label: "Emergencias (rojo)", value: "emergency" },
-    ], help: "El rojo es exclusivo de Emergencias: la variante sólo se guarda si el bloque habla de Emergencias." },
-    { key: "background", label: "Color/Background (override)", kind: "color", help: "No admite el rojo institucional, reservado para Emergencias." },
+    ], help: "El rojo es exclusivo de Emergencias: sólo se guarda si el CTA apunta a /emergencias y su texto lo dice." },
   ],
   stats: [
     { key: "heading", label: "Encabezado", kind: "text" },
@@ -304,9 +303,6 @@ export default function BlockPropsEditor({ type, props, onChange }: { type: Bloc
           <label className="label">{f.label}</label>
           <Field def={f} value={props?.[f.key]} onChange={(v) => onChange({ ...props, [f.key]: v })} />
           {f.help && <p className="mt-1 text-xs text-gray-500">{f.help}</p>}
-          {f.kind === "color" && isInstitutionalRed(props?.[f.key]) && (
-            <p className="mt-1 text-xs font-medium text-red-700">{RED_RESERVED_MESSAGE}</p>
-          )}
         </div>
       ))}
     </div>
