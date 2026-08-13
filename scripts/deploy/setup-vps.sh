@@ -46,20 +46,14 @@ env_value() {
 DB_PASS="${DB_PASS:-$(env_value DB_PASS)}"
 DB_PASS="${DB_PASS:-$(openssl rand -base64 24 | tr -d '/+=' | head -c 24)}"
 JWT_SECRET="${JWT_SECRET:-$(env_value JWT_SECRET)}"
-JWT_SECRET="${JWT_SECRET:-$(openssl rand -base64 48 | tr -d '/+=' | head -c 48)}"
 
 ADMIN_EMAIL="${ADMIN_EMAIL:-admin@sanatorio.local}"
-# Nunca hardcodear una contraseña: si no viene por entorno se genera una al azar
-# y se guarda en un archivo sólo-root. No se imprime en pantalla ni en logs.
-# Si ya hay una en api/.env, esa manda: es la que corresponde al usuario que
-# realmente existe en la base.
-ADMIN_PASS="${ADMIN_PASS:-$(env_value SEED_ADMIN_PASSWORD)}"
-if [ -z "$ADMIN_PASS" ]; then
-  ADMIN_PASS="$(openssl rand -base64 24 | tr -d '/+=' | head -c 20)"
-  ADMIN_PASS_GENERATED=1
-else
-  ADMIN_PASS_GENERATED=0
-fi
+# La contraseña del admin NO se decide acá.
+#
+# Generarla antes de saber si va a haber seed dejaba anotada —en `.env` y en
+# `.deploy-credentials`— una credencial que no correspondía a ningún usuario.
+# Lo resuelve `prepare-env.sh`, después de consultar el estado de la base:
+# sólo se genera si el seed va a crear el usuario.
 ADMIN_NAME="${ADMIN_NAME:-Administrador}"
 CREDENTIALS_FILE="${APP_DIR}/.deploy-credentials"
 
@@ -128,68 +122,49 @@ else
   cd "$APP_DIR"
 fi
 
-# --- 6. Configurar .env ---------------------------------------------------
-log "6/9  Escribiendo api/.env"
-cat > "${APP_DIR}/api/.env" <<EOF
-PORT=4000
-NODE_ENV=production
-
-DB_HOST=127.0.0.1
-DB_PORT=3306
-DB_USER=${DB_USER}
-DB_PASS=${DB_PASS}
-DB_NAME=${DB_NAME}
-
-JWT_SECRET=${JWT_SECRET}
-JWT_EXPIRES_IN=7d
-
-UPLOAD_DIR=${APP_DIR}/api/uploads
-MAX_UPLOAD_MB=10
-
-CORS_ORIGINS=${SITE_ORIGIN}
-PUBLIC_BASE_URL=${SITE_ORIGIN}
-PUBLIC_SITE_URL=${SITE_ORIGIN}
-
-SEED_ADMIN_EMAIL=${ADMIN_EMAIL}
-SEED_ADMIN_PASSWORD=${ADMIN_PASS}
-SEED_ADMIN_NAME=${ADMIN_NAME}
-EOF
-chmod 600 "${APP_DIR}/api/.env"
-
-# --- 7. Install, migrate, seed, build -------------------------------------
-log "7/9  Instalando deps + migrando DB + build de los 3 paquetes"
+# --- 6. Instalar dependencias ---------------------------------------------
+log "6/9  Instalando dependencias"
 cd "$APP_DIR"
 # Falla ruidosamente: un install no congelado deja el server con dependencias
 # distintas a las auditadas.
 pnpm install --frozen-lockfile || die "pnpm install --frozen-lockfile falló. Revisá que pnpm-lock.yaml esté commiteado y actualizado; no se instala sin lockfile congelado."
 
-# La decisión de sembrar mira la BASE, no un archivo.
+# --- 7. Estado de la base, .env, migrar, sembrar, build --------------------
 #
-# Antes alcanzaba con que faltara `${APP_DIR}/.seeded` para volver a sembrar,
-# y los seeds arrancan borrando usuarios, ajustes, médicos, especialidades,
-# servicios, estudios, páginas y bloques. Un marker perdido —un rsync, un
-# `rm -rf` del directorio, un servidor reinstalado contra la misma base— se
-# llevaba puesto todo lo que el sanatorio hubiera cargado desde el panel.
+# El orden importa y es este:
 #
-# Se comprueba ANTES de migrar: si hay conflicto, la base queda intacta.
+#   1. se consulta el estado de la base (`db-state.mjs`), ANTES de migrar y
+#      antes de escribir una sola credencial. La decisión de sembrar mira la
+#      base, no un archivo: los seeds arrancan borrando usuarios, ajustes,
+#      médicos, especialidades, servicios, estudios, páginas y bloques, y un
+#      marker perdido se llevaba puesto todo lo cargado desde el panel;
+#   2. recién con esa respuesta se decide la contraseña del admin y se escribe
+#      `api/.env`. Generarla antes dejaba anotada una credencial que no
+#      correspondía a ningún usuario cuando el seed no llegaba a correr.
+#
+# Las dos cosas viven en `prepare-env.sh` para poder probarlas sin un VPS.
+log "7/9  Estado de la base + api/.env"
 SEED_MARKER="${APP_DIR}/.seeded"
-log "    Verificando el estado de la base antes de migrar"
 set +e
-DB_STATE="$(DB_HOST=127.0.0.1 DB_PORT=3306 DB_USER="$DB_USER" DB_PASS="$DB_PASS" DB_NAME="$DB_NAME" \
-  SEED_MARKER="$SEED_MARKER" node scripts/deploy/db-state.mjs)"
-DB_STATE_CODE=$?
+PREPARE_OUT="$(APP_DIR="$APP_DIR" REPO_ROOT="$APP_DIR" \
+  DB_HOST=127.0.0.1 DB_PORT=3306 DB_NAME="$DB_NAME" DB_USER="$DB_USER" DB_PASS="$DB_PASS" \
+  JWT_SECRET="$JWT_SECRET" ADMIN_EMAIL="$ADMIN_EMAIL" ADMIN_NAME="$ADMIN_NAME" \
+  ADMIN_PASS="${ADMIN_PASS:-}" SITE_ORIGIN="$SITE_ORIGIN" SEED_MARKER="$SEED_MARKER" \
+  bash scripts/deploy/prepare-env.sh)"
+PREPARE_CODE=$?
 set -e
+[ "$PREPARE_CODE" -eq 0 ] || die "no se sigue: la base tiene contenido y no se puede confirmar que sea seguro sembrar (código ${PREPARE_CODE}). El detalle está arriba. No se escribió ninguna credencial."
+# Sólo tres líneas `CLAVE=valor`; la contraseña no viaja por stdout.
+eval "$PREPARE_OUT"
+
 case "$DB_STATE" in
   nueva)         log "    Base vacía → se migra y se siembra" ;;
-  actualizacion) log "    Base con contenido → se migra, NO se siembra" ;;
-  *)
-    die "no se sigue: la base tiene contenido y no se puede confirmar que sea seguro sembrar (estado: ${DB_STATE:-desconocido}, código ${DB_STATE_CODE}). El detalle está arriba."
-    ;;
+  actualizacion) log "    Base ya instalada → se migra, NO se siembra" ;;
 esac
 
 pnpm db:migrate
 
-if [ "$DB_STATE" = "nueva" ]; then
+if [ "$WILL_SEED" = "1" ]; then
   log "    Sembrando DB"
   pnpm db:seed
   touch "$SEED_MARKER"
@@ -197,6 +172,9 @@ if [ "$DB_STATE" = "nueva" ]; then
 else
   ADMIN_SEEDED=0
 fi
+# La contraseña se lee del `.env` que acaba de escribir `prepare-env.sh`: no
+# se pasa por stdout ni por el entorno del log.
+ADMIN_PASS="$(env_value SEED_ADMIN_PASSWORD)"
 
 log "    Building API"
 pnpm --filter @sa/api build
@@ -259,7 +237,7 @@ server {
   # frame-src/script-src incluyen los hosts del desafío anti-spam. Sólo se
   # usan si el sanatorio configura CAPTCHA_PROVIDER y las claves; sin eso el
   # front no carga ningún script de terceros.
-  add_header Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self' https://challenges.cloudflare.com https://www.google.com https://www.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https:; connect-src 'self' https://challenges.cloudflare.com; form-action 'self'; frame-src https://www.google.com https://maps.google.com https://challenges.cloudflare.com; frame-ancestors 'none'" always;
+  add_header Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self' https://challenges.cloudflare.com https://www.google.com https://www.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https:; connect-src 'self' https://challenges.cloudflare.com; form-action 'self'; frame-src https://www.youtube.com https://www.youtube-nocookie.com https://player.vimeo.com https://www.google.com https://maps.google.com https://www.google.com.py https://google.com.py https://challenges.cloudflare.com; frame-ancestors 'none'" always;
 
   # API (^~ para que gane prioridad sobre la regex de assets estáticos)
   location ^~ /api/ {
@@ -431,12 +409,12 @@ CREDS
 else
   echo "No se sembró la base, así que el usuario admin no se tocó:"
   echo "  la contraseña sigue siendo la de la instalación anterior."
-  if [ "$ADMIN_PASS_GENERATED" = "1" ]; then
-    # No había .env previo del que leerla y tampoco se sembró: nadie conoce
-    # esta contraseña y no sirve de nada anotarla.
-    echo "  Si la perdiste, cambiala desde el panel o volvé a sembrar a mano."
-  else
+  if [ -n "$ADMIN_PASS" ]; then
     echo "  Está en ${CREDENTIALS_FILE} (si el archivo sigue existiendo) y en ${ENV_FILE}."
+  else
+    # No había `.env` previo del que leerla y tampoco se sembró: nadie en este
+    # servidor la conoce, y no se inventa una que no abriría nada.
+    echo "  Este servidor no la tiene guardada; cambiala desde el panel si se perdió."
   fi
 fi
 echo ""

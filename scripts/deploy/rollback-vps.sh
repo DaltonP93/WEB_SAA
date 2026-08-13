@@ -25,22 +25,26 @@
 #
 # Variables:
 #   ROLLBACK_TO   (obligatoria) SHA o tag al que se vuelve.
-#   STEPS         cuántas migraciones revertir. Por defecto, las que el SHA
-#                 destino no tiene. `STEPS=0` no revierte ninguna.
 #   RESTORE_DUMP  ruta de un dump .sql.gz: en vez de revertir con `down()`,
 #                 restaura ese dump. Es el camino obligatorio cuando la base se
 #                 sembró después de migrar (ver rollback-guard.mjs).
+#
+# Códigos de salida:
+#   0  rollback completo y la aplicación responde
+#   1  error de uso o de una etapa previa (nada se tocó)
+#   4  falló un `down()` y se restauró el backup: el código NO se bajó
+#   5  reversión parcial y el backup tampoco se pudo restaurar
+#   6  el rollback se aplicó pero el health check no dio 200
 # ============================================================================
 set -euo pipefail
 
 APP_DIR="${APP_DIR:-/var/www/sanatorio}"
 ROLLBACK_TO="${ROLLBACK_TO:-}"
-STEPS="${STEPS:-}"
 RESTORE_DUMP="${RESTORE_DUMP:-}"
 
 log()  { echo -e "\033[1;34m==>\033[0m $*"; }
 warn() { echo -e "\033[1;33m!!\033[0m $*"; }
-die()  { echo -e "\033[1;31mERROR:\033[0m $*" >&2; exit 1; }
+die()  { echo -e "\033[1;31mERROR:\033[0m $1" >&2; exit "${2:-1}"; }
 
 [ -n "$ROLLBACK_TO" ] || die "falta ROLLBACK_TO=<sha>. Es el commit al que querés volver."
 [ -d "$APP_DIR/.git" ] || die "$APP_DIR no es un repo git."
@@ -49,6 +53,10 @@ cd "$APP_DIR"
 CURRENT_SHA="$(git rev-parse HEAD)"
 git fetch origin --tags
 git cat-file -e "${ROLLBACK_TO}^{commit}" 2>/dev/null || die "el commit ${ROLLBACK_TO} no existe en este repo."
+# Volver "atrás" a algo que no es ancestro no es un rollback: es un checkout a
+# otra rama, con migraciones que este árbol nunca aplicó.
+git merge-base --is-ancestor "$ROLLBACK_TO" HEAD \
+  || die "${ROLLBACK_TO} no es un ancestro de HEAD ($(git rev-parse --short HEAD)). Un rollback sólo va hacia atrás en la misma historia."
 
 log "1/5  Backup de la base (antes de tocar nada)"
 BACKUP_DIR="${APP_DIR}/.db-backups"
@@ -74,22 +82,30 @@ if [ -n "$RESTORE_DUMP" ]; then
     bash -c "gunzip < '$RESTORE_DUMP' | mysql -u'$DB_USER_ENV' '$DB_NAME_ENV'" \
     || die "falló la restauración del dump."
 else
-  # Cuántas migraciones tiene este árbol que el destino no tenga.
-  if [ -z "$STEPS" ]; then
-    STEPS="$(git diff --name-only --diff-filter=A "${ROLLBACK_TO}" HEAD -- api/migrations | grep -c '\.ts$' || true)"
-  fi
-  log "2/5  Revirtiendo ${STEPS} migración(es) CON EL CÓDIGO NUEVO todavía en disco"
-  if [ "$STEPS" -gt 0 ]; then
-    pnpm install --frozen-lockfile
-    for _ in $(seq 1 "$STEPS"); do
-      # Una por una: `migrate:rollback` revierte el batch entero, que puede
-      # incluir migraciones que el SHA destino sí tiene.
-      pnpm --filter @sa/api migrate:down \
-        || die "no se pudo revertir. La base quedó como estaba y el backup está en ${BACKUP_FILE}. Si el rollback-guard bloqueó la vuelta atrás, usá RESTORE_DUMP=<dump>."
-    done
-  else
-    log "    el SHA destino tiene las mismas migraciones: no hay nada que revertir"
-  fi
+  # Qué revertir sale de `knex_migrations`, no de contar archivos del repo:
+  # si el deploy quedó a medias, esos dos números no coinciden.
+  log "2/5  Revirtiendo lo aplicado que ${ROLLBACK_TO} no tiene, con el código nuevo en disco"
+  pnpm install --frozen-lockfile
+  set +e
+  BACKUP_FILE="$BACKUP_FILE" \
+    DEST_MIGRATIONS="$(git ls-tree --name-only "$ROLLBACK_TO" -- api/migrations/)" \
+    bash scripts/deploy/rollback-db.sh
+  RB_CODE=$?
+  set -e
+  case "$RB_CODE" in
+    0) ;;
+    4)
+      # Falló un down() y el backup volvió: el código sigue en la versión
+      # actual, así que la aplicación queda consistente. No se sigue.
+      die "el rollback de la base se abortó y se restauró el backup. El código NO se bajó: seguís en ${CURRENT_SHA}." 4
+      ;;
+    5)
+      die "REVERSIÓN PARCIAL de la base y el backup no se pudo restaurar. NO se bajó el código y NO se reinició la aplicación: revisá el detalle de arriba antes de seguir. Backup: ${BACKUP_FILE}" 5
+      ;;
+    *)
+      die "no se pudo revertir la base (código ${RB_CODE}). El código sigue en ${CURRENT_SHA} y el backup está en ${BACKUP_FILE}." "$RB_CODE"
+      ;;
+  esac
 fi
 
 log "3/5  Bajando el árbol a ${ROLLBACK_TO} (desde ${CURRENT_SHA})"
@@ -119,6 +135,11 @@ done
 if [ "$HEALTH" = "200" ]; then
   echo -e "\033[1;32m✅ Rollback completo: ${CURRENT_SHA} → ${ROLLBACK_TO}\033[0m"
 else
-  warn "el health check devolvió ${HEALTH}. Revisá: pm2 logs sanatorio-api"
-  echo "  Backup previo al rollback: ${BACKUP_FILE}"
+  # Un rollback que deja la aplicación caída no terminó bien, y quien lo lanzó
+  # —o el script que lo automatiza— tiene que enterarse por el código de salida.
+  warn "el health check devolvió ${HEALTH}: la aplicación NO está respondiendo."
+  echo "  El código ya está en ${ROLLBACK_TO} y la base revertida." >&2
+  echo "  Revisá: pm2 logs sanatorio-api" >&2
+  echo "  Backup previo al rollback: ${BACKUP_FILE}" >&2
+  exit 6
 fi

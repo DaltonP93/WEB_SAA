@@ -282,12 +282,14 @@ describe("el script de rollback hace las cosas en orden", () => {
   };
 
   it("hace backup antes de tocar nada", () => {
-    expect(at("mysqldump")).toBeLessThan(at("migrate:down"));
+    // La reversión en sí la hace rollback-db.sh, que calcula la lista desde
+    // `knex_migrations` (ver tests/rollback-db.test.ts).
+    expect(at("mysqldump")).toBeLessThan(at("rollback-db.sh"));
     expect(at("mysqldump")).toBeLessThan(at("git reset --hard"));
   });
 
   it("revierte las migraciones ANTES de bajar el árbol", () => {
-    expect(at("migrate:down")).toBeLessThan(at("git reset --hard"));
+    expect(at("rollback-db.sh")).toBeLessThan(at("git reset --hard"));
   });
 
   it("reconstruye después del checkout", () => {

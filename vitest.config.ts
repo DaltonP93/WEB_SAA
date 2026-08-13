@@ -11,12 +11,14 @@ export default defineConfig({
       // el matcher es por prefijo.
       "@sa/shared/blocks": path.resolve(__dirname, "shared/types/blocks.ts"),
       "@sa/shared/block-schemas": path.resolve(__dirname, "shared/types/block-schemas.ts"),
+      "@sa/shared/embed-hosts": path.resolve(__dirname, "shared/types/embed-hosts.ts"),
       "@sa/shared/institutional-red": path.resolve(__dirname, "shared/types/institutional-red.ts"),
       "@sa/shared/contact-values": path.resolve(__dirname, "shared/types/contact-values.ts"),
       "@sa/shared": path.resolve(__dirname, "shared/types/index.ts"),
       // knex y mysql2 son dependencias de api/, no de la raíz.
       knex: path.resolve(__dirname, "api/node_modules/knex/knex.js"),
       mysql2: path.resolve(__dirname, "api/node_modules/mysql2/index.js"),
+      bcryptjs: path.resolve(__dirname, "api/node_modules/bcryptjs/index.js"),
       // Dependencias de apps/web que las pruebas de componente importan
       // directamente (los componentes las resuelven solos, un archivo de
       // prueba en la raíz no).

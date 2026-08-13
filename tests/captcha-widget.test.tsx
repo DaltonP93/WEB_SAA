@@ -31,6 +31,8 @@ let renderCount = 0;
 let requestedScripts: string[] = [];
 /** Qué debe hacer el próximo `<script>`: cargar bien o fallar. */
 let scriptShouldFail = false;
+/** Ids de widget que el proveedor recibió en `reset()`. */
+let resetCalls: (string | number | undefined)[] = [];
 
 vi.mock("../apps/web/src/api", () => ({
   api: { get: async () => ({ data: { captcha: CONFIG } }) },
@@ -52,9 +54,11 @@ function installScriptStub() {
           render: (_el: HTMLElement, opts: Record<string, any>) => {
             widgetOptions = opts;
             renderCount += 1;
-            return "widget-1";
+            return `widget-${renderCount}`;
           },
-          reset: () => {},
+          reset: (id?: string | number) => {
+            resetCalls.push(id);
+          },
         };
         node.onload?.(new Event("load"));
       }
@@ -76,6 +80,7 @@ beforeEach(async () => {
   widgetOptions = null;
   renderCount = 0;
   requestedScripts = [];
+  resetCalls = [];
   scriptShouldFail = false;
   const mod = await import("../apps/web/src/components/Captcha");
   Captcha = mod.default;
@@ -126,18 +131,35 @@ describe("el widget avisa cuando el desafío falla", () => {
     expect(onError).toHaveBeenLastCalledWith(expect.stringMatching(/venció/i));
   });
 
-  it("ofrece reintentar y vuelve a dibujar el widget", async () => {
+  it("reintenta con reset() y sin volver a bajar el SDK", async () => {
+    // El SDK ya está cargado: lo que falló fue el desafío. Volver a insertar
+    // el `<script>` dejaría dos copias del proveedor en la página.
+    renderWithQuery(<Captcha onToken={vi.fn()} onError={vi.fn()} />);
+    await waitFor(() => expect(renderCount).toBe(1));
+    expect(requestedScripts).toHaveLength(1);
+
+    widgetOptions!["error-callback"]();
+    fireEvent.click(await screen.findByRole("button", { name: /reintentar/i }));
+
+    // Se resetea el widget que ya estaba…
+    await waitFor(() => expect(resetCalls).toEqual(["widget-1"]));
+    // …y no se pidió el script de nuevo ni se dibujó otro widget.
+    expect(requestedScripts).toHaveLength(1);
+    expect(document.querySelectorAll("script").length).toBeLessThanOrEqual(1);
+    expect(renderCount).toBe(1);
+    // Y el mensaje de error se va mientras se reintenta.
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  });
+
+  it("el vencimiento también se reintenta con reset()", async () => {
     renderWithQuery(<Captcha onToken={vi.fn()} onError={vi.fn()} />);
     await waitFor(() => expect(renderCount).toBe(1));
 
-    widgetOptions!["error-callback"]();
-    const retry = await screen.findByRole("button", { name: /reintentar/i });
+    widgetOptions!["expired-callback"]();
+    fireEvent.click(await screen.findByRole("button", { name: /reintentar/i }));
 
-    fireEvent.click(retry);
-
-    await waitFor(() => expect(renderCount).toBe(2));
-    // Y el mensaje de error se va mientras se reintenta.
-    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    await waitFor(() => expect(resetCalls).toHaveLength(1));
+    expect(requestedScripts).toHaveLength(1);
   });
 });
 
@@ -157,9 +179,12 @@ describe("un fallo de red del proveedor no rompe la sesión", () => {
     fireEvent.click(screen.getByRole("button", { name: /reintentar/i }));
 
     // La promesa rechazada no quedó cacheada: se pide el script otra vez.
+    // Este sí es el caso en que corresponde volver a descargarlo.
     await waitFor(() => expect(requestedScripts).toHaveLength(2));
     await waitFor(() => expect(renderCount).toBe(1));
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    // Y no se resetea nada: no había widget que resetear.
+    expect(resetCalls).toEqual([]);
   });
 
   it("un componente nuevo tampoco hereda la promesa fallida", async () => {
@@ -203,5 +228,26 @@ describe("el formulario de contacto frente a un captcha en error", () => {
     await waitFor(() =>
       expect((screen.getByRole("button", { name: /enviar/i }) as HTMLButtonElement).disabled).toBe(false),
     );
+  });
+
+  it("el mensaje y el bloqueo duran hasta que llega un token válido", async () => {
+    renderWithQuery(<ContactForm heading="Contacto" />);
+    await waitFor(() => expect(widgetOptions).not.toBeNull());
+    const button = screen.getByRole("button", { name: /enviar/i }) as HTMLButtonElement;
+
+    widgetOptions!["error-callback"]();
+    const alerta = await screen.findByRole("alert");
+    expect(alerta.textContent).toMatch(/anti-spam falló/i);
+    expect(button.disabled).toBe(true);
+
+    // Se reintenta: el widget se resetea, pero todavía no hay token.
+    fireEvent.click(screen.getByRole("button", { name: /reintentar/i }));
+    await waitFor(() => expect(resetCalls).toHaveLength(1));
+    expect(button.disabled).toBe(true);
+
+    // Recién con el desafío resuelto se habilita.
+    widgetOptions!.callback("token-bueno");
+    await waitFor(() => expect(button.disabled).toBe(false));
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });
