@@ -136,9 +136,11 @@ const blockPropsSchemas = {
   }).strip(),
   mapEmbed: z.object({
     // Se acepta el iframe que pega el administrador; se guarda normalizado a
-    // URL (`sanitizeMapEmbed`). La salida pública publica `embedUrl`.
+    // URL (`sanitizeMapEmbed`). La salida pública publica `embedUrl`, que es
+    // de sólo salida: no se acepta al escribir. Guardarlo permitía dejar un
+    // `embedHtml` inocente junto a un `embedUrl` peligroso, y la salida
+    // pisaba el valor calculado con el almacenado.
     embedHtml: html,
-    embedUrl: z.string().max(500).optional().or(z.literal("")),
     height: z.number().int().min(160).max(900).optional(),
     heading: z.string().max(180).optional().or(z.literal("")),
     text: z.string().max(500).optional().or(z.literal("")),

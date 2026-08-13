@@ -119,6 +119,9 @@ function sanitizeBlockProps(props: unknown): unknown {
   if (!props || typeof props !== "object") return props;
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(props)) {
+    // `embedUrl` es de sólo salida: la API lo calcula al publicar. Aceptarlo
+    // al escribir permitía guardar un destino que después pisaba al calculado.
+    if (key === "embedUrl") continue;
     if (typeof value === "string" && HTML_KEYS.has(key)) {
       out[key] = sanitizeHtml(value) ?? "";
     } else if (typeof value === "string" && key === "embedHtml") {

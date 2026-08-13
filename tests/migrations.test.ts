@@ -37,6 +37,8 @@ const CORRECTIVE = [
   "20260815000000_rojo_solo_emergencias.ts",
   "20260816000000_fuente_unica_contacto.ts",
   "20260817000000_rojo_y_horarios_sin_confirmar.ts",
+  "20260818000000_restaurar_href_social.ts",
+  "20260819000000_retirar_scripts.ts",
 ];
 
 describeDb("migraciones", () => {
@@ -429,4 +431,207 @@ describeDb("rollback de la fuente única con redes ya cargadas", () => {
     // `instagram` no existía antes: `up()` lo creó y `down()` lo sacó.
     expect(await readChannel("instagram")).toBeUndefined();
   });
+});
+
+/**
+ * La migración de fuente única pisaba el perfil de red cargado desde el panel.
+ *
+ * Decidía si un canal social estaba vacío mirando sólo `value`. Una fila con
+ * el perfil en `href` y `value` vacío —la forma natural de cargar una red—
+ * daba "vacío" y el `href` real quedaba reemplazado por el valor viejo de
+ * `settings.social`.
+ *
+ * `20260818000000_restaurar_href_social` lo devuelve, y sólo en los casos que
+ * puede demostrar con el snapshot de la migración anterior.
+ */
+const HREF_DB_NAME = `${process.env.TEST_DB_NAME ?? "sanatorio_test"}_hrefsocial`;
+const FUENTE_UNICA_MIG = "20260816000000_fuente_unica_contacto.ts";
+const RESTAURAR_MIG = "20260818000000_restaurar_href_social.ts";
+
+const HREF_DEL_CLIENTE = "https://facebook.com/sanatorio-perfil-real";
+const HREF_LEGACY = "https://facebook.com/perfil-viejo-de-settings";
+
+describeDb("restaurar el href social pisado", () => {
+  let db: Knex;
+
+  const channel = (key: string) =>
+    db("contact_channels").where({ key }).first("key", "label", "kind", "value", "href", "note", "active", "order");
+
+  const runUp = async (name: string) => (await migrationSource.getMigration(name)).up(db);
+  const runDown = async (name: string) => (await migrationSource.getMigration(name)).down(db);
+
+  beforeAll(async () => {
+    db = await createTestDatabase(HREF_DB_NAME);
+    // Todo lo anterior a la fuente única.
+    let guard = 0;
+    while (guard++ < 100) {
+      const pending = await pendingMigrations(db);
+      if (!pending[0] || pending[0] === FUENTE_UNICA_MIG) break;
+      await migrateUpOne(db);
+    }
+  }, 180_000);
+
+  afterAll(async () => {
+    if (db) await db.destroy();
+    await dropTestDatabase(HREF_DB_NAME);
+  });
+
+  /** Deja la base en el estado previo a la fuente única, con las redes cargadas. */
+  async function seedEstadoPrevio(social: Record<string, string>) {
+    await db("contact_channels").whereIn("key", ["facebook", "instagram"]).del();
+    await db("contact_channels").insert({
+      key: "facebook",
+      label: "Facebook",
+      kind: "url",
+      // El perfil está en href; value vacío. Este es el caso afectado.
+      value: null,
+      href: HREF_DEL_CLIENTE,
+      note: "Perfil oficial del sanatorio.",
+      active: true,
+      order: 20,
+    });
+    await db("settings")
+      .insert({ key: "social", value: JSON.stringify(social), updated_at: db.fn.now() })
+      .onConflict("key")
+      .merge({ value: JSON.stringify(social), updated_at: db.fn.now() });
+  }
+
+  /** Borra los snapshots para poder volver a correr las dos migraciones. */
+  async function limpiarSnapshots() {
+    await db("settings").where("key", "like", "snapshot_fuente_unica%").del();
+    await db("settings").where("key", "like", "snapshot_restaurar_href_social%").del();
+  }
+
+  it("primero se reproduce el daño: la fuente única pisa el href", async () => {
+    await limpiarSnapshots();
+    await seedEstadoPrevio({ facebook: HREF_LEGACY });
+    await runUp(FUENTE_UNICA_MIG);
+
+    const after = await channel("facebook");
+    // Si esto dejara de pasar, la prueba de la corrección no probaría nada.
+    expect(after.href).toBe(HREF_LEGACY);
+    expect(after.value).toBe(HREF_LEGACY);
+  }, 120_000);
+
+  it("la correctiva devuelve el href original y deja el value como estaba", async () => {
+    await runUp(RESTAURAR_MIG);
+
+    const after = await channel("facebook");
+    expect(after.href).toBe(HREF_DEL_CLIENTE);
+    expect(after.value).toBeNull();
+    // Y no toca el resto de la fila.
+    expect(after.label).toBe("Facebook");
+    expect(after.order).toBe(20);
+  }, 120_000);
+
+  it("su rollback vuelve a dejar lo que había antes de correrla", async () => {
+    await runDown(RESTAURAR_MIG);
+    const after = await channel("facebook");
+    expect(after.href).toBe(HREF_LEGACY);
+    expect(after.value).toBe(HREF_LEGACY);
+    expect(await db("settings").where("key", "like", "snapshot_restaurar_href_social%").first()).toBeUndefined();
+  }, 120_000);
+
+  it("es idempotente: correrla dos veces no cambia nada", async () => {
+    await runUp(RESTAURAR_MIG);
+    const primera = await channel("facebook");
+    await runUp(RESTAURAR_MIG);
+    expect(await channel("facebook")).toEqual(primera);
+  }, 120_000);
+
+  it("no toca una edición posterior del cliente", async () => {
+    // Se rehace el escenario y, después de la fuente única, el sanatorio
+    // corrige el enlace a mano desde el panel.
+    await runDown(RESTAURAR_MIG);
+    await runDown(FUENTE_UNICA_MIG);
+    await limpiarSnapshots();
+    await seedEstadoPrevio({ facebook: HREF_LEGACY });
+    await runUp(FUENTE_UNICA_MIG);
+
+    const EDITADO = "https://facebook.com/perfil-corregido-a-mano";
+    await db("contact_channels").where({ key: "facebook" }).update({ href: EDITADO, value: EDITADO });
+
+    await runUp(RESTAURAR_MIG);
+
+    const after = await channel("facebook");
+    // La edición del cliente manda: la migración no la pisa "restaurando".
+    expect(after.href).toBe(EDITADO);
+    expect(after.value).toBe(EDITADO);
+  }, 120_000);
+
+  it("tampoco toca una fila que ya tenía value cargado", async () => {
+    await runDown(RESTAURAR_MIG);
+    await runDown(FUENTE_UNICA_MIG);
+    await limpiarSnapshots();
+    await db("contact_channels").where({ key: "facebook" }).del();
+    await db("contact_channels").insert({
+      key: "facebook",
+      label: "Facebook",
+      kind: "url",
+      value: HREF_DEL_CLIENTE,
+      href: HREF_DEL_CLIENTE,
+      active: true,
+      order: 20,
+    });
+    await db("settings")
+      .insert({ key: "social", value: JSON.stringify({ facebook: HREF_LEGACY }), updated_at: db.fn.now() })
+      .onConflict("key")
+      .merge({ value: JSON.stringify({ facebook: HREF_LEGACY }), updated_at: db.fn.now() });
+
+    await runUp(FUENTE_UNICA_MIG);
+    // Con `value` cargado la fuente única no la tocaba, así que no hay nada
+    // que restaurar.
+    expect((await channel("facebook")).href).toBe(HREF_DEL_CLIENTE);
+    await runUp(RESTAURAR_MIG);
+    expect((await channel("facebook")).href).toBe(HREF_DEL_CLIENTE);
+  }, 120_000);
+});
+
+/**
+ * `settings.scripts` sale de la base, de forma reversible.
+ */
+const SCRIPTS_DB_NAME = `${process.env.TEST_DB_NAME ?? "sanatorio_test"}_scripts`;
+const RETIRAR_SCRIPTS_MIG = "20260819000000_retirar_scripts.ts";
+
+describeDb("retirar settings.scripts", () => {
+  let db: Knex;
+  const VALOR = { head: "<script>console.log(1)</script>", bodyEnd: "" };
+
+  beforeAll(async () => {
+    db = await createTestDatabase(SCRIPTS_DB_NAME);
+    let guard = 0;
+    while (guard++ < 100) {
+      const pending = await pendingMigrations(db);
+      if (!pending[0] || pending[0] === RETIRAR_SCRIPTS_MIG) break;
+      await migrateUpOne(db);
+    }
+    // Instalación vieja: la fila quedó de cuando el panel la ofrecía.
+    await db("settings").insert({ key: "scripts", value: JSON.stringify(VALOR), updated_at: db.fn.now() });
+  }, 180_000);
+
+  afterAll(async () => {
+    if (db) await db.destroy();
+    await dropTestDatabase(SCRIPTS_DB_NAME);
+  });
+
+  it("borra la fila histórica", async () => {
+    await (await migrationSource.getMigration(RETIRAR_SCRIPTS_MIG)).up(db);
+    expect(await db("settings").where({ key: "scripts" }).first()).toBeUndefined();
+  }, 120_000);
+
+  it("el rollback la devuelve igual", async () => {
+    await (await migrationSource.getMigration(RETIRAR_SCRIPTS_MIG)).down(db);
+    const row = await db("settings").where({ key: "scripts" }).first("value");
+    expect(row).toBeTruthy();
+    expect(jsonColumn(row.value)).toEqual(VALOR);
+  }, 120_000);
+
+  it("si la fila no existía, el rollback no la inventa", async () => {
+    await db("settings").where({ key: "scripts" }).del();
+    await db("settings").where("key", "like", "snapshot_retirar_scripts%").del();
+    const mig = await migrationSource.getMigration(RETIRAR_SCRIPTS_MIG);
+    await mig.up(db);
+    await mig.down(db);
+    expect(await db("settings").where({ key: "scripts" }).first()).toBeUndefined();
+  }, 120_000);
 });

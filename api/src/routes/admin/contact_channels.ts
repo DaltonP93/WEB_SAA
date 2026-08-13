@@ -31,29 +31,46 @@ const baseSchema = z.object({
   order: z.number().int().optional(),
 });
 
+interface ChannelValues {
+  kind?: string | null;
+  value?: string | null;
+  href?: string | null;
+}
+
 /**
- * En un PUT parcial el `kind` puede no venir en el payload. Sin él no se sabe
- * contra qué validar, así que el router lo completa con el de la fila actual
- * antes de llamar acá.
+ * Se valida la fila que va a quedar guardada, no el payload.
+ *
+ * Un PUT es parcial, así que cada campo sale del payload si vino y de la fila
+ * actual si no. Mirar sólo una de las dos puntas dejaba pasar combinaciones
+ * inválidas en los dos sentidos:
+ *
+ * - cambiar `kind` y `value` juntos se validaba contra el `kind` **anterior**,
+ *   así que un número de teléfono se guardaba como `email`;
+ * - cambiar sólo el `kind` no miraba el `value` ya guardado, y la fila quedaba
+ *   con un valor que no corresponde a su tipo.
  */
 export function validateChannelValues(
-  data: { kind?: string; value?: string | null; href?: string | null },
+  data: ChannelValues,
   ctx: z.RefinementCtx,
-  kindOverride?: string,
+  current?: ChannelValues,
 ) {
-  const kind = (kindOverride ?? data.kind) as ContactChannelKind | undefined;
+  const kind = (data.kind ?? current?.kind) as ContactChannelKind | undefined;
   if (!kind) return;
 
-  const value = data.value?.trim();
+  // `undefined` = el campo no vino en el payload y conserva lo guardado.
+  const value = (data.value !== undefined ? data.value : current?.value)?.trim();
+  const fromPayload = data.value !== undefined;
   if (value && !isValidChannelValue(kind, value)) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["value"],
-      message: `"${kind}": ${CHANNEL_VALUE_MESSAGE[kind]}`,
+      message: fromPayload
+        ? `"${kind}": ${CHANNEL_VALUE_MESSAGE[kind]}`
+        : `el valor ya guardado no corresponde a "${kind}": ${CHANNEL_VALUE_MESSAGE[kind]}. Cambiá el valor en la misma edición.`,
     });
   }
 
-  const href = data.href?.trim();
+  const href = (data.href !== undefined ? data.href : current?.href)?.trim();
   if (href && !isValidChannelUrl(href)) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -67,7 +84,7 @@ export const contactChannelsRouter = crudRouter({
   table: "contact_channels",
   defaultOrderBy: "order",
   schema: baseSchema.superRefine((data, ctx) => validateChannelValues(data, ctx)),
-  // En el PUT parcial falta `kind`: se toma el de la fila guardada.
-  refineUpdate: (data, current, ctx) => validateChannelValues(data, ctx, current?.kind),
+  // En el PUT se valida la fila resultante: payload + lo que ya estaba.
+  refineUpdate: (data, current, ctx) => validateChannelValues(data, ctx, current),
   serialize: (row: any) => ({ ...row, active: Boolean(row.active) }),
 });

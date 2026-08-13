@@ -5,6 +5,7 @@ import { sanitizeHtml, stripHtml, mapEmbedUrl, safeLinkHref } from "../html.js";
 import { rateLimit } from "../rate-limit.js";
 import { captchaPublicConfig, verifyCaptcha } from "../captcha.js";
 import { publicChannelValues } from "../contact-values.js";
+import { isEmergencyCta } from "../institutional-red.js";
 import { badRequest, notFound } from "../http.js";
 
 export const publicRouter = Router();
@@ -106,7 +107,7 @@ publicRouter.get("/pages/:slug", async (req, res) => {
       // `props` se parsea antes de sanear: MySQL devuelve la columna JSON ya
       // parseada pero MariaDB la devuelve como string, y sobre un string el
       // saneo no recorre nada y el HTML sale intacto.
-      props: sanitizeBlockProps(parseJson(b.props)),
+      props: publicBlockProps(b.type, parseJson(b.props)),
     })),
   });
 });
@@ -276,6 +277,12 @@ function sanitizeBlockProps(props: unknown): unknown {
   if (!props || typeof props !== "object") return props;
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(props)) {
+    if (key === "embedUrl") {
+      // Nunca se publica lo guardado: `embedUrl` lo calcula `publicBlockProps`
+      // a partir de `embedHtml`. Una fila podía traer un `embedHtml` válido y
+      // un `embedUrl` con `javascript:`, y el guardado pisaba al calculado.
+      continue;
+    }
     if (typeof value === "string" && HTML_KEYS.has(key)) {
       out[key] = sanitizeHtml(value) ?? "";
     } else if (typeof value === "string" && key === "embedHtml") {
@@ -287,6 +294,44 @@ function sanitizeBlockProps(props: unknown): unknown {
       out[key] = sanitizeBlockProps(value);
     }
   }
+  return out;
+}
+
+/**
+ * Reglas que dependen del tipo de bloque, aplicadas al salir.
+ *
+ * El saneo general trabaja clave por clave y no sabe qué bloque está mirando.
+ * Hay dos invariantes que sí necesitan ese contexto:
+ *
+ * - **El rojo se recalcula.** `variant: "emergency"` guardado no alcanza: una
+ *   fila vieja o escrita fuera de la API podía tener la variante roja con
+ *   destino `/turnos`. Se vuelve a pedir la confirmación de `isEmergencyCta()`
+ *   y, si no da, el bloque sale en `primary`.
+ * - **`embedUrl` siempre se calcula.** Si no hay `embedHtml` válido, se
+ *   publica vacío en vez de arrastrar lo que hubiera guardado.
+ */
+function publicBlockProps(type: string, props: unknown): unknown {
+  const sanitized = sanitizeBlockProps(props);
+  if (!sanitized || typeof sanitized !== "object" || Array.isArray(sanitized)) return sanitized;
+  const out = sanitized as Record<string, unknown>;
+
+  if (type === "cta" && out.variant === "emergency") {
+    const confirmed = isEmergencyCta({
+      title: typeof out.title === "string" ? out.title : null,
+      text: typeof out.text === "string" ? out.text : null,
+      ctaLabel: typeof out.ctaLabel === "string" ? out.ctaLabel : null,
+      ctaHref: typeof out.ctaHref === "string" ? out.ctaHref : null,
+    });
+    if (!confirmed) out.variant = "primary";
+  }
+
+  if (type === "mapEmbed") {
+    // Se calcula sobre el valor guardado, no sobre el saneado: el saneo no
+    // publica `embedHtml`, así que mirarlo ahí daría siempre vacío.
+    const stored = (props as { embedHtml?: unknown } | null)?.embedHtml;
+    out.embedUrl = mapEmbedUrl(typeof stored === "string" ? stored : "");
+  }
+
   return out;
 }
 

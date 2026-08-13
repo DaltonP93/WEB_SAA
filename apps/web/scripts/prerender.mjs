@@ -27,6 +27,26 @@ function esc(s) {
   return String(s ?? "").replace(/[<>&"']/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+/**
+ * JSON dentro de un `<script>`: no alcanza con `JSON.stringify`.
+ *
+ * El contenido de `<script>` no es HTML parseado, es CDATA: el navegador corta
+ * el bloque en el primer `</script` que encuentre, aunque esté dentro de una
+ * cadena JSON. Un estudio llamado `</script><meta http-equiv="refresh" …>`
+ * cerraba el bloque e inyectaba markup en el HTML prerenderizado.
+ *
+ * Se escapan los caracteres con las secuencias `\uXXXX`, que JSON entiende:
+ * el resultado sigue siendo parseable con `JSON.parse()` y ya no puede cerrar
+ * la etiqueta. U+2028 y U+2029 van también porque son saltos de línea válidos
+ * para el parser de JavaScript y romperían el script.
+ */
+export function jsonForScript(value) {
+  return JSON.stringify(value).replace(
+    /[<>&\u2028\u2029]/g,
+    (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"),
+  );
+}
+
 async function fetchJson(url) {
   const res = await fetch(url, { headers: { accept: "application/json" } });
   if (!res.ok) throw new Error(`${url} → ${res.status}`);
@@ -38,7 +58,7 @@ function studyCard(s) {
   return `<div class="bg-white border rounded p-5"><h3 class="font-semibold text-primary">${esc(s.name)}</h3>${desc}</div>`;
 }
 
-function buildStudiesHtml(all) {
+export function buildStudiesHtml(all) {
   const known = new Set(GROUPS.map((g) => g.key));
   const sections = [
     ...GROUPS.map((g) => ({ title: g.title, items: all.filter((s) => s.category === g.key) })),
@@ -55,7 +75,7 @@ function buildStudiesHtml(all) {
   return `<section class="container-x py-12 space-y-10">${inner}</section>`;
 }
 
-function injectHead(html, { title, description, canonical, jsonLd }) {
+export function injectHead(html, { title, description, canonical, jsonLd }) {
   let out = html.replace(/<title>[\s\S]*?<\/title>/, `<title>${esc(title)}</title>`);
   const tags = [
     description ? `<meta name="description" content="${esc(description)}" />` : "",
@@ -64,7 +84,7 @@ function injectHead(html, { title, description, canonical, jsonLd }) {
     description ? `<meta property="og:description" content="${esc(description)}" />` : "",
     `<meta property="og:url" content="${esc(canonical)}" />`,
     `<meta property="og:type" content="website" />`,
-    `<script type="application/ld+json">${JSON.stringify(jsonLd)}</script>`,
+    `<script type="application/ld+json">${jsonForScript(jsonLd)}</script>`,
   ].filter(Boolean).join("\n    ");
   return out.replace("</head>", `    ${tags}\n  </head>`);
 }
@@ -120,4 +140,8 @@ async function main() {
   }
 }
 
-main();
+// Se ejecuta sólo cuando se lo invoca directamente: así las pruebas pueden
+// importar las funciones sin disparar el prerender entero.
+const invokedDirectly =
+  process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (invokedDirectly) main();

@@ -58,6 +58,44 @@ export function safeInternalHref(href: string | undefined | null, fallback = "/"
   return normalized || fallback;
 }
 
+/**
+ * Destino seguro para el `src` de una imagen.
+ *
+ * Acepta una ruta del propio sitio (`/uploads/foto.jpg`) o una URL http(s).
+ * Todo lo demás —`javascript:`, `data:`, protocolo relativo— devuelve la
+ * cadena vacía y el componente no dibuja la imagen. La API ya valida estos
+ * campos; esto cubre las filas viejas y los props que no pasaron por ella.
+ */
+export function safeMediaSrc(value: string | undefined | null): string {
+  if (!value) return "";
+  const raw = value.trim();
+  if (!raw) return "";
+  const normalized = normalize(raw);
+  if (DANGEROUS_SCHEME.test(normalized)) return "";
+  if (normalized.startsWith("//") || normalized.startsWith("/\\") || normalized.startsWith("\\")) {
+    return "";
+  }
+  if (raw.startsWith("/")) return raw;
+  return /^https?:\/\//i.test(normalized) ? raw : "";
+}
+
+/**
+ * Destino seguro para el `src` de un iframe.
+ *
+ * Un iframe ejecuta lo que carga, así que acá no alcanza con "no es
+ * javascript:": se exige https y nada más.
+ */
+export function safeIframeSrc(value: string | undefined | null): string {
+  if (!value) return "";
+  const raw = value.trim();
+  if (DANGEROUS_SCHEME.test(normalize(raw))) return "";
+  try {
+    return new URL(raw).protocol === "https:" ? raw : "";
+  } catch {
+    return "";
+  }
+}
+
 /** Hosts de Google Maps aceptados para el iframe del mapa. */
 const MAP_HOSTS = new Set([
   "www.google.com",

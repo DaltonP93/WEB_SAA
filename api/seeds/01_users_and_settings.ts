@@ -75,6 +75,28 @@ export async function seed(knex: Knex): Promise<void> {
     await knex("settings").insert({ key, value: JSON.stringify(value) });
   }
 
+  /*
+   * Marca de generación de contenido.
+   *
+   * Los seeds borran páginas y bloques y los vuelven a insertar, así que los
+   * bloques nuevos tienen ids nuevos. Varias migraciones guardan su snapshot
+   * indexado por id de bloque (`20260815`, `20260817`): después de un seed,
+   * su `down()` busca ids que ya no existen y "revierte" sin restaurar nada.
+   *
+   * Esta marca deja constancia de cuándo se sembró por última vez.
+   * `scripts/deploy/rollback-guard.mjs` la compara contra la fecha de cada
+   * snapshot y bloquea el rollback cuando el seed es posterior: en ese caso la
+   * vuelta atrás se hace con el dump, no con `down()`.
+   */
+  await knex("settings")
+    .insert({
+      key: "seed_generation",
+      value: JSON.stringify({ at: new Date().toISOString() }),
+      updated_at: knex.fn.now(),
+    })
+    .onConflict("key")
+    .merge({ value: JSON.stringify({ at: new Date().toISOString() }), updated_at: knex.fn.now() });
+
   // Menú base. La estructura definitiva (Servicios con sus estudios,
   // Pacientes con Información / Portal / Atención) la deja la migración
   // 20260812000000, que este seed vuelve a aplicar desde 03_pages_and_content.

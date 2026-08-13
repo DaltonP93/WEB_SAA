@@ -1,7 +1,8 @@
 import { Link } from "react-router-dom";
 import type { CtaProps } from "@sa/shared/blocks";
+import { isEmergencyCta } from "@sa/shared/institutional-red";
 import LucideIcon from "../components/LucideIcon";
-import { isInternalHref, safeInternalHref } from "../lib/url";
+import { isInternalHref, isSafeExternalHref, safeInternalHref } from "../lib/url";
 
 type Variant = NonNullable<CtaProps["variant"]>;
 
@@ -27,11 +28,17 @@ export default function Cta(p: CtaProps) {
    * override de color: el `background` libre se retiró.
    */
   const requested = p.variant as string | undefined;
-  const variant: Variant = requested && requested in VARIANT_BG ? (requested as Variant) : "primary";
+  let variant: Variant = requested && requested in VARIANT_BG ? (requested as Variant) : "primary";
+  // El rojo no se hereda de la fila: se vuelve a comprobar acá. Un bloque
+  // viejo —o escrito fuera de la API— puede traer `variant: "emergency"` con
+  // destino /turnos, y confiar en el dato guardado lo pintaba de rojo igual.
+  if (variant === "emergency" && !isEmergencyCta(p)) variant = "primary";
   const sectionBg = VARIANT_BG[variant];
   const btnClass = VARIANT_BTN[variant];
-  const href = p.ctaHref ?? "#";
-  const isInternal = isInternalHref(href);
+  const raw = p.ctaHref ?? "#";
+  const isInternal = isInternalHref(raw);
+  // Un destino externo que no sea http(s)/mailto/tel no se enlaza.
+  const href = isInternal || isSafeExternalHref(raw) ? raw : "#";
   const linkClass = `px-6 py-3 rounded font-semibold transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 whitespace-nowrap ${btnClass}`;
 
   return (

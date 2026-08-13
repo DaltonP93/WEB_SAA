@@ -127,7 +127,12 @@ export interface MapEmbedProps {
    * `embedUrl`. El front no recibe HTML del mapa en ningún caso.
    */
   embedHtml: string;
-  /** URL validada de Google Maps. Sólo la escribe la salida pública. */
+  /**
+   * URL validada de Google Maps. **Sólo de salida**: la calcula la API en cada
+   * respuesta a partir de `embedHtml` y el schema de escritura la descarta.
+   * Si se pudiera guardar, una fila con `embedHtml` inocente y `embedUrl`
+   * peligroso pisaba el valor calculado.
+   */
   embedUrl?: string;
   height?: number;
   heading?: string;

@@ -1,5 +1,6 @@
 import type { HeroProps } from "@sa/shared/blocks";
 import { Link } from "react-router-dom";
+import { isInternalHref, isSafeExternalHref, safeInternalHref, safeMediaSrc } from "../lib/url";
 
 /**
  * CTA del hero. El principal usa el cyan institucional (mismo color que
@@ -8,31 +9,35 @@ import { Link } from "react-router-dom";
  */
 function CTA({ to, label, variant = "primary" }: { to: string; label: string; variant?: "primary" | "outline" }) {
   const base = "px-6 py-3 text-base";
-  const isExternal = /^https?:\/\//i.test(to) || to.startsWith("tel:") || to.startsWith("mailto:");
 
   const className =
     variant === "outline"
       ? `btn ${base} border-2 border-white text-white hover:bg-white hover:text-primary active:bg-white/90 focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-primary`
       : `btn-turno-on-dark ${base}`;
 
-  if (isExternal) {
+  // El destino se valida acá, no se deduce del prefijo: `javascript:` también
+  // "no empieza con http" y terminaba en el <Link> del router.
+  if (isInternalHref(to)) {
     return (
-      <a href={to} className={className} {...(to.startsWith("http") ? { target: "_blank", rel: "noreferrer" } : {})}>
+      <Link to={safeInternalHref(to)} className={className}>
         {label}
-      </a>
+      </Link>
     );
   }
+  if (!isSafeExternalHref(to)) return null;
   return (
-    <Link to={to} className={className}>
+    <a href={to} className={className} {...(/^https?:\/\//i.test(to) ? { target: "_blank", rel: "noreferrer" } : {})}>
       {label}
-    </Link>
+    </a>
   );
 }
 
 export default function Hero(p: HeroProps) {
+  // Una imagen con `src` inválido no se dibuja: el layout cae al centrado.
+  const imageUrl = safeMediaSrc(p.imageUrl);
   const requestedVariant = p.variant ?? "centered";
-  const variant = requestedVariant === "split" && !p.imageUrl ? "centered" : requestedVariant;
-  const showImage = variant === "split" && !!p.imageUrl;
+  const variant = requestedVariant === "split" && !imageUrl ? "centered" : requestedVariant;
+  const showImage = variant === "split" && !!imageUrl;
   const alignment = variant === "left" || showImage ? "text-left" : "text-center";
   const useAnimated = p.animatedBg ?? false;
 
@@ -74,7 +79,7 @@ export default function Hero(p: HeroProps) {
           <div className="relative">
             <div className="aspect-[4/3] rounded-2xl overflow-hidden shadow-2xl border border-white/20">
               <img
-                src={p.imageUrl}
+                src={imageUrl}
                 alt=""
                 className="w-full h-full object-cover"
                 loading="eager"
@@ -89,9 +94,9 @@ export default function Hero(p: HeroProps) {
 
   return (
     <section className={`relative ${bgClass} text-white`}>
-      {p.imageUrl && (
+      {imageUrl && (
         <div className="absolute inset-0">
-          <img src={p.imageUrl} alt="" className="w-full h-full object-cover" />
+          <img src={imageUrl} alt="" className="w-full h-full object-cover" />
           <div className="absolute inset-0 bg-black" style={{ opacity: overlay }} />
         </div>
       )}
