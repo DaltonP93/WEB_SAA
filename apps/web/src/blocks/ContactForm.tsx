@@ -18,7 +18,10 @@ export default function ContactForm({ heading = "Contacto", showPhone = true }: 
   // nada y el formulario funciona igual.
   const { config: captcha } = useCaptchaConfig();
   const [captchaToken, setCaptchaToken] = useState<string | null>(null);
+  /** Problema del widget. Lo muestra el propio widget, junto a "Reintentar". */
   const [captchaError, setCaptchaError] = useState<string | null>(null);
+  /** Rechazo del servidor. Ese sí lo muestra el formulario. */
+  const [serverCaptchaError, setServerCaptchaError] = useState<string | null>(null);
   const [captchaKey, setCaptchaKey] = useState(0);
   const captchaPending = Boolean(captcha) && !captchaToken;
 
@@ -38,7 +41,7 @@ export default function ContactForm({ heading = "Contacto", showPhone = true }: 
     } catch (err) {
       const message = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
       if (message?.includes("anti-spam")) {
-        setCaptchaError("La verificación anti-spam no pasó. Probá de nuevo.");
+        setServerCaptchaError("La verificación anti-spam no pasó. Probá de nuevo.");
         setCaptchaToken(null);
         setCaptchaKey((k) => k + 1);
       }
@@ -56,7 +59,7 @@ export default function ContactForm({ heading = "Contacto", showPhone = true }: 
       <h2 className="text-2xl font-bold mb-6 text-primary">{heading}</h2>
       <form onSubmit={submit} className="grid gap-4 max-w-2xl">
         <motion.div
-          key={shakeKey}
+          key={`shake-${shakeKey}`}
           animate={reduced ? {} : { x: [0, -6, 6, -4, 4, 0] }}
           transition={shakeTransition}
           className="grid gap-4"
@@ -80,13 +83,22 @@ export default function ContactForm({ heading = "Contacto", showPhone = true }: 
             <textarea id="contact-message" required rows={4} value={form.message} onChange={(e) => setForm({ ...form, message: e.target.value })} className={inputClass} />
           </div>
         </motion.div>
-        <Captcha key={captchaKey} onToken={setCaptchaToken} onError={setCaptchaError} />
-        {captchaError && (
-          <p role="alert" className="text-sm text-amber-700">{captchaError}</p>
+        <Captcha
+          key={`captcha-${captchaKey}`}
+          onToken={setCaptchaToken}
+          onError={(message) => {
+            setCaptchaError(message);
+            if (message) setServerCaptchaError(null);
+          }}
+        />
+        {serverCaptchaError && (
+          <p role="alert" className="text-sm text-amber-700">{serverCaptchaError}</p>
         )}
         <button
           disabled={state === "loading" || captchaPending}
-          title={captchaPending ? "Completá la verificación anti-spam" : undefined}
+          // Con el widget en error el botón sigue bloqueado —sin token el envío
+          // se rechaza igual—, pero el motivo tiene que estar a la vista.
+          title={captchaError ?? (captchaPending ? "Completá la verificación anti-spam" : undefined)}
           className="btn-primary self-start inline-flex items-center gap-2 disabled:opacity-50"
         >
           {state === "loading" ? (

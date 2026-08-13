@@ -6,6 +6,7 @@ import type { Knex } from "knex";
 import { mapEmbedUrl } from "../api/src/html";
 import {
   DB_TESTS_ENABLED,
+  TEST_ADMIN_PASSWORD,
   applyDbEnv,
   closeAppDb,
   closeServer,
@@ -80,13 +81,18 @@ describeDb("la salida pública no publica el HTML del mapa", () => {
   let db: Knex;
   let server: Server;
   let baseUrl = "";
+  let token = "";
+
+  const auth = () => ({ Authorization: `Bearer ${token}`, "Content-Type": "application/json" });
 
   beforeAll(async () => {
     db = await createTestDatabase(DB_NAME);
     await migrateLatest(db);
+    process.env.SEED_ADMIN_PASSWORD = TEST_ADMIN_PASSWORD;
     await runSeeds(db);
 
     applyDbEnv(DB_NAME);
+    process.env.JWT_SECRET = process.env.JWT_SECRET ?? "secreto-de-prueba-mapa";
     const { createApp } = await import("../api/src/app.js");
     const app = createApp();
     await new Promise<void>((resolvePromise) => {
@@ -95,6 +101,13 @@ describeDb("la salida pública no publica el HTML del mapa", () => {
     const address = server.address();
     const port = typeof address === "object" && address ? address.port : 0;
     baseUrl = `http://127.0.0.1:${port}`;
+
+    const login = await fetch(`${baseUrl}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "admin@sanatorio.local", password: TEST_ADMIN_PASSWORD }),
+    });
+    token = (await login.json()).token;
   }, 180_000);
 
   afterAll(async () => {
@@ -164,5 +177,77 @@ describeDb("la salida pública no publica el HTML del mapa", () => {
     const mapBlock = parsed.blocks.find((b: { type: string }) => b.type === "mapEmbed");
     expect(mapBlock.props.embedUrl).toBe("");
     expect(mapBlock.props.embedHtml).toBeUndefined();
+  });
+
+  it("un embedUrl guardado nunca pisa al calculado", async () => {
+    // El bloque podía traer un `embedHtml` inocente y un `embedUrl` con
+    // `javascript:`. La salida calculaba el bueno y después lo sobrescribía
+    // con el guardado. Ahora `embedUrl` es de sólo salida.
+    const page = await db("pages").where({ slug: "home" }).first("id");
+    const block = await db("blocks").where({ page_id: page.id, type: "mapEmbed" }).first("id");
+    await db("blocks")
+      .where({ id: block.id })
+      .update({
+        props: JSON.stringify({
+          embedHtml: "https://www.google.com/maps/embed?pb=1",
+          embedUrl: "javascript:alert(1)",
+          height: 400,
+        }),
+      });
+
+    const body = await (await fetch(`${baseUrl}/api/public/pages/home`)).text();
+    expect(body.toLowerCase()).not.toContain("javascript:");
+    const parsed = JSON.parse(body);
+    const mapBlock = parsed.blocks.find((b: { type: string }) => b.type === "mapEmbed");
+    expect(mapBlock.props.embedUrl).toBe("https://www.google.com/maps/embed?pb=1");
+  });
+
+  it("sin embedHtml válido el embedUrl sale vacío, no el guardado", async () => {
+    const page = await db("pages").where({ slug: "home" }).first("id");
+    const block = await db("blocks").where({ page_id: page.id, type: "mapEmbed" }).first("id");
+    await db("blocks")
+      .where({ id: block.id })
+      .update({
+        props: JSON.stringify({
+          embedHtml: "https://evil.test/maps/embed?pb=1",
+          embedUrl: "https://www.google.com/maps/embed?pb=1",
+        }),
+      });
+
+    const body = await (await fetch(`${baseUrl}/api/public/pages/home`)).json();
+    const mapBlock = body.blocks.find((b: { type: string }) => b.type === "mapEmbed");
+    expect(mapBlock.props.embedUrl).toBe("");
+  });
+
+  it("el schema descarta embedUrl del payload administrativo", async () => {
+    const page = await db("pages").where({ slug: "home" }).first("id");
+    const res = await fetch(`${baseUrl}/api/admin/pages/${page.id}/blocks`, {
+      method: "PUT",
+      headers: auth(),
+      body: JSON.stringify({
+        blocks: [
+          {
+            type: "mapEmbed",
+            props: {
+              embedHtml: '<iframe src="https://www.google.com/maps/embed?pb=1"></iframe>',
+              embedUrl: "javascript:alert(1)",
+              height: 400,
+            },
+          },
+        ],
+      }),
+    });
+    expect(res.status, await res.clone().text()).toBe(200);
+
+    const row = await db("blocks").where({ page_id: page.id, type: "mapEmbed" }).first("props");
+    const props = typeof row.props === "string" ? JSON.parse(row.props) : row.props;
+    expect(props.embedUrl).toBeUndefined();
+    expect(props.embedHtml).toBe("https://www.google.com/maps/embed?pb=1");
+  });
+
+  it("y la salida pública lo vuelve a calcular", async () => {
+    const body = await (await fetch(`${baseUrl}/api/public/pages/home`)).json();
+    const mapBlock = body.blocks.find((b: { type: string }) => b.type === "mapEmbed");
+    expect(mapBlock.props.embedUrl).toBe("https://www.google.com/maps/embed?pb=1");
   });
 });

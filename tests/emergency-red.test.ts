@@ -603,4 +603,67 @@ describeDb("lo que la API acepta guardar", () => {
       expect(isEmergencyCta(EMERGENCY_CTA)).toBe(true);
     });
   });
+
+  describe("la salida pública revalida el rojo", () => {
+    /** Escribe los props del bloque salteando toda la validación. */
+    async function escribirCta(props: Record<string, unknown>) {
+      const page = await db("pages").where({ slug: "home" }).first("id");
+      const block = await db("blocks").where({ page_id: page.id, type: "cta" }).first("id");
+      expect(block, "la home trae un CTA").toBeTruthy();
+      await db("blocks").where({ id: block.id }).update({ props: JSON.stringify(props) });
+      const body = await (await fetch(`${baseUrl}/api/public/pages/home`)).json();
+      return body.blocks.find((b: { type: string }) => b.type === "cta");
+    }
+
+    it("degrada una fila con emergency y un destino cualquiera", async () => {
+      // Escrita con SQL, como una fila vieja o un script externo. Un CTA con
+      // acción directa (tel:) siempre se publica, así que llega a la salida.
+      const cta = await escribirCta({
+        title: "Reservá tu turno",
+        ctaLabel: "Llamar",
+        ctaHref: "tel:+595210000000",
+        variant: "emergency",
+      });
+      expect(cta.props.variant).toBe("primary");
+    });
+
+    it("no alcanza con nombrar Emergencias en el texto", async () => {
+      const cta = await escribirCta({
+        title: "Cirugías de emergencia",
+        ctaLabel: "Ver especialidad",
+        ctaHref: "/cirugia-general",
+        variant: "emergency",
+      });
+      expect(cta.props.variant).toBe("primary");
+    });
+
+    it("el destino tiene que ser el canónico, no uno parecido", async () => {
+      const cta = await escribirCta({
+        title: "Emergencias odontológicas",
+        ctaLabel: "Ver más",
+        ctaHref: "/odontologia",
+        variant: "emergency",
+      });
+      expect(cta.props.variant).toBe("primary");
+    });
+
+    it("el CTA real de Emergencias sí conserva la variante", async () => {
+      const cta = await escribirCta({
+        title: "Emergencias",
+        text: "Consultá los datos de contacto de Emergencias.",
+        ctaLabel: "Ver Emergencias",
+        ctaHref: "/emergencias",
+        variant: "emergency",
+      });
+      expect(cta.props.variant).toBe("emergency");
+    });
+
+    it("el front tampoco confía en la variante que recibe", () => {
+      // Tercera capa: aunque la API publicara `emergency`, el componente lo
+      // vuelve a comprobar. La prueba de render está en tests/block-urls.test.tsx.
+      const source = readFileSync(resolve(ROOT, "apps/web/src/blocks/Cta.tsx"), "utf8");
+      expect(source).toContain("isEmergencyCta");
+      expect(source).toMatch(/variant\s*=\s*"primary"/);
+    });
+  });
 });

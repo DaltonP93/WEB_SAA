@@ -232,12 +232,15 @@ describeDb("un cambio en la tabla llega a todos los consumidores", () => {
     });
     expect(direct.status).toBe(410);
 
-    // Tampoco por el PUT masivo: se descarta en silencio.
-    await fetch(`${baseUrl}/api/admin/settings`, {
+    // Tampoco por el PUT masivo, y ya no en silencio: antes respondía
+    // `{ok:true}` y el panel decía "Guardado" sobre algo que se descartó.
+    const masivo = await fetch(`${baseUrl}/api/admin/settings`, {
       method: "PUT",
       headers: auth(),
       body: JSON.stringify({ social: { facebook: "https://facebook.com/otro" } }),
     });
+    expect(masivo.status).toBe(410);
+    expect((await masivo.json()).retired).toEqual(["social"]);
     expect(await db("settings").where({ key: "social" }).first()).toBeUndefined();
   });
 
@@ -251,13 +254,40 @@ describeDb("un cambio en la tabla llega a todos los consumidores", () => {
       body: JSON.stringify({ head: "<script>alert(1)</script>", bodyEnd: "" }),
     });
     expect(direct.status).toBe(410);
+    expect((await direct.json()).error).toMatch(/JavaScript arbitrario/i);
 
-    await fetch(`${baseUrl}/api/admin/settings`, {
+    const masivo = await fetch(`${baseUrl}/api/admin/settings`, {
       method: "PUT",
       headers: auth(),
       body: JSON.stringify({ scripts: { head: "<script>alert(1)</script>" } }),
     });
+    expect(masivo.status).toBe(410);
     expect(await db("settings").where({ key: "scripts" }).first()).toBeUndefined();
+  });
+
+  it("una clave retirada no arrastra al resto del payload", async () => {
+    // El PUT masivo es todo o nada: si se rechaza, no se guarda nada.
+    const antes = await db("settings").where({ key: "seo" }).first("value");
+    const res = await fetch(`${baseUrl}/api/admin/settings`, {
+      method: "PUT",
+      headers: auth(),
+      body: JSON.stringify({
+        seo: { title: "Título que no se debe guardar" },
+        scripts: { head: "" },
+      }),
+    });
+    expect(res.status).toBe(410);
+    const despues = await db("settings").where({ key: "seo" }).first("value");
+    expect(despues.value).toEqual(antes.value);
+  });
+
+  it("los ajustes administrables no incluyen las claves retiradas", async () => {
+    // El panel guarda de vuelta lo que recibe: si se las devolviéramos, cada
+    // guardado reenviaría una clave que la API rechaza.
+    const settings = await (await fetch(`${baseUrl}/api/admin/settings`, { headers: auth() })).json();
+    expect(settings.scripts).toBeUndefined();
+    expect(settings.social).toBeUndefined();
+    expect(settings.brand).toBeTruthy();
   });
 
   it("los ajustes públicos no filtran los snapshots de las migraciones", async () => {

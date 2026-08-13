@@ -257,4 +257,81 @@ describeDb("la API rechaza destinos peligrosos", () => {
     expect(facebook.href).toBeNull();
     expect(facebook.value).toBeNull();
   });
+
+  describe("cambio de tipo", () => {
+    /** Crea un canal y devuelve su id. */
+    async function crear(payload: Record<string, unknown>) {
+      const res = await fetch(`${baseUrl}/api/admin/contact-channels`, {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify(payload),
+      });
+      expect(res.status, await res.clone().text()).toBe(201);
+      return (await res.json()).id as number;
+    }
+
+    const actualizar = (id: number, payload: Record<string, unknown>) =>
+      fetch(`${baseUrl}/api/admin/contact-channels/${id}`, {
+        method: "PUT",
+        headers: auth(),
+        body: JSON.stringify(payload),
+      });
+
+    it("phone → email con un valor telefónico se rechaza", async () => {
+      // Se validaba contra el kind ANTERIOR, así que un teléfono entraba como
+      // correo sin que nadie chistara.
+      const id = await crear({ key: "prueba-kind-1", label: "Prueba", kind: "phone", value: "+595 21 000 000" });
+      const res = await actualizar(id, { kind: "email", value: "+595 21 000 000" });
+      expect(res.status).toBe(400);
+
+      const row = await db("contact_channels").where({ id }).first("kind", "value");
+      expect(row.kind).toBe("phone");
+      expect(row.value).toBe("+595 21 000 000");
+    });
+
+    it("phone → email con un correo válido se acepta", async () => {
+      const id = await crear({ key: "prueba-kind-2", label: "Prueba", kind: "phone", value: "+595 21 000 001" });
+      const res = await actualizar(id, { kind: "email", value: "contacto@sanatorio.test" });
+      expect(res.status, await res.clone().text()).toBe(200);
+
+      const row = await db("contact_channels").where({ id }).first("kind", "value");
+      expect(row.kind).toBe("email");
+      expect(row.value).toBe("contacto@sanatorio.test");
+    });
+
+    it("cambiar sólo el kind mira el valor que ya está guardado", async () => {
+      // Sin `value` en el payload la fila resultante igual queda inválida.
+      const id = await crear({ key: "prueba-kind-3", label: "Prueba", kind: "phone", value: "+595 21 000 002" });
+      const res = await actualizar(id, { kind: "email" });
+      expect(res.status).toBe(400);
+      // Y el mensaje dice que el problema es el valor ya guardado.
+      const body = await res.json();
+      expect(JSON.stringify(body)).toMatch(/valor ya guardado/i);
+
+      const row = await db("contact_channels").where({ id }).first("kind");
+      expect(row.kind).toBe("phone");
+    });
+
+    it("cambiar sólo el kind se acepta si el valor sirve para los dos", async () => {
+      const id = await crear({ key: "prueba-kind-4", label: "Prueba", kind: "url", href: "https://facebook.com/x" });
+      const res = await actualizar(id, { label: "Otro nombre" });
+      expect(res.status, await res.clone().text()).toBe(200);
+    });
+
+    it("una actualización parcial conserva el tipo anterior y lo valida", async () => {
+      // Sin `kind` en el payload manda el guardado: un correo no puede entrar
+      // en un canal de teléfono.
+      const id = await crear({ key: "prueba-kind-5", label: "Prueba", kind: "phone", value: "+595 21 000 003" });
+      expect((await actualizar(id, { value: "contacto@sanatorio.test" })).status).toBe(400);
+      expect((await actualizar(id, { value: "+595 21 000 004" })).status).toBe(200);
+    });
+
+    it("el href se valida aunque sólo cambie el kind", async () => {
+      const id = await crear({ key: "prueba-kind-6", label: "Prueba", kind: "url", href: "https://facebook.com/y" });
+      // Un href válido sigue siéndolo; lo que no vale es el destino peligroso.
+      expect((await actualizar(id, { href: "javascript:alert(1)" })).status).toBe(400);
+      const row = await db("contact_channels").where({ id }).first("href");
+      expect(row.href).toBe("https://facebook.com/y");
+    });
+  });
 });

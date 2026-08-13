@@ -9,9 +9,10 @@
     "start": "node dist/src/index.js",
     "migrate": "tsx ./node_modules/knex/bin/cli.js --knexfile knexfile.ts migrate:latest",
     "migrate:make": "tsx ./node_modules/knex/bin/cli.js --knexfile knexfile.ts migrate:make",
-    "migrate:rollback": "tsx ./node_modules/knex/bin/cli.js --knexfile knexfile.ts migrate:rollback",
+    "migrate:rollback": "node ../scripts/deploy/rollback-guard.mjs && tsx ./node_modules/knex/bin/cli.js --knexfile knexfile.ts migrate:rollback",
+    "migrate:down": "node ../scripts/deploy/rollback-guard.mjs && tsx ./node_modules/knex/bin/cli.js --knexfile knexfile.ts migrate:down",
     "seed": "tsx ./node_modules/knex/bin/cli.js --knexfile knexfile.ts seed:run",
-    "db:reset": "tsx ./node_modules/knex/bin/cli.js --knexfile knexfile.ts migrate:rollback --all && tsx ./node_modules/knex/bin/cli.js --knexfile knexfile.ts migrate:latest && tsx ./node_modules/knex/bin/cli.js --knexfile knexfile.ts seed:run",
+    "db:reset": "ROLLBACK_ALLOW_AFTER_SEED=1 tsx ./node_modules/knex/bin/cli.js --knexfile knexfile.ts migrate:rollback --all && tsx ./node_modules/knex/bin/cli.js --knexfile knexfile.ts migrate:latest && tsx ./node_modules/knex/bin/cli.js --knexfile knexfile.ts seed:run",
     "test": "vitest run",
     "test:watch": "vitest"
   },

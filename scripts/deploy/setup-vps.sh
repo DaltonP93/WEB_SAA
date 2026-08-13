@@ -33,13 +33,33 @@ BRANCH="${BRANCH:-main}"
 
 DB_NAME="sanatorio"
 DB_USER="sanatorio"
+
+# Valores que ya existan en api/.env: una segunda corrida no los regenera.
+# Rotar el JWT_SECRET desloguea a todo el mundo, y regenerar la contraseña del
+# admin sin volver a sembrar deja anotada una contraseña que no existe.
+ENV_FILE="${APP_DIR}/api/.env"
+env_value() {
+  [ -f "$ENV_FILE" ] || return 0
+  sed -n "s/^$1=//p" "$ENV_FILE" | head -n1
+}
+
+DB_PASS="${DB_PASS:-$(env_value DB_PASS)}"
 DB_PASS="${DB_PASS:-$(openssl rand -base64 24 | tr -d '/+=' | head -c 24)}"
+JWT_SECRET="${JWT_SECRET:-$(env_value JWT_SECRET)}"
 JWT_SECRET="${JWT_SECRET:-$(openssl rand -base64 48 | tr -d '/+=' | head -c 48)}"
 
 ADMIN_EMAIL="${ADMIN_EMAIL:-admin@sanatorio.local}"
 # Nunca hardcodear una contraseña: si no viene por entorno se genera una al azar
 # y se guarda en un archivo sólo-root. No se imprime en pantalla ni en logs.
-ADMIN_PASS="${ADMIN_PASS:-$(openssl rand -base64 24 | tr -d '/+=' | head -c 20)}"
+# Si ya hay una en api/.env, esa manda: es la que corresponde al usuario que
+# realmente existe en la base.
+ADMIN_PASS="${ADMIN_PASS:-$(env_value SEED_ADMIN_PASSWORD)}"
+if [ -z "$ADMIN_PASS" ]; then
+  ADMIN_PASS="$(openssl rand -base64 24 | tr -d '/+=' | head -c 20)"
+  ADMIN_PASS_GENERATED=1
+else
+  ADMIN_PASS_GENERATED=0
+fi
 ADMIN_NAME="${ADMIN_NAME:-Administrador}"
 CREDENTIALS_FILE="${APP_DIR}/.deploy-credentials"
 
@@ -143,16 +163,39 @@ cd "$APP_DIR"
 # distintas a las auditadas.
 pnpm install --frozen-lockfile || die "pnpm install --frozen-lockfile falló. Revisá que pnpm-lock.yaml esté commiteado y actualizado; no se instala sin lockfile congelado."
 
+# La decisión de sembrar mira la BASE, no un archivo.
+#
+# Antes alcanzaba con que faltara `${APP_DIR}/.seeded` para volver a sembrar,
+# y los seeds arrancan borrando usuarios, ajustes, médicos, especialidades,
+# servicios, estudios, páginas y bloques. Un marker perdido —un rsync, un
+# `rm -rf` del directorio, un servidor reinstalado contra la misma base— se
+# llevaba puesto todo lo que el sanatorio hubiera cargado desde el panel.
+#
+# Se comprueba ANTES de migrar: si hay conflicto, la base queda intacta.
+SEED_MARKER="${APP_DIR}/.seeded"
+log "    Verificando el estado de la base antes de migrar"
+set +e
+DB_STATE="$(DB_HOST=127.0.0.1 DB_PORT=3306 DB_USER="$DB_USER" DB_PASS="$DB_PASS" DB_NAME="$DB_NAME" \
+  SEED_MARKER="$SEED_MARKER" node scripts/deploy/db-state.mjs)"
+DB_STATE_CODE=$?
+set -e
+case "$DB_STATE" in
+  nueva)         log "    Base vacía → se migra y se siembra" ;;
+  actualizacion) log "    Base con contenido → se migra, NO se siembra" ;;
+  *)
+    die "no se sigue: la base tiene contenido y no se puede confirmar que sea seguro sembrar (estado: ${DB_STATE:-desconocido}, código ${DB_STATE_CODE}). El detalle está arriba."
+    ;;
+esac
+
 pnpm db:migrate
 
-# Solo sembrar la primera vez (si no hay marker)
-SEED_MARKER="${APP_DIR}/.seeded"
-if [ ! -f "$SEED_MARKER" ]; then
-  log "    Primera ejecución → sembrando DB"
+if [ "$DB_STATE" = "nueva" ]; then
+  log "    Sembrando DB"
   pnpm db:seed
   touch "$SEED_MARKER"
+  ADMIN_SEEDED=1
 else
-  log "    DB ya sembrada antes (${SEED_MARKER} existe) → skip"
+  ADMIN_SEEDED=0
 fi
 
 log "    Building API"
@@ -365,8 +408,14 @@ fi
 echo ""
 # Las credenciales NO se imprimen: quedarían en la terminal, en el historial y
 # en los logs de quien haya lanzado el deploy.
-umask 077
-cat > "$CREDENTIALS_FILE" <<CREDS
+#
+# Y sólo se escribe el archivo si el usuario admin se creó de verdad en esta
+# corrida. Antes se generaba una contraseña nueva en cada ejecución y se
+# escribía acá aunque el seed no hubiera corrido: el archivo terminaba con una
+# contraseña que no existía en la base, y pisaba la que sí servía.
+if [ "$ADMIN_SEEDED" = "1" ]; then
+  umask 077
+  cat > "$CREDENTIALS_FILE" <<CREDS
 # Generado por setup-vps.sh el $(date -Iseconds). Archivo sólo-root.
 # Cambiá la contraseña del admin al primer login y después borrá este archivo.
 ADMIN_EMAIL=${ADMIN_EMAIL}
@@ -374,13 +423,25 @@ ADMIN_PASSWORD=${ADMIN_PASS}
 DB_NAME=${DB_NAME}
 DB_USER=${DB_USER}
 CREDS
-chmod 600 "$CREDENTIALS_FILE"
+  chmod 600 "$CREDENTIALS_FILE"
 
-echo "Credenciales del admin y de la DB: ${CREDENTIALS_FILE} (chmod 600, sólo root)"
-echo "  → leelas con: cat ${CREDENTIALS_FILE}"
-echo "  → cambiá la contraseña del admin al primer login y borrá el archivo"
+  echo "Credenciales del admin y de la DB: ${CREDENTIALS_FILE} (chmod 600, sólo root)"
+  echo "  → leelas con: cat ${CREDENTIALS_FILE}"
+  echo "  → cambiá la contraseña del admin al primer login y borrá el archivo"
+else
+  echo "No se sembró la base, así que el usuario admin no se tocó:"
+  echo "  la contraseña sigue siendo la de la instalación anterior."
+  if [ "$ADMIN_PASS_GENERATED" = "1" ]; then
+    # No había .env previo del que leerla y tampoco se sembró: nadie conoce
+    # esta contraseña y no sirve de nada anotarla.
+    echo "  Si la perdiste, cambiala desde el panel o volvé a sembrar a mano."
+  else
+    echo "  Está en ${CREDENTIALS_FILE} (si el archivo sigue existiendo) y en ${ENV_FILE}."
+  fi
+fi
 echo ""
-echo "La contraseña de la DB y el JWT_SECRET se generaron al azar y quedaron en ${APP_DIR}/api/.env (chmod 600)"
+echo "La contraseña de la DB y el JWT_SECRET viven en ${APP_DIR}/api/.env (chmod 600)."
+echo "  Si ya existían, se conservaron: rotarlos desloguearía a todo el mundo."
 echo "========================================================"
 echo ""
 echo "Próximos comandos útiles:"

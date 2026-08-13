@@ -41,8 +41,18 @@ Migrar y sembrar:
 
 ```bash
 pnpm db:migrate
+# Sólo en una instalación NUEVA. Los seeds borran usuarios, ajustes, médicos,
+# especialidades, servicios, estudios, páginas y bloques antes de insertar.
 pnpm db:seed
 ```
+
+> **`db:seed` no se corre sobre una base con contenido.** `setup-vps.sh` lo
+> comprueba solo (`scripts/deploy/db-state.mjs`) y aborta si la base tiene
+> datos y falta el marker `.seeded`. A mano, verificá antes:
+>
+> ```bash
+> node scripts/deploy/db-state.mjs   # nueva | actualizacion | conflicto
+> ```
 
 Build:
 
@@ -57,9 +67,12 @@ Esto genera:
 
 ## 3. PM2 para la API
 
+El entry compilado es `api/dist/src/index.js` —`tsc` conserva la carpeta
+`src/`— y hace falta `--cwd` para que dotenv encuentre `api/.env`:
+
 ```bash
 cd /var/www/sanatorio
-pm2 start api/dist/index.js --name sanatorio-api --time
+pm2 start api/dist/src/index.js --name sanatorio-api --time --cwd /var/www/sanatorio/api
 pm2 save
 pm2 startup  # seguir instrucciones
 ```
@@ -171,23 +184,53 @@ Pasos que ejecuta:
 ### Rollback
 
 ```bash
-# 1. Volver el código a la versión anterior (el script imprime el SHA previo)
-ROLLBACK_TO=<sha-anterior> bash /var/www/sanatorio/scripts/deploy/update-vps.sh
+ROLLBACK_TO=<sha-anterior> bash /var/www/sanatorio/scripts/deploy/rollback-vps.sh
+```
 
-# 2. Si la versión nueva agregó migraciones, revertirlas de a una.
-#    Siempre por el script del paquete: corre knex a través de tsx. Invocar
-#    knex directo falla en Node 20 con "Unknown file extension .ts", porque el
-#    migrador hace import() en runtime y sólo Node >= 22.18 lee TypeScript solo.
-cd /var/www/sanatorio
-pnpm --filter @sa/api migrate:rollback   # revierte el último batch
-# o, para ir de a una migración:
-pnpm --filter @sa/api exec tsx ./node_modules/knex/bin/cli.js \
-  --knexfile knexfile.ts migrate:down
+**El orden importa, y es al revés de lo que parece.** Primero se revierten las
+migraciones y después se baja el código:
 
-# 3. Si hace falta restaurar datos, usar el backup previo al deploy
+1. backup de la base (si falla, se aborta y el deploy actual queda intacto);
+2. `down()` de las migraciones nuevas **con el código nuevo todavía en disco**;
+3. recién ahí `git reset --hard <sha-anterior>`;
+4. install, builds y restart;
+5. health check.
+
+Bajar el código primero no funciona: knex decide qué revertir leyendo
+`knex_migrations` y buscando el archivo en disco. Después del checkout, las
+migraciones nuevas están registradas en la base y sus archivos ya no existen,
+así que el rollback falla —y el `down()` que hacía falta era justamente el del
+código nuevo, que es el único que sabe deshacer su propio `up()`—.
+
+#### Cuándo el `down()` no alcanza
+
+Si la base se **sembró después** de que corriera una migración, la vuelta atrás
+va por dump, no por `down()`. Los seeds borran páginas y bloques y los vuelven
+a crear con ids nuevos; las migraciones `20260815` y `20260817` guardan su
+snapshot indexado por id de bloque, así que su `down()` no encontraría ninguna
+fila y se marcaría como revertido sin restaurar nada.
+
+Eso no queda librado a que alguien lo recuerde: `migrate:rollback` y
+`migrate:down` pasan por `scripts/deploy/rollback-guard.mjs`, que compara la
+marca `settings.seed_generation` contra la fecha de cada snapshot y **bloquea**
+el rollback con el comando del dump si detecta ese caso. Para ese escenario:
+
+```bash
+ROLLBACK_TO=<sha-anterior> \
+RESTORE_DUMP=/var/www/sanatorio/.db-backups/sanatorio-<fecha>.sql.gz \
+  bash /var/www/sanatorio/scripts/deploy/rollback-vps.sh
+```
+
+O, restaurando el dump a mano:
+
+```bash
 gunzip < /var/www/sanatorio/.db-backups/sanatorio-<fecha>.sql.gz \
   | mysql -u sanatorio -p sanatorio
 ```
+
+En un entorno de desarrollo, donde perder el contenido es justamente lo que se
+busca, la barrera se levanta con `ROLLBACK_ALLOW_AFTER_SEED=1` (es lo que hace
+`pnpm --filter @sa/api db:reset`).
 
 Las migraciones de contenido guardan el estado anterior en la tabla `settings`
 (`minuta_blocks_backup_*` y `snapshot_*`), así que su `down()` restaura las

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api";
 
@@ -56,6 +56,13 @@ export function useCaptchaConfig(): { config: CaptchaConfig | null; isLoading: b
 
 const loaded = new Map<string, Promise<void>>();
 
+/**
+ * Carga el script del proveedor una sola vez.
+ *
+ * Una promesa **rechazada** se saca del caché: si quedaba guardada, un fallo
+ * puntual del CDN dejaba el formulario roto para el resto de la sesión, porque
+ * todo reintento recibía la misma promesa ya rechazada.
+ */
 function loadScript(src: string): Promise<void> {
   const existing = loaded.get(src);
   if (existing) return existing;
@@ -65,12 +72,28 @@ function loadScript(src: string): Promise<void> {
     el.async = true;
     el.defer = true;
     el.onload = () => resolve();
-    el.onerror = () => reject(new Error(`no se pudo cargar ${src}`));
+    el.onerror = () => {
+      el.remove();
+      reject(new Error(`no se pudo cargar ${src}`));
+    };
     document.head.appendChild(el);
+  }).catch((err) => {
+    loaded.delete(src);
+    throw err;
   });
   loaded.set(src, promise);
   return promise;
 }
+
+/** Sólo para las pruebas: deja el caché de scripts como al arrancar. */
+export function resetCaptchaScriptCache() {
+  loaded.clear();
+}
+
+const LOAD_ERROR =
+  "No pudimos cargar la verificación anti-spam. Revisá tu conexión y volvé a intentar.";
+const CHALLENGE_ERROR =
+  "La verificación anti-spam falló. Volvé a intentar; si sigue fallando, escribinos por WhatsApp.";
 
 interface Props {
   /** Recibe el token, o null cuando expira o falla. */
@@ -84,6 +107,20 @@ export default function Captcha({ onToken, onError }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const widgetId = useRef<string | number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Cambiarlo vuelve a correr el efecto: es el botón "Reintentar". */
+  const [attempt, setAttempt] = useState(0);
+
+  const fail = useCallback(
+    (message: string) => {
+      // Los tres a la vez: sin token el envío no puede pasar la verificación,
+      // el formulario necesita saberlo para no dejar el botón deshabilitado
+      // sin explicación, y la persona necesita leer qué pasó.
+      onToken(null);
+      setError(message);
+      onError?.(message);
+    },
+    [onToken, onError],
+  );
 
   useEffect(() => {
     if (!config) return;
@@ -91,36 +128,41 @@ export default function Captcha({ onToken, onError }: Props) {
     if (!script) {
       // El servidor validó el proveedor; si igual llega uno raro, se avisa en
       // vez de dejar un hueco silencioso.
-      const message = "La verificación anti-spam está mal configurada.";
-      setError(message);
-      onError?.(message);
+      fail("La verificación anti-spam está mal configurada.");
       return;
     }
 
     let cancelled = false;
+    setError(null);
+    onError?.(null);
+
     loadScript(script.src)
       .then(() => {
         if (cancelled || !containerRef.current) return;
         const widget = window[script.global];
         if (!widget) throw new Error("el proveedor no expuso su API");
+        containerRef.current.innerHTML = "";
         widgetId.current = widget.render(containerRef.current, {
           sitekey: config.siteKey,
           callback: (token: string) => {
+            if (cancelled) return;
             setError(null);
             onError?.(null);
             onToken(token);
           },
-          "expired-callback": () => onToken(null),
-          "error-callback": () => onToken(null),
-          "expired_callback": () => onToken(null),
+          "expired-callback": () => {
+            if (!cancelled) fail("La verificación venció. Resolvela de nuevo para enviar.");
+          },
+          "error-callback": () => {
+            if (!cancelled) fail(CHALLENGE_ERROR);
+          },
+          "expired_callback": () => {
+            if (!cancelled) fail("La verificación venció. Resolvela de nuevo para enviar.");
+          },
         });
       })
       .catch(() => {
-        if (cancelled) return;
-        const message =
-          "No pudimos cargar la verificación anti-spam. Revisá tu conexión o escribinos por WhatsApp.";
-        setError(message);
-        onError?.(message);
+        if (!cancelled) fail(LOAD_ERROR);
       });
 
     return () => {
@@ -128,7 +170,7 @@ export default function Captcha({ onToken, onError }: Props) {
     };
     // onToken/onError se reciben como callbacks estables desde el formulario.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config?.provider, config?.siteKey]);
+  }, [config?.provider, config?.siteKey, attempt]);
 
   if (!config) return null;
 
@@ -137,7 +179,21 @@ export default function Captcha({ onToken, onError }: Props) {
       <div ref={containerRef} className="min-h-[70px]" />
       {error && (
         <p role="alert" className="text-sm text-amber-700 mt-1">
-          {error}
+          {error}{" "}
+          <button
+            type="button"
+            className="underline font-medium"
+            onClick={() => {
+              // Vuelve a intentar: el widget se redibuja y, si lo que falló fue
+              // la descarga, el script se pide de nuevo.
+              const script = SCRIPTS[config.provider];
+              if (script) loaded.delete(script.src);
+              widgetId.current = null;
+              setAttempt((n) => n + 1);
+            }}
+          >
+            Reintentar
+          </button>
         </p>
       )}
     </div>
