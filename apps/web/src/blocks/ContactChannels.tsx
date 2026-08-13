@@ -48,7 +48,9 @@ function Channel({ channel }: { channel: ContactChannel }) {
       </div>
       <div className="min-w-0">
         <p className={`text-xs font-semibold uppercase tracking-wide ${isEmergency ? "text-accent-700" : "text-gray-600"}`}>
-          {isEmergency ? "Emergencias 24hs" : KIND_LABEL[channel.kind]}
+          {/* El rótulo sale del canal: "24hs" era una afirmación de cobertura
+              que el sanatorio no confirmó, escrita a mano en el componente. */}
+          {isEmergency ? channel.label : KIND_LABEL[channel.kind]}
         </p>
         <h3 className="font-semibold text-primary">{channel.label}</h3>
         {channel.value ? (

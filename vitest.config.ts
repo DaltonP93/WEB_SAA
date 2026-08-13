@@ -9,6 +9,7 @@ export default defineConfig({
       "@sa/shared/blocks": path.resolve(__dirname, "shared/types/blocks.ts"),
       "@sa/shared/block-schemas": path.resolve(__dirname, "shared/types/block-schemas.ts"),
       "@sa/shared/institutional-red": path.resolve(__dirname, "shared/types/institutional-red.ts"),
+      "@sa/shared/contact-values": path.resolve(__dirname, "shared/types/contact-values.ts"),
       "@sa/shared": path.resolve(__dirname, "shared/types/index.ts"),
       // knex y mysql2 son dependencias de api/, no de la raíz.
       knex: path.resolve(__dirname, "api/node_modules/knex/knex.js"),

@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { api } from "../api";
+import { THEME_COLOR_KEYS, THEME_PALETTE } from "@sa/shared/institutional-red";
 import { useUnsavedGuard } from "../hooks/useUnsavedGuard";
 
 export default function SettingsPage() {
@@ -45,16 +46,46 @@ export default function SettingsPage() {
 
       <section className="card p-5">
         <h2 className="font-semibold mb-3">Tema (colores y tipografía)</h2>
+        {/*
+          Los colores se eligen de la paleta institucional, no con un selector
+          libre. Un color arbitrario podía pintar de rojo cualquier parte del
+          sitio —el rojo es exclusivo de Emergencias— y además rompía la
+          identidad de marca. La API valida lo mismo, así que un panel viejo
+          tampoco puede guardar un color de fuera de la paleta.
+        */}
+        <p className="text-sm text-gray-600 mb-4">
+          Los colores son los institucionales. El rojo (<code>accent</code>) identifica
+          únicamente a Emergencias y por eso no se cambia.
+        </p>
         <div className="grid md:grid-cols-3 gap-4">
-          {(["primary", "secondary", "accent", "bg", "text"] as const).map((c) => (
-            <div key={c}>
-              <label className="label">{c}</label>
-              <div className="flex gap-2">
-                <input type="color" value={s.theme?.[c] ?? "#000000"} onChange={(e) => setKey("theme", { [c]: e.target.value })} className="h-10 w-12 border rounded" />
-                <input className="input" value={s.theme?.[c] ?? ""} onChange={(e) => setKey("theme", { [c]: e.target.value })} />
+          {THEME_COLOR_KEYS.map((c) => {
+            const options = THEME_PALETTE[c] ?? [];
+            const current = (s.theme?.[c] ?? options[0] ?? "").toLowerCase();
+            const locked = options.length < 2;
+            return (
+              <div key={c}>
+                <label className="label">{c}</label>
+                <div className="flex flex-wrap gap-2 items-center">
+                  {options.map((color) => (
+                    <button
+                      key={color}
+                      type="button"
+                      disabled={locked}
+                      onClick={() => setKey("theme", { [c]: color })}
+                      aria-pressed={current === color}
+                      title={color}
+                      className={`h-10 w-12 rounded border-2 ${current === color ? "border-primary" : "border-gray-200"} ${locked ? "cursor-not-allowed" : ""}`}
+                      style={{ background: color }}
+                    >
+                      <span className="sr-only">{color}</span>
+                    </button>
+                  ))}
+                  <span className="text-xs text-gray-500">{current}</span>
+                </div>
+                {locked && <p className="mt-1 text-xs text-gray-500">Fijo por identidad de marca.</p>}
               </div>
-            </div>
-          ))}
+            );
+          })}
           <div><label className="label">Font Heading</label><input className="input" value={s.theme?.fontHeading ?? ""} onChange={(e) => setKey("theme", { fontHeading: e.target.value })} placeholder="Open Sans" /></div>
           <div><label className="label">Font Body</label><input className="input" value={s.theme?.fontBody ?? ""} onChange={(e) => setKey("theme", { fontBody: e.target.value })} placeholder="Open Sans" /></div>
           <div><label className="label">Radius</label><input className="input" value={s.theme?.radius ?? ""} onChange={(e) => setKey("theme", { radius: e.target.value })} placeholder="0.5rem" /></div>
@@ -80,8 +111,12 @@ export default function SettingsPage() {
         <div className="grid md:grid-cols-2 gap-4">
           <div className="md:col-span-2"><label className="label">Dirección</label><input className="input" value={s.contact?.address ?? ""} onChange={(e) => setKey("contact", { address: e.target.value })} /></div>
           <div className="md:col-span-2"><label className="label">Link "Cómo llegar" (Google Maps)</label><input className="input" value={s.contact?.mapsUrl ?? ""} onChange={(e) => setKey("contact", { mapsUrl: e.target.value })} placeholder="https://www.google.com/maps/…" /></div>
-          <div className="md:col-span-2"><label className="label">Embed de mapa (HTML)</label>
+          <div className="md:col-span-2"><label className="label">Mapa de Google</label>
             <textarea className="input" rows={3} value={s.contact?.mapEmbed ?? ""} onChange={(e) => setKey("contact", { mapEmbed: e.target.value })} />
+            <p className="mt-1 text-xs text-gray-500">
+              Pegá el iframe que da Google Maps (Compartir → Insertar un mapa) o la URL sola.
+              Se guarda sólo la URL: el sitio arma el mapa por su cuenta, sin insertar HTML.
+            </p>
           </div>
         </div>
       </section>
@@ -95,13 +130,6 @@ export default function SettingsPage() {
         </div>
       </section>
 
-      <section className="card p-5">
-        <h2 className="font-semibold mb-3">Scripts personalizados</h2>
-        <label className="label">{`<head>`}</label>
-        <textarea className="input font-mono text-xs" rows={3} value={s.scripts?.head ?? ""} onChange={(e) => setKey("scripts", { head: e.target.value })} />
-        <label className="label mt-3">Antes de {`</body>`}</label>
-        <textarea className="input font-mono text-xs" rows={3} value={s.scripts?.bodyEnd ?? ""} onChange={(e) => setKey("scripts", { bodyEnd: e.target.value })} />
-      </section>
 
       <div className="flex justify-end">
         <button onClick={() => save.mutate(s)} className="btn-primary btn-lg">Guardar cambios</button>

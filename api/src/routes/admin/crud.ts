@@ -24,6 +24,12 @@ export interface CrudOpts {
   table: string;
   schema: ZodSchema<any>;
   /**
+   * Validación extra en el PUT parcial, cuando hace falta la fila guardada
+   * para saber contra qué validar (por ejemplo el `kind` de un canal, que
+   * puede no venir en el payload).
+   */
+  refineUpdate?: (data: any, current: any, ctx: z.RefinementCtx) => void;
+  /**
    * Impide repetir el mismo icono dentro de la tabla: las grillas de
    * servicios, estudios y especialidades se ven juntas y dos filas con el
    * mismo icono se leen como un error de carga.
@@ -85,7 +91,15 @@ export function crudRouter(opts: CrudOpts): Router {
   });
 
   r.put("/:id", async (req, res) => {
-    const partialSchema = (opts.schema as ZodObject<any>).partial();
+    // `.partial()` no existe en un schema con superRefine: se toma el objeto
+    // de adentro y se le vuelve a colgar la validación que necesita la fila.
+    const base = (opts.schema as { _def?: { schema?: ZodObject<any> } })._def?.schema ?? opts.schema;
+    const current = await db(opts.table).where({ id: req.params.id }).first();
+    if (!current) return res.status(404).json({ error: "no encontrado" });
+
+    const partialSchema = (base as ZodObject<any>)
+      .partial()
+      .superRefine((data: any, ctx: z.RefinementCtx) => opts.refineUpdate?.(data, current, ctx));
     const parsed = partialSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "payload invalido", issues: parsed.error.issues });
     const taken = await iconTakenBy((parsed.data as any).icon, req.params.id);

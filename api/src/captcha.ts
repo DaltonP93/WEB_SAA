@@ -16,9 +16,19 @@ function provider(): string {
   return (process.env.CAPTCHA_PROVIDER ?? "").trim().toLowerCase();
 }
 
+/**
+ * La verificación está activa sólo si están las **tres** variables.
+ *
+ * Antes bastaban proveedor y secreto. Con esa combinación el backend exigía
+ * token pero el front recibía `captcha: null` —porque necesita la site key
+ * para dibujar el widget—, así que no había forma de obtener un token y
+ * **todos los envíos fallaban**. Faltando cualquiera de las tres, la
+ * verificación queda desactivada y los formularios siguen funcionando.
+ */
 export function captchaEnabled(): boolean {
+  const siteKey = (process.env.CAPTCHA_SITE_KEY ?? "").trim();
   const secret = (process.env.CAPTCHA_SECRET_KEY ?? "").trim();
-  return !!provider() && !!secret && provider() in VERIFY_URL;
+  return !!provider() && provider() in VERIFY_URL && !!siteKey && !!secret;
 }
 
 /**
@@ -29,9 +39,8 @@ export function captchaEnabled(): boolean {
  * no dibuja ningún widget: los formularios siguen funcionando igual.
  */
 export function captchaPublicConfig(): { provider: string; siteKey: string } | null {
-  const siteKey = (process.env.CAPTCHA_SITE_KEY ?? "").trim();
-  if (!captchaEnabled() || !siteKey) return null;
-  return { provider: provider(), siteKey };
+  if (!captchaEnabled()) return null;
+  return { provider: provider(), siteKey: (process.env.CAPTCHA_SITE_KEY ?? "").trim() };
 }
 
 /**
@@ -49,14 +58,17 @@ export function warnIfCaptchaMisconfigured(log: Pick<Console, "warn"> = console)
     log.warn(`[captcha] CAPTCHA_PROVIDER="${name}" no es válido (turnstile|recaptcha): la verificación queda desactivada.`);
     return;
   }
-  if (secret && !siteKey) {
-    log.warn("[captcha] hay CAPTCHA_SECRET_KEY pero falta CAPTCHA_SITE_KEY: el front no puede mostrar el widget y los envíos se van a rechazar.");
-  }
-  if (siteKey && !secret) {
-    log.warn("[captcha] hay CAPTCHA_SITE_KEY pero falta CAPTCHA_SECRET_KEY: el widget se muestra pero el servidor NO verifica el token.");
-  }
-  if (!name && (siteKey || secret)) {
-    log.warn("[captcha] faltan claves sin CAPTCHA_PROVIDER: la verificación queda desactivada.");
+  const missing = [
+    !name && "CAPTCHA_PROVIDER",
+    !siteKey && "CAPTCHA_SITE_KEY",
+    !secret && "CAPTCHA_SECRET_KEY",
+  ].filter(Boolean);
+  if (missing.length > 0) {
+    log.warn(
+      `[captcha] configuración incompleta: falta ${missing.join(", ")}. ` +
+        "La verificación queda DESACTIVADA (los formularios siguen funcionando). " +
+        "Las tres variables van juntas.",
+    );
   }
 }
 

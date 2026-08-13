@@ -82,7 +82,7 @@ export default function ContactForm({ heading = "Contacto", showPhone = true }: 
         </motion.div>
         <Captcha key={captchaKey} onToken={setCaptchaToken} onError={setCaptchaError} />
         {captchaError && (
-          <p role="alert" className="text-sm text-accent-700">{captchaError}</p>
+          <p role="alert" className="text-sm text-amber-700">{captchaError}</p>
         )}
         <button
           disabled={state === "loading" || captchaPending}

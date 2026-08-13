@@ -57,3 +57,32 @@ export function safeInternalHref(href: string | undefined | null, fallback = "/"
   const normalized = value.replace(/^\/{2,}/, "/");
   return normalized || fallback;
 }
+
+/** Hosts de Google Maps aceptados para el iframe del mapa. */
+const MAP_HOSTS = new Set([
+  "www.google.com",
+  "google.com",
+  "maps.google.com",
+  "www.google.com.py",
+  "google.com.py",
+]);
+
+/**
+ * ¿Es una URL de mapa embebible de Google?
+ *
+ * La API ya valida esto antes de publicarla; acá se repite porque el `src` de
+ * un iframe es una superficie demasiado sensible para confiar en una sola capa.
+ */
+export function isMapEmbedUrl(value: string | undefined | null): boolean {
+  if (!value) return false;
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "https:") return false;
+  if (!MAP_HOSTS.has(url.hostname.toLowerCase())) return false;
+  if (!/^\/maps(\/embed)?\/?$/.test(url.pathname)) return false;
+  return url.pathname.startsWith("/maps/embed") || url.searchParams.get("output") === "embed";
+}

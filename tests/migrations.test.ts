@@ -36,6 +36,7 @@ const CORRECTIVE = [
   "20260814000000_contenido_no_confirmado.ts",
   "20260815000000_rojo_solo_emergencias.ts",
   "20260816000000_fuente_unica_contacto.ts",
+  "20260817000000_rojo_y_horarios_sin_confirmar.ts",
 ];
 
 describeDb("migraciones", () => {
@@ -120,12 +121,16 @@ async function contentSnapshot(db: Knex) {
   const studyColumns = ["slug", "name", "description", "icon"];
   if (await db.schema.hasColumn("studies", "published")) studyColumns.push("published");
   const studies = await db("studies").orderBy("slug").select(studyColumns);
-  const services = await db("services").orderBy("slug").select("slug", "name", "description", "icon");
-  const specialties = await db("specialties").orderBy("slug").select("slug", "name", "icon");
-  const channels = await db("contact_channels").orderBy("key").select("key", "label", "value", "active");
+  const services = await db("services").orderBy("slug").select("slug", "name", "description", "body", "icon", "order");
+  const specialties = await db("specialties").orderBy("slug").select("slug", "name", "description", "icon", "order");
+  // Todas las columnas administrables: un rollback que devuelve `value` pero
+  // deja `href` cambiado no es un rollback.
+  const channels = await db("contact_channels")
+    .orderBy("key")
+    .select("key", "label", "kind", "value", "href", "note", "message", "icon", "active", "order");
   const schedules = await db("schedules")
     .orderBy("key")
-    .select("key", "area", "days", "hours", "note", "active");
+    .select("key", "area", "service_slug", "days", "hours", "note", "active", "order");
   const settings = await db("settings").orderBy("key").select("key", "value");
   const menus = await db("menus").orderBy("location").select("location", "items");
 
@@ -302,4 +307,126 @@ describeDb("migraciones correctivas frente a ediciones del cliente", () => {
     expect(page).toBeTruthy();
     expect(await db("blocks").where({ page_id: page.id })).toHaveLength(2);
   }, 120_000);
+});
+
+/**
+ * Rollback de la fuente única sobre un canal social que **ya existía**.
+ *
+ * Es el caso que el snapshot no cubría: si `settings.social` traía una URL y
+ * el canal de esa red ya estaba creado pero vacío, `up()` le escribía `href` y
+ * `value`. El snapshot guardaba sólo `value`, así que `down()` devolvía el
+ * valor y dejaba el `href` modificado: el sitio seguía enlazando a un perfil
+ * que el sanatorio no había cargado ahí.
+ *
+ * La prueba arranca de una fila con TODAS las columnas distintas de lo que la
+ * migración escribiría, corre `up()`, corre `down()` y compara la fila entera.
+ */
+const SOCIAL_DB_NAME = `${process.env.TEST_DB_NAME ?? "sanatorio_test"}_social`;
+const FUENTE_UNICA = "20260816000000_fuente_unica_contacto.ts";
+
+describeDb("rollback de la fuente única con redes ya cargadas", () => {
+  let db: Knex;
+  /** La fila completa, tal como la dejó el sanatorio antes de migrar. */
+  let before: Record<string, unknown>;
+  let beforeContact: unknown;
+  let beforeSocial: unknown;
+
+  const CHANNEL_COLUMNS = [
+    "key", "label", "kind", "value", "href", "note", "message", "icon", "active", "order",
+  ];
+
+  const readChannel = async (key: string) =>
+    db("contact_channels").where({ key }).first(...CHANNEL_COLUMNS);
+
+  beforeAll(async () => {
+    db = await createTestDatabase(SOCIAL_DB_NAME);
+
+    // Todo lo anterior a la fuente única.
+    let guard = 0;
+    while (guard++ < 100) {
+      const pending = await pendingMigrations(db);
+      if (!pending[0] || pending[0] === FUENTE_UNICA) break;
+      await migrateUpOne(db);
+    }
+
+    // El canal de Facebook ya existe, cargado a mano y con otros valores en
+    // cada columna. `value` vacío es la condición que hace que `up()` escriba.
+    await db("contact_channels").where({ key: "facebook" }).del();
+    await db("contact_channels").insert({
+      key: "facebook",
+      label: "Facebook del sanatorio",
+      kind: "url",
+      value: null,
+      href: "https://facebook.com/perfil-cargado-a-mano",
+      note: "Nota escrita por el sanatorio.",
+      message: "Mensaje propio",
+      icon: "facebook",
+      active: true,
+      order: 77,
+    });
+
+    // Y `settings.social` trae una URL distinta: es lo que `up()` va a mover.
+    const contactRow = await db("settings").where({ key: "contact" }).first("value");
+    beforeContact = jsonColumn(contactRow?.value);
+    await db("settings")
+      .insert({
+        key: "social",
+        value: JSON.stringify({ facebook: "https://facebook.com/movido-por-la-migracion" }),
+        updated_at: db.fn.now(),
+      })
+      .onConflict("key")
+      .merge({ value: JSON.stringify({ facebook: "https://facebook.com/movido-por-la-migracion" }) });
+    beforeSocial = jsonColumn((await db("settings").where({ key: "social" }).first("value"))?.value);
+
+    before = (await readChannel("facebook")) as Record<string, unknown>;
+  }, 180_000);
+
+  afterAll(async () => {
+    if (db) await db.destroy();
+    await dropTestDatabase(SOCIAL_DB_NAME);
+  });
+
+  it("up() efectivamente modifica la fila que ya existía", async () => {
+    const mig = await migrationSource.getMigration(FUENTE_UNICA);
+    await mig.up(db);
+
+    const after = await readChannel("facebook");
+    // Si esto no cambiara, la prueba del rollback no probaría nada.
+    expect(after.href).toBe("https://facebook.com/movido-por-la-migracion");
+    expect(after.value).toBe("https://facebook.com/movido-por-la-migracion");
+    expect(after.href).not.toBe(before.href);
+  }, 120_000);
+
+  it("down() devuelve la fila entera, no sólo el value", async () => {
+    const mig = await migrationSource.getMigration(FUENTE_UNICA);
+    await mig.down(db);
+
+    const after = await readChannel("facebook");
+    // Columna por columna: el diff dice cuál quedó mal.
+    for (const column of CHANNEL_COLUMNS) {
+      expect(after[column], `columna ${column}`).toEqual(before[column]);
+    }
+    expect(after).toEqual(before);
+  }, 120_000);
+
+  it("down() no borra el canal que ya existía", async () => {
+    expect(await readChannel("facebook")).toBeTruthy();
+  });
+
+  it("down() restaura también settings.contact y settings.social", async () => {
+    const contact = jsonColumn((await db("settings").where({ key: "contact" }).first("value"))?.value);
+    expect(contact).toEqual(beforeContact);
+    const social = jsonColumn((await db("settings").where({ key: "social" }).first("value"))?.value);
+    expect(social).toEqual(beforeSocial);
+    // Y el snapshot se va con la migración.
+    const snapshot = await db("settings")
+      .where({ key: "snapshot_fuente_unica_contacto_20260816000000" })
+      .first();
+    expect(snapshot).toBeUndefined();
+  });
+
+  it("los canales que sí creó la migración se borran al revertir", async () => {
+    // `instagram` no existía antes: `up()` lo creó y `down()` lo sacó.
+    expect(await readChannel("instagram")).toBeUndefined();
+  });
 });

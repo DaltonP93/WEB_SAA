@@ -136,7 +136,7 @@ export default function Captcha({ onToken, onError }: Props) {
     <div>
       <div ref={containerRef} className="min-h-[70px]" />
       {error && (
-        <p role="alert" className="text-sm text-accent-700 mt-1">
+        <p role="alert" className="text-sm text-amber-700 mt-1">
           {error}
         </p>
       )}
