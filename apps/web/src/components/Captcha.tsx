@@ -102,25 +102,68 @@ interface Props {
   onError?: (message: string | null) => void;
 }
 
+/**
+ * De qué tipo fue la falla. Cambia qué hay que hacer para reintentar:
+ *
+ * - `load`: el `<script>` del proveedor no se descargó. Hay que volver a
+ *   pedirlo, y para eso primero sacar del caché la promesa rechazada.
+ * - `challenge`: el SDK está cargado y el que falló fue el desafío. Se
+ *   resetea el widget con la API del proveedor; volver a insertar el `<script>`
+ *   dejaría dos copias del SDK en la página.
+ */
+type ErrorKind = "load" | "challenge";
+
 export default function Captcha({ onToken, onError }: Props) {
   const { config } = useCaptchaConfig();
   const containerRef = useRef<HTMLDivElement>(null);
   const widgetId = useRef<string | number | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ message: string; kind: ErrorKind } | null>(null);
   /** Cambiarlo vuelve a correr el efecto: es el botón "Reintentar". */
   const [attempt, setAttempt] = useState(0);
 
   const fail = useCallback(
-    (message: string) => {
+    (message: string, kind: ErrorKind) => {
       // Los tres a la vez: sin token el envío no puede pasar la verificación,
       // el formulario necesita saberlo para no dejar el botón deshabilitado
       // sin explicación, y la persona necesita leer qué pasó.
       onToken(null);
-      setError(message);
+      setError({ message, kind });
       onError?.(message);
     },
     [onToken, onError],
   );
+
+  /**
+   * Reintenta según lo que falló.
+   *
+   * Un error del desafío no justifica volver a bajar el SDK: la página
+   * terminaría con dos `<script>` del proveedor, y el segundo puede pisar el
+   * estado del primero. Con el SDK ya cargado alcanza `reset(widgetId)`, que
+   * es la API que Turnstile y reCAPTCHA exponen justamente para esto.
+   */
+  const retry = useCallback(() => {
+    const kind = error?.kind;
+    const script = config ? SCRIPTS[config.provider] : undefined;
+
+    if (kind === "challenge" && script) {
+      const widget = window[script.global];
+      if (widget && widgetId.current !== null) {
+        setError(null);
+        onError?.(null);
+        onToken(null);
+        widget.reset(widgetId.current);
+        return;
+      }
+    }
+
+    // Falló la descarga (o no hay widget que resetear): se saca del caché la
+    // promesa rechazada para que el próximo intento pida el script de nuevo.
+    if (kind === "load" && script) loaded.delete(script.src);
+    widgetId.current = null;
+    setAttempt((n) => n + 1);
+    // config/onToken/onError son estables; `error` es lo único que cambia.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [error?.kind, config?.provider, onToken, onError]);
 
   useEffect(() => {
     if (!config) return;
@@ -128,7 +171,7 @@ export default function Captcha({ onToken, onError }: Props) {
     if (!script) {
       // El servidor validó el proveedor; si igual llega uno raro, se avisa en
       // vez de dejar un hueco silencioso.
-      fail("La verificación anti-spam está mal configurada.");
+      fail("La verificación anti-spam está mal configurada.", "load");
       return;
     }
 
@@ -151,18 +194,18 @@ export default function Captcha({ onToken, onError }: Props) {
             onToken(token);
           },
           "expired-callback": () => {
-            if (!cancelled) fail("La verificación venció. Resolvela de nuevo para enviar.");
+            if (!cancelled) fail("La verificación venció. Resolvela de nuevo para enviar.", "challenge");
           },
           "error-callback": () => {
-            if (!cancelled) fail(CHALLENGE_ERROR);
+            if (!cancelled) fail(CHALLENGE_ERROR, "challenge");
           },
           "expired_callback": () => {
-            if (!cancelled) fail("La verificación venció. Resolvela de nuevo para enviar.");
+            if (!cancelled) fail("La verificación venció. Resolvela de nuevo para enviar.", "challenge");
           },
         });
       })
       .catch(() => {
-        if (!cancelled) fail(LOAD_ERROR);
+        if (!cancelled) fail(LOAD_ERROR, "load");
       });
 
     return () => {
@@ -179,18 +222,11 @@ export default function Captcha({ onToken, onError }: Props) {
       <div ref={containerRef} className="min-h-[70px]" />
       {error && (
         <p role="alert" className="text-sm text-amber-700 mt-1">
-          {error}{" "}
+          {error.message}{" "}
           <button
             type="button"
             className="underline font-medium"
-            onClick={() => {
-              // Vuelve a intentar: el widget se redibuja y, si lo que falló fue
-              // la descarga, el script se pide de nuevo.
-              const script = SCRIPTS[config.provider];
-              if (script) loaded.delete(script.src);
-              widgetId.current = null;
-              setAttempt((n) => n + 1);
-            }}
+            onClick={() => retry()}
           >
             Reintentar
           </button>

@@ -10,7 +10,8 @@
     "./blocks": "./types/blocks.ts",
     "./block-schemas": "./types/block-schemas.ts",
     "./institutional-red": "./types/institutional-red.ts",
-    "./contact-values": "./types/contact-values.ts"
+    "./contact-values": "./types/contact-values.ts",
+    "./embed-hosts": "./types/embed-hosts.ts"
   },
   "dependencies": {
     "zod": "^3.23.8"

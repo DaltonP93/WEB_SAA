@@ -170,23 +170,33 @@ describeDb("estado de la base antes de sembrar", () => {
 describe("el deploy usa el estado de la base, no el marker", () => {
   const script = readFileSync(resolve(ROOT, "scripts/deploy/setup-vps.sh"), "utf8");
 
-  it("consulta db-state.mjs antes de migrar", () => {
-    const guard = script.indexOf("db-state.mjs");
+  it("consulta el estado de la base antes de migrar", () => {
+    // La consulta vive en prepare-env.sh, que además decide la credencial.
+    const guard = script.indexOf("prepare-env.sh");
     const migrate = script.indexOf("pnpm db:migrate");
     expect(guard).toBeGreaterThan(-1);
     // Si hay conflicto, la base ni siquiera se migra.
     expect(guard).toBeLessThan(migrate);
   });
 
-  it("sólo siembra cuando el estado es 'nueva'", () => {
-    expect(script).toMatch(/if \[ "\$DB_STATE" = "nueva" \]; then\s+log[^\n]*\n\s+pnpm db:seed/);
+  it("sólo siembra cuando prepare-env.sh lo autoriza", () => {
+    expect(script).toMatch(/if \[ "\$WILL_SEED" = "1" \]; then\s+log[^\n]*\n\s+pnpm db:seed/);
     // Y ya no alcanza con que falte el archivo.
     expect(script).not.toMatch(/if \[ ! -f "\$SEED_MARKER" \]/);
   });
 
-  it("aborta ante cualquier otro estado", () => {
-    const branch = script.slice(script.indexOf('case "$DB_STATE"'), script.indexOf("pnpm db:migrate"));
+  it("aborta si no se pudo confirmar el estado", () => {
+    const branch = script.slice(script.indexOf("PREPARE_CODE"), script.indexOf("pnpm db:migrate"));
     expect(branch).toContain("die ");
+  });
+
+  it("prepare-env.sh es el que consulta db-state.mjs", () => {
+    const prepare = readFileSync(resolve(ROOT, "scripts/deploy/prepare-env.sh"), "utf8");
+    const guard = prepare.indexOf("db-state.mjs");
+    const escribeEnv = prepare.indexOf('> "$ENV_FILE"');
+    expect(guard).toBeGreaterThan(-1);
+    // Primero el estado, después el .env: ese es todo el punto.
+    expect(guard).toBeLessThan(escribeEnv);
   });
 });
 
@@ -194,12 +204,15 @@ describe("credenciales que no se inventan", () => {
   const script = readFileSync(resolve(ROOT, "scripts/deploy/setup-vps.sh"), "utf8");
 
   it("reutiliza la contraseña del admin que ya está en api/.env", () => {
-    expect(script).toContain('ADMIN_PASS="${ADMIN_PASS:-$(env_value SEED_ADMIN_PASSWORD)}"');
+    const prepare = readFileSync(resolve(ROOT, "scripts/deploy/prepare-env.sh"), "utf8");
+    expect(prepare).toContain('EXISTING_ADMIN_PASS="$(env_value SEED_ADMIN_PASSWORD)"');
+    expect(prepare).toContain('ADMIN_PASS="$EXISTING_ADMIN_PASS"');
   });
 
   it("no rota el JWT_SECRET ni la clave de la DB en cada corrida", () => {
-    expect(script).toContain('JWT_SECRET="${JWT_SECRET:-$(env_value JWT_SECRET)}"');
-    expect(script).toContain('DB_PASS="${DB_PASS:-$(env_value DB_PASS)}"');
+    const prepare = readFileSync(resolve(ROOT, "scripts/deploy/prepare-env.sh"), "utf8");
+    expect(prepare).toContain('JWT_SECRET="${JWT_SECRET:-$(env_value JWT_SECRET)}"');
+    expect(prepare).toContain('DB_PASS="${DB_PASS:-$(env_value DB_PASS)}"');
   });
 
   it("sólo escribe el archivo de credenciales si el admin se sembró", () => {
@@ -211,6 +224,14 @@ describe("credenciales que no se inventan", () => {
 
   it("y avisa cuando la contraseña sigue siendo la anterior", () => {
     expect(script).toContain("el usuario admin no se tocó");
+  });
+
+  it("la contraseña se genera sólo si el seed va a crear el usuario", () => {
+    const prepare = readFileSync(resolve(ROOT, "scripts/deploy/prepare-env.sh"), "utf8");
+    const genera = prepare.indexOf("openssl rand");
+    const condicion = prepare.lastIndexOf('elif [ "$WILL_SEED" = "1" ]; then', genera);
+    expect(condicion).toBeGreaterThan(-1);
+    expect(condicion).toBeLessThan(genera);
   });
 });
 

@@ -6,6 +6,18 @@ import { api } from "../api";
 import { THEME_COLOR_KEYS, THEME_PALETTE } from "@sa/shared/institutional-red";
 import { useUnsavedGuard } from "../hooks/useUnsavedGuard";
 
+/**
+ * Los únicos ajustes que este formulario edita y envía.
+ *
+ * Antes se guardaba la respuesta entera del GET y se reenviaba tal cual, así
+ * que el panel se convertía en un intermediario de claves que no administra
+ * —los snapshots de las migraciones, la marca de los seeds— y cualquier
+ * cambio de forma en esa ida y vuelta las corrompía. La API valida la misma
+ * lista (`ADMIN_SETTING_KEYS` en `api/src/routes/admin/settings.ts`); acá se
+ * repite para no depender de que la respuesta venga ya filtrada.
+ */
+const ADMIN_SETTING_KEYS = ["brand", "theme", "contact", "seo"] as const;
+
 export default function SettingsPage() {
   const q = useQuery({
     queryKey: ["adm-settings"],
@@ -13,10 +25,20 @@ export default function SettingsPage() {
   });
   const [s, setS] = useState<any>({});
   const [dirty, setDirty] = useState(false);
-  useEffect(() => { if (q.data) { setS(q.data); setDirty(false); } }, [q.data]);
+  useEffect(() => {
+    if (!q.data) return;
+    const only: Record<string, unknown> = {};
+    for (const key of ADMIN_SETTING_KEYS) if (key in q.data) only[key] = q.data[key];
+    setS(only);
+    setDirty(false);
+  }, [q.data]);
 
   const save = useMutation({
-    mutationFn: async (payload: any) => (await api.put("/admin/settings", payload)).data,
+    mutationFn: async (payload: any) => {
+      const body: Record<string, unknown> = {};
+      for (const key of ADMIN_SETTING_KEYS) if (key in payload) body[key] = payload[key];
+      return (await api.put("/admin/settings", body)).data;
+    },
     onSuccess: () => { setDirty(false); toast.success("Guardado"); },
     onError: () => toast.error("Error al guardar"),
   });

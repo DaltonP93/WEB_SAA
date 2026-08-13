@@ -240,7 +240,7 @@ describeDb("un cambio en la tabla llega a todos los consumidores", () => {
       body: JSON.stringify({ social: { facebook: "https://facebook.com/otro" } }),
     });
     expect(masivo.status).toBe(410);
-    expect((await masivo.json()).retired).toEqual(["social"]);
+    expect((await masivo.json()).rejected).toEqual(["social"]);
     expect(await db("settings").where({ key: "social" }).first()).toBeUndefined();
   });
 

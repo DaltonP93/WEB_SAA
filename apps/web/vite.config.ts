@@ -8,6 +8,7 @@ export default defineConfig({
     alias: {
       "@": path.resolve(__dirname, "src"),
       // Las subrutas van antes del alias raíz: el matcher es por prefijo.
+      "@sa/shared/embed-hosts": path.resolve(__dirname, "../../shared/types/embed-hosts.ts"),
       "@sa/shared/institutional-red": path.resolve(__dirname, "../../shared/types/institutional-red.ts"),
       "@sa/shared/contact-values": path.resolve(__dirname, "../../shared/types/contact-values.ts"),
       "@sa/shared/block-schemas": path.resolve(__dirname, "../../shared/types/block-schemas.ts"),
