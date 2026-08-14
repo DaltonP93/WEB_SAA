@@ -38,6 +38,9 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BACKUP_FILE="${BACKUP_FILE:-}"
+# Al comando se le pasa el NOMBRE de la migración: `migrate:down [<name>]`
+# revierte esa, no "la última aplicada". No son lo mismo cuando se fusionan dos
+# ramas y los timestamps quedan fuera de orden.
 DOWN_CMD="${DOWN_CMD:-pnpm --filter @sa/api migrate:down}"
 
 log()  { echo -e "\033[1;34m==>\033[0m $*"; }
@@ -54,6 +57,14 @@ DB_PORT="${DB_PORT:-$(env_value DB_PORT)}"; DB_PORT="${DB_PORT:-3306}"
 DB_USER="${DB_USER:-$(env_value DB_USER)}"; DB_USER="${DB_USER:-sanatorio}"
 DB_PASS="${DB_PASS:-$(env_value DB_PASS)}"
 DB_NAME="${DB_NAME:-$(env_value DB_NAME)}"; DB_NAME="${DB_NAME:-sanatorio}"
+
+# ¿La migración sigue registrada como aplicada?
+sigue_aplicada() {
+  local n
+  n="$(MYSQL_PWD="${DB_PASS:-}" mysql -N -B -h"$DB_HOST" -P"$DB_PORT" -u"$DB_USER" "$DB_NAME" \
+    -e "SELECT COUNT(*) FROM knex_migrations WHERE name = '$1'" 2>/dev/null || echo "")"
+  [ "$n" != "0" ] && [ -n "$n" ]
+}
 
 # --- 1. Qué revertir, según la base ----------------------------------------
 PENDIENTES="$(DB_HOST="$DB_HOST" DB_PORT="$DB_PORT" DB_USER="$DB_USER" DB_PASS="${DB_PASS:-}" \
@@ -77,7 +88,17 @@ FALLO=""
 while IFS= read -r nombre; do
   [ -n "$nombre" ] || continue
   log "    revirtiendo ${nombre}"
-  if ! (cd "$ROOT" && eval "$DOWN_CMD"); then
+  # Las variables de conexión se exportan al comando: si no, knex las lee de
+  # api/.env y podría revertir contra una base distinta de la que se consultó.
+  if ! (cd "$ROOT" && DB_HOST="$DB_HOST" DB_PORT="$DB_PORT" DB_USER="$DB_USER" \
+        DB_PASS="${DB_PASS:-}" DB_NAME="$DB_NAME" eval "$DOWN_CMD '$nombre'"); then
+    FALLO="$nombre"
+    break
+  fi
+  # Y se comprueba que la que se fue sea la que se pidió: un `down()` que
+  # revierte otra deja la base peor que antes, en silencio.
+  if sigue_aplicada "$nombre"; then
+    warn "el down() de ${nombre} terminó sin error pero la migración sigue aplicada."
     FALLO="$nombre"
     break
   fi
@@ -92,6 +113,20 @@ fi
 # --- 3. Falló una del medio -------------------------------------------------
 warn "falló el down() de ${FALLO}."
 warn "Ya se habían revertido ${REVERTIDAS}: la base NO quedó como estaba."
+
+if [ "$REVERTIDAS" -eq 0 ]; then
+  # No se llegó a revertir nada: la base está intacta y restaurar un dump
+  # encima sería destruir por las dudas. Es lo que pasa cuando
+  # `rollback-guard.mjs` bloquea el primer `down()` a propósito.
+  echo "" >&2
+  echo "  ROLLBACK NO INICIADO" >&2
+  echo "  Falló el primer down() (${FALLO}) y no se revirtió ninguna migración:" >&2
+  echo "  la base quedó exactamente como estaba y no se tocó ningún dump." >&2
+  echo "  Si lo bloqueó rollback-guard.mjs —la base se sembró después de" >&2
+  echo "  migrar—, la vuelta atrás va por dump:" >&2
+  echo "    RESTORE_DUMP=<dump> bash scripts/deploy/rollback-vps.sh" >&2
+  exit 4
+fi
 
 if [ -z "$BACKUP_FILE" ] || [ ! -f "$BACKUP_FILE" ]; then
   echo "" >&2

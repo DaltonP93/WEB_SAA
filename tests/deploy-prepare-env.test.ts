@@ -185,6 +185,47 @@ describeDb("prepare-env.sh sobre una base real", () => {
       expect(envValue(dir, "JWT_SECRET")).toBe("secreto-viejo");
     });
 
+    it("conserva las claves que el sanatorio agregó a mano", () => {
+      // El .env se reescribe entero en cada deploy. Perder CAPTCHA_SECRET_KEY
+      // no da error: los formularios quedan sin verificación y nadie se entera.
+      const dir = appDir();
+      writeFileSync(join(dir, ".seeded"), "");
+      writeFileSync(
+        envFile(dir),
+        [
+          "DB_PASS=clave-de-la-base",
+          "CAPTCHA_PROVIDER=turnstile",
+          "CAPTCHA_SITE_KEY=site-key-del-sanatorio",
+          "CAPTCHA_SECRET_KEY=secreto-del-sanatorio",
+          "PUBLIC_FORMS_RATE_MAX=25",
+        ].join("\n"),
+      );
+
+      const res = prepareEnv(dir);
+
+      expect(res.code, res.stderr).toBe(0);
+      expect(envValue(dir, "CAPTCHA_PROVIDER")).toBe("turnstile");
+      expect(envValue(dir, "CAPTCHA_SITE_KEY")).toBe("site-key-del-sanatorio");
+      expect(envValue(dir, "CAPTCHA_SECRET_KEY")).toBe("secreto-del-sanatorio");
+      expect(envValue(dir, "PUBLIC_FORMS_RATE_MAX")).toBe("25");
+      // Y no las duplica.
+      const contenido = readFileSync(envFile(dir), "utf8");
+      expect(contenido.match(/^CAPTCHA_PROVIDER=/gm) ?? []).toHaveLength(1);
+    });
+
+    it("consulta el estado con la contraseña del .env, no vacía", () => {
+      // Si `db-state.mjs` se llamaba antes de resolver DB_PASS, se conectaba
+      // sin contraseña y el script abortaba inventando un conflicto.
+      const dir = appDir();
+      writeFileSync(join(dir, ".seeded"), "");
+      writeFileSync(envFile(dir), `DB_PASS=${baseConnection.password}\n`);
+
+      const res = prepareEnv(dir, { DB_PASS: "" });
+
+      expect(res.code, res.stderr).toBe(0);
+      expect(res.stdout).toContain("DB_STATE=actualizacion");
+    });
+
     it("el .env queda sólo para root", () => {
       const dir = appDir();
       writeFileSync(join(dir, ".seeded"), "");

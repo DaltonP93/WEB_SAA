@@ -5,6 +5,7 @@ import {
   isEmergencyCta,
 } from "./institutional-red";
 import { isLucideIconName } from "./lucide-icons";
+import { VIDEO_URL_MESSAGE, isAllowedVideoUrl } from "./embed-hosts";
 
 const urlLike = z.string().trim().max(500).optional().or(z.literal(""));
 const html = z.string().max(100_000);
@@ -162,7 +163,10 @@ export const blockPropsSchemas = {
     directionsUrl: urlLike,
   }).strip(),
   videoEmbed: z.object({
-    url: z.string().trim().min(1).max(500),
+    // El proveedor se valida al guardar, no sólo al dibujar: antes el panel
+    // aceptaba cualquier URL, decía "Guardado" y el bloque no renderizaba nada
+    // porque la CSP no permite ese host.
+    url: z.string().trim().min(1).max(500).refine(isAllowedVideoUrl, VIDEO_URL_MESSAGE),
     caption: z.string().max(180).optional().or(z.literal("")),
   }).strip(),
   contactForm: z.object({

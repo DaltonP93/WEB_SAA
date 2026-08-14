@@ -188,6 +188,20 @@ describeDb("ajustes administrables: sólo la allowlist", () => {
       expect(await fotoInterna()).toEqual(antes);
     });
 
+    it("con una retirada y una interna juntas manda el 410 explicativo", async () => {
+      // Un panel viejo puede mandar las dos. El 410 lleva el mensaje que dice
+      // qué pasó con `scripts`; el 403 genérico lo perdería.
+      const res = await fetch(`${baseUrl}/api/admin/settings`, {
+        method: "PUT",
+        headers: auth(),
+        body: JSON.stringify({ scripts: { head: "" }, seed_generation: { at: "1999-01-01" } }),
+      });
+      expect(res.status).toBe(410);
+      const body = await res.json();
+      expect(body.error).toMatch(/JavaScript arbitrario/i);
+      expect(body.rejected.sort()).toEqual(["scripts", "seed_generation"]);
+    });
+
     it("una clave desconocida tampoco entra", async () => {
       const res = await fetch(`${baseUrl}/api/admin/settings/inventada`, {
         method: "PUT",

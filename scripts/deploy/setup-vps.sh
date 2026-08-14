@@ -237,7 +237,7 @@ server {
   # frame-src/script-src incluyen los hosts del desafío anti-spam. Sólo se
   # usan si el sanatorio configura CAPTCHA_PROVIDER y las claves; sin eso el
   # front no carga ningún script de terceros.
-  add_header Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self' https://challenges.cloudflare.com https://www.google.com https://www.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https:; connect-src 'self' https://challenges.cloudflare.com; form-action 'self'; frame-src https://www.youtube.com https://www.youtube-nocookie.com https://player.vimeo.com https://www.google.com https://maps.google.com https://www.google.com.py https://google.com.py https://challenges.cloudflare.com; frame-ancestors 'none'" always;
+  add_header Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self' https://challenges.cloudflare.com https://www.google.com https://www.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https:; connect-src 'self' https://challenges.cloudflare.com; form-action 'self'; frame-src https://www.youtube.com https://www.youtube-nocookie.com https://player.vimeo.com https://www.google.com https://google.com https://maps.google.com https://www.google.com.py https://google.com.py https://challenges.cloudflare.com; frame-ancestors 'none'" always;
 
   # API (^~ para que gane prioridad sobre la regex de assets estáticos)
   location ^~ /api/ {

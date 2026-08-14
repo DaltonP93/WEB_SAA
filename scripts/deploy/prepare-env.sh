@@ -54,6 +54,12 @@ env_value() {
   sed -n "s/^$1=//p" "$ENV_FILE" | head -n1
 }
 
+# Los secretos que ya existan se resuelven ANTES de consultar el estado: sin la
+# contraseña de la base, `db-state.mjs` no se puede conectar y el script
+# abortaría diciendo que hay un conflicto que no existe.
+DB_PASS="${DB_PASS:-$(env_value DB_PASS)}"
+JWT_SECRET="${JWT_SECRET:-$(env_value JWT_SECRET)}"
+
 # --- 1. Estado de la base, antes de tocar nada ------------------------------
 set +e
 DB_STATE="$(DB_HOST="$DB_HOST" DB_PORT="$DB_PORT" DB_USER="$DB_USER" DB_PASS="${DB_PASS:-}" \
@@ -89,10 +95,20 @@ else
 fi
 
 # --- 3. .env ----------------------------------------------------------------
-# Se conservan los secretos que ya existan: rotar el JWT desloguea a todos.
-DB_PASS="${DB_PASS:-$(env_value DB_PASS)}"
-JWT_SECRET="${JWT_SECRET:-$(env_value JWT_SECRET)}"
 JWT_SECRET="${JWT_SECRET:-$(openssl rand -base64 48 | tr -d '/+=' | head -c 48)}"
+
+# Las claves que el script no conoce se conservan tal cual.
+#
+# El `.env` se reescribe entero, así que todo lo que el sanatorio haya agregado
+# a mano —CAPTCHA_PROVIDER, CAPTCHA_SITE_KEY, CAPTCHA_SECRET_KEY, límites de
+# rate limit— desaparecía en cada corrida del deploy. Y desaparecer el CAPTCHA
+# no da error: los formularios quedan sin verificación y nadie se entera.
+EXTRA_KEYS=""
+if [ -f "$ENV_FILE" ]; then
+  EXTRA_KEYS="$(grep -E '^[A-Z_][A-Z0-9_]*=' "$ENV_FILE" \
+    | grep -vE '^(PORT|NODE_ENV|DB_HOST|DB_PORT|DB_USER|DB_PASS|DB_NAME|JWT_SECRET|JWT_EXPIRES_IN|UPLOAD_DIR|MAX_UPLOAD_MB|CORS_ORIGINS|PUBLIC_BASE_URL|PUBLIC_SITE_URL|SEED_ADMIN_EMAIL|SEED_ADMIN_NAME|SEED_ADMIN_PASSWORD)=' \
+    || true)"
+fi
 
 mkdir -p "$(dirname "$ENV_FILE")"
 umask 077
@@ -126,6 +142,11 @@ EOF
   else
     echo "# SEED_ADMIN_PASSWORD: no se define. El usuario admin ya existe y su"
     echo "# contraseña no está en este servidor; cambiala desde el panel si se perdió."
+  fi
+  if [ -n "$EXTRA_KEYS" ]; then
+    echo ""
+    echo "# Claves agregadas fuera del deploy, conservadas tal cual."
+    echo "$EXTRA_KEYS"
   fi
 } > "$ENV_FILE"
 chmod 600 "$ENV_FILE"
