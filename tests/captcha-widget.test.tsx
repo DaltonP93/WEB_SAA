@@ -251,3 +251,30 @@ describe("el formulario de contacto frente a un captcha en error", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 });
+
+describe("el SDK no se duplica nunca", () => {
+  it("si el script carga pero el proveedor no expone su API, el reintento no mete otro", async () => {
+    // El `<script>` resuelve pero `window.turnstile` no aparece (CDN que
+    // devolvió un cuerpo truncado, SDK lento). Borrar del caché esa promesa
+    // —que está resuelta— haría que el reintento insertara un segundo SDK.
+    const realAppend = document.head.appendChild.bind(document.head);
+    vi.restoreAllMocks();
+    vi.spyOn(document.head, "appendChild").mockImplementation(((node: any) => {
+      if (node?.tagName !== "SCRIPT") return realAppend(node);
+      requestedScripts.push(node.src);
+      queueMicrotask(() => node.onload?.(new Event("load")));
+      return node;
+    }) as any);
+
+    renderWithQuery(<Captcha onToken={vi.fn()} onError={vi.fn()} />);
+    const alerta = await screen.findByRole("alert");
+    expect(alerta.textContent).toMatch(/no pudimos cargar/i);
+    expect(requestedScripts).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: /reintentar/i }));
+
+    // El script ya estaba cargado: se reutiliza la promesa resuelta.
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(requestedScripts).toHaveLength(1);
+  });
+});

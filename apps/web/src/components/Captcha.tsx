@@ -156,9 +156,11 @@ export default function Captcha({ onToken, onError }: Props) {
       }
     }
 
-    // Falló la descarga (o no hay widget que resetear): se saca del caché la
-    // promesa rechazada para que el próximo intento pida el script de nuevo.
-    if (kind === "load" && script) loaded.delete(script.src);
+    // Falló la descarga (o no hay widget que resetear): se vuelve a montar el
+    // widget. No hace falta tocar el caché —`loadScript` ya descarta sola la
+    // promesa rechazada— y borrarlo a mano sería peor: si la promesa se había
+    // resuelto (el script cargó pero el proveedor no expuso su API), el
+    // siguiente intento insertaría un segundo `<script>` del mismo SDK.
     widgetId.current = null;
     setAttempt((n) => n + 1);
     // config/onToken/onError son estables; `error` es lo único que cambia.

@@ -6,6 +6,8 @@ import {
   MAP_EMBED_ORIGINS,
   VIDEO_EMBED_ORIGINS,
   isAllowedVideoEmbed,
+  isAllowedVideoUrl,
+  toVideoEmbedUrl,
 } from "@sa/shared/embed-hosts";
 
 /**
@@ -81,6 +83,62 @@ describe("isAllowedVideoEmbed", () => {
       null,
     ]) {
       expect(isAllowedVideoEmbed(url), String(url)).toBe(false);
+    }
+  });
+
+  it("rechaza rutas del proveedor que no se pueden embeber", () => {
+    // YouTube sirve estas con X-Frame-Options: SAMEORIGIN. El host está
+    // permitido, pero el navegador las bloquea igual: mismo rectángulo negro.
+    for (const url of [
+      "https://www.youtube.com/shorts/abc123",
+      "https://www.youtube.com/live/abc123",
+      "https://www.youtube.com/playlist?list=PL123",
+      "https://www.youtube.com/",
+      "https://player.vimeo.com/showcase/123",
+    ]) {
+      expect(isAllowedVideoEmbed(url), url).toBe(false);
+    }
+  });
+});
+
+describe("lo que el panel puede guardar", () => {
+  it("normaliza las formas habituales de pegar un video", () => {
+    expect(toVideoEmbedUrl("https://www.youtube.com/watch?v=abc123")).toBe(
+      "https://www.youtube.com/embed/abc123",
+    );
+    expect(toVideoEmbedUrl("https://youtu.be/abc123")).toBe("https://www.youtube.com/embed/abc123");
+    expect(toVideoEmbedUrl("https://vimeo.com/12345")).toBe("https://player.vimeo.com/video/12345");
+  });
+
+  it("no le saca el modo sin cookies a quien lo eligió", () => {
+    // Reescribirlo a youtube.com le devolvería las cookies de seguimiento al
+    // visitante, en un sitio de salud.
+    expect(toVideoEmbedUrl("https://www.youtube-nocookie.com/embed/abc123")).toBe(
+      "https://www.youtube-nocookie.com/embed/abc123",
+    );
+  });
+
+  it("un proveedor no soportado no se puede guardar", () => {
+    // Antes la API respondía 200 y el bloque no dibujaba nada: peor que el
+    // rectángulo negro, porque no queda ni rastro de que algo falló.
+    for (const url of ["https://www.dailymotion.com/video/x1", "https://wistia.com/medias/abc", "texto suelto"]) {
+      expect(isAllowedVideoUrl(url), url).toBe(false);
+    }
+    expect(isAllowedVideoUrl("https://youtu.be/abc123")).toBe(true);
+  });
+});
+
+describe("copias del módulo de embeds", () => {
+  it("shared y api son idénticas byte a byte", () => {
+    const shared = readFileSync(resolve(ROOT, "shared/types/embed-hosts.ts"), "utf8");
+    const api = readFileSync(resolve(ROOT, "api/src/embed-hosts.ts"), "utf8");
+    expect(api).toBe(shared);
+  });
+
+  it("el schema de bloques valida el proveedor en las dos copias", () => {
+    for (const file of ["shared/types/block-schemas.ts", "api/src/block-validation.ts"]) {
+      const source = readFileSync(resolve(ROOT, file), "utf8");
+      expect(source, file).toContain("isAllowedVideoUrl");
     }
   });
 });

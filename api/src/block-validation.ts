@@ -5,6 +5,7 @@ import {
   isEmergencyCta,
 } from "./institutional-red.js";
 import { isLucideIconName } from "./lucide-icons.js";
+import { VIDEO_URL_MESSAGE, isAllowedVideoUrl } from "./embed-hosts.js";
 
 const urlLike = z.string().trim().max(500).optional().or(z.literal(""));
 const html = z.string().max(100_000);
@@ -146,7 +147,8 @@ const blockPropsSchemas = {
     text: z.string().max(500).optional().or(z.literal("")),
     directionsUrl: urlLike,
   }).strip(),
-  videoEmbed: z.object({ url: z.string().trim().min(1).max(500), caption: z.string().max(180).optional().or(z.literal("")) }).strip(),
+  // El proveedor se valida al guardar: ver la copia de shared.
+  videoEmbed: z.object({ url: z.string().trim().min(1).max(500).refine(isAllowedVideoUrl, VIDEO_URL_MESSAGE), caption: z.string().max(180).optional().or(z.literal("")) }).strip(),
   contactForm: z.object({ heading: z.string().max(180).optional().or(z.literal("")), showPhone: z.boolean().optional() }).strip(),
   appointmentForm: z.object({ heading: z.string().max(180).optional().or(z.literal("")), defaultSpecialtyId: z.number().int().positive().optional() }).strip(),
   contactChannels: z.object({

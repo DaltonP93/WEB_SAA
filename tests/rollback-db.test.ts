@@ -137,6 +137,17 @@ describeDb("qué revertir sale de knex_migrations", () => {
     expect(res.stdout.trim()).toBe("");
   }, 120_000);
 
+  it("una lista de destino vacía no autoriza a revertir todo", async () => {
+    // `git ls-tree <sha> -- api/migrations/` sale 0 y vacío si esa ruta no
+    // existe en el commit destino. Tomarlo como "el destino no tiene ninguna"
+    // haría que se revirtiera la base entera.
+    const vacio = destino([]);
+    const res = run("node", ["scripts/deploy/migrations-to-revert.mjs"], { DEST_MIGRATIONS_DIR: vacio });
+    expect(res.code).toBe(3);
+    expect(res.stdout.trim()).toBe("");
+    expect(res.stderr).toMatch(/vino vacía/i);
+  }, 120_000);
+
   it("sobre una base sin migrar no propone nada", async () => {
     const otra = `${DB_NAME}_vacia`;
     const vacia = await createTestDatabase(otra);
@@ -312,6 +323,43 @@ try {
     expect(res.stderr).toContain("LA RESTAURACIÓN TAMBIÉN FALLÓ");
     expect(res.stderr).toMatch(/No levantes la aplicación/i);
   }, 180_000);
+
+  it("si el primer down() falla, no restaura ni inventa una reversión parcial", async () => {
+    // Es lo que hace `rollback-guard.mjs` cuando bloquea la vuelta atrás:
+    // nada se revirtió, así que restaurar el dump encima sería destruir por
+    // las dudas.
+    const antes = (await db("knex_migrations").pluck("name")) as string[];
+    const res = run("bash", ["scripts/deploy/rollback-db.sh"], {
+      DB_NAME: FALLO_DB,
+      DEST_MIGRATIONS_DIR: destinoSinUltimas(2),
+      BACKUP_FILE: backup,
+      DOWN_CMD: downCmd(1),
+    });
+
+    expect(res.code).toBe(4);
+    expect(res.stderr).toContain("ROLLBACK NO INICIADO");
+    expect(res.stderr).toContain("RESTORE_DUMP");
+    expect(res.stderr).not.toContain("REVERSIÓN PARCIAL");
+    expect((await db("knex_migrations").pluck("name")) as string[]).toEqual(antes);
+  }, 180_000);
+
+  it("le pasa al down() el nombre de la migración, no 'la última'", () => {
+    // knex `migrate:down [<name>]` revierte esa. Sin el nombre, con timestamps
+    // fuera de orden (dos ramas fusionadas) bajaría otra distinta.
+    const script = readFileSync(resolve(ROOT, "scripts/deploy/rollback-db.sh"), "utf8");
+    expect(script).toMatch(/eval "\$DOWN_CMD '\$nombre'"/);
+    // Y después comprueba que efectivamente se haya ido.
+    expect(script).toContain("sigue_aplicada");
+  });
+
+  it("exporta la conexión al comando de reversión", () => {
+    // Si no, knex la toma de api/.env y podría revertir en otra base.
+    const script = readFileSync(resolve(ROOT, "scripts/deploy/rollback-db.sh"), "utf8");
+    const loop = script.slice(script.indexOf("while IFS="), script.indexOf("done <<<"));
+    for (const v of ["DB_HOST=", "DB_PORT=", "DB_USER=", "DB_PASS=", "DB_NAME="]) {
+      expect(loop, v).toContain(v);
+    }
+  });
 
   it("sin nada que revertir sale 0 sin tocar la base", async () => {
     const res = run("bash", ["scripts/deploy/rollback-db.sh"], {

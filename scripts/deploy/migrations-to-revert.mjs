@@ -66,7 +66,21 @@ function destMigrations() {
 }
 
 async function main() {
-  const dest = new Set(destMigrations());
+  const nombresDestino = destMigrations();
+  // Una lista vacía no significa "el árbol destino no tiene migraciones":
+  // significa que no se pudo leer. `git ls-tree <sha> -- api/migrations/`
+  // devuelve vacío y sale 0 si la ruta no existe en ese commit o si cambió de
+  // nombre. Tratarla como vacía haría que TODA la base se diera por revertible.
+  if (nombresDestino.length === 0) {
+    console.error(
+      "[migrations-to-revert] la lista de migraciones del árbol destino vino vacía.\n" +
+        "  No se puede saber qué sobra, así que no se revierte nada. Verificá con\n" +
+        "  `git ls-tree --name-only <sha> -- api/migrations/` que el SHA destino\n" +
+        "  tenga esa carpeta.",
+    );
+    process.exit(3);
+  }
+  const dest = new Set(nombresDestino);
   const conn = await mysql.createConnection(cfg);
   try {
     const [tables] = await conn.query(

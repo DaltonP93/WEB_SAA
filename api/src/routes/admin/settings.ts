@@ -82,7 +82,7 @@ settingsRouter.put("/", async (req, res) => {
     .filter((r): r is { key: string; reason: { status: number; error: string } } => r.reason !== null);
   if (rejected.length > 0) {
     // Si hay varias, manda la más específica: 410 (retirada) sobre 403.
-    const status = Math.min(...rejected.map((r) => r.reason.status));
+    const status = Math.max(...rejected.map((r) => r.reason.status));
     return res.status(status).json({
       error: rejected.map((r) => r.reason.error).join(" · "),
       rejected: rejected.map((r) => r.key),
