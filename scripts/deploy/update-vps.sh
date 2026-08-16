@@ -38,6 +38,37 @@ fi
 
 [ -d "$APP_DIR/.git" ] || die "$APP_DIR no es un repo git. ¿Corriste setup-vps.sh primero?"
 
+SELF="$APP_DIR/scripts/deploy/update-vps.sh"
+
+# Correr desde una copia propia, no desde el archivo del repo.
+#
+# bash NO carga el script entero en memoria: lo lee por offset a medida que lo
+# ejecuta. El `git reset` del paso 1 reescribe este mismo archivo, así que el
+# intérprete pasaba a leer el contenido NUEVO desde la posición VIEJA y lo que
+# corría a partir de ahí era una mezcla de las dos versiones.
+#
+# Con la copia también queda resuelto el otro problema: `$0` conserva el
+# contenido con el que arrancó este deploy. Antes la detección de "el script
+# cambió" comparaba `sha256sum "$0"` contra `sha256sum "$SELF"` DESPUÉS del
+# reset, y en un deploy normal esos dos caminos son el MISMO archivo ya
+# actualizado: los hashes daban iguales siempre, la reejecución no ocurría nunca
+# y el deploy terminaba corriendo la versión vieja del script.
+if [ -z "${DEPLOY_SELF_COPY:-}" ]; then
+  # Si el script llegó por una tubería (`… | bash`) no hay archivo que copiar, y
+  # tampoco habría forma de compararlo después. Se pide la ruta explícita en vez
+  # de fallar con un error de `cat`.
+  [ -r "$0" ] || die "no se puede leer el propio script ('$0'). Ejecutalo por su ruta: bash ${SELF}"
+  DEPLOY_SELF_COPY="$(mktemp "${TMPDIR:-/tmp}/update-vps-XXXXXX.sh")" \
+    || die "no se pudo crear el temporal para la copia del script (¿${TMPDIR:-/tmp} lleno o de sólo lectura?). Nada se modificó."
+  cat "$0" > "$DEPLOY_SELF_COPY" \
+    || die "no se pudo copiar el script a ${DEPLOY_SELF_COPY}. Nada se modificó."
+  export DEPLOY_SELF_COPY
+  exec bash "$DEPLOY_SELF_COPY" "$@"
+fi
+# Este proceso ya corre desde la copia: se limpia al salir. En el camino de
+# reejecución se borra a mano, porque `exec` no dispara las traps.
+trap 'rm -f "${DEPLOY_SELF_COPY:-}"' EXIT
+
 cd "$APP_DIR"
 
 log "1/6  git pull (rama ${BRANCH})"
@@ -47,16 +78,22 @@ git checkout "$BRANCH"
 git reset --hard "origin/${BRANCH}"
 log "    versión anterior: ${PREVIOUS_SHA} · versión nueva: $(git rev-parse HEAD)"
 
-# Bash carga el script en memoria al inicio. Si el propio update-vps.sh
-# cambió en este pull, hay que re-ejecutar la versión nueva — sino los
-# fixes al script se aplicarían recién en el próximo deploy.
-SELF="$APP_DIR/scripts/deploy/update-vps.sh"
-if [ "${REEXECED:-0}" != "1" ] && [ -f "$SELF" ]; then
-  CURRENT_HASH=$(sha256sum "$SELF" | awk '{print $1}')
-  RUNNING_HASH=$(sha256sum "$0" 2>/dev/null | awk '{print $1}' || echo "")
-  if [ -n "$RUNNING_HASH" ] && [ "$CURRENT_HASH" != "$RUNNING_HASH" ]; then
-    log "    el script cambió en este pull → re-ejecutando versión nueva"
-    REEXECED=1 exec bash "$SELF" "$@"
+# ¿El propio update-vps.sh cambió en este pull? Se compara la copia con la que
+# arrancó el deploy —el contenido de ANTES del reset— contra el archivo que
+# quedó en el árbol. Si difieren, se reejecuta la versión nueva para que el
+# arreglo del script se aplique en ESTE deploy y no en el siguiente.
+#
+# La reejecución es una sola, siempre: `DEPLOY_REEXEC=1` viaja al proceso nuevo
+# y le impide volver a entrar acá, así que no hay forma de armar un bucle aunque
+# las dos versiones sigan difiriendo.
+if [ "${DEPLOY_REEXEC:-0}" != "1" ] && [ -f "$SELF" ]; then
+  HASH_EN_USO="$(sha256sum "$DEPLOY_SELF_COPY" | awk '{print $1}')"
+  HASH_EN_DISCO="$(sha256sum "$SELF" | awk '{print $1}')"
+  if [ "$HASH_EN_USO" != "$HASH_EN_DISCO" ]; then
+    log "    el script cambió en este pull → re-ejecutando la versión nueva"
+    rm -f "$DEPLOY_SELF_COPY"
+    # DEPLOY_SELF_COPY vacío: la versión nueva saca su propia copia.
+    DEPLOY_REEXEC=1 DEPLOY_SELF_COPY= exec bash "$SELF" "$@"
   fi
 fi
 

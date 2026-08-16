@@ -5,11 +5,27 @@
 > Formato ejecutivo. Se actualiza en cada tarea terminada o preparación de
 > cambios para GitHub.
 
-**Última actualización:** ronda correctiva 7 · **PR #8 fusionado a `main`**
-**`main` actual:** `2359a11796ba8fd86baf385923a2d7740be28bdc` (merge commit de PR #8)
-**Base de la ronda:** `main` = `809059141786cd25fd0b0107368ec9956de37187`
-**Rama de trabajo:** `claude/audit-fixes-ronda7` (fusionada; ya no se desarrolla ahí)
-**CI:** 3/3 checks en verde sobre `a1762f0` antes del merge.
+**Última actualización:** ronda 8 — preparación previa a las Olas A–D.
+**Cubre hasta:** PR #9 fusionado. La ronda 8 viaja en su propio PR.
+**Estado de `main`:** `git log --oneline -1 origin/main`.
+
+> **Por qué acá no hay ningún SHA de `main`.** Este documento fijaba
+> `**main actual:** <sha>` y quedaba obsoleto con cada commit — incluido el
+> commit que lo actualizaba, que por definición cambiaba el SHA que acababa de
+> escribir. Las referencias estables de este proyecto son los **números de PR**,
+> que no cambian una vez asignados. Los SHA sólo se citan cuando identifican algo
+> inmutable: un commit histórico concreto (`9ced09d`) o el HEAD exacto que validó
+> una ronda ya cerrada.
+
+### Historial de rondas
+
+| Ronda | PR | Qué cerró |
+|---|---|---|
+| 1–5 | #1–#5 | Seguridad, XSS, fuente única de contacto, migraciones con rollback, CI |
+| 6 | #6, #7 | Allowlist de ajustes, reseed seguro, rollback desde `knex_migrations` |
+| 7 | #8 | Rollback atómico, dumps verificados, reintento del CAPTCHA |
+| — | #9 | Registro del merge de #8 + análisis de la fase 8 (§6) |
+| 8 | *(este PR)* | Deriva documental, autoreejecución del deploy (§7) |
 
 ---
 
@@ -24,7 +40,7 @@ Monorepo **pnpm 9** (`pnpm-workspace.yaml`: `apps/*`, `api`, `shared`).
 | `apps/admin` | React 18 · Vite | Panel de administración (`/admin`) |
 | `shared/types` | TypeScript | Tipos y constantes compartidas |
 
-**Pruebas:** 31 archivos en `tests/`, **603 pruebas**, `vitest`. Las que tocan
+**Pruebas:** 33 archivos en `tests/`, **629 pruebas**, `vitest`. Las que tocan
 base real se activan con `TEST_DATABASE=1` (si no, se saltan con `describe.skip`).
 
 **CI** (`.github/workflows/ci.yml`), tres jobs, todos bloqueantes:
@@ -273,7 +289,7 @@ conexión sana).
 
 | Comprobación | Resultado |
 |---|---|
-| Pruebas (Node 20 + MySQL 8, `TEST_DATABASE=1`) | **603 / 603** en 31 archivos |
+| Pruebas (Node 20 + MySQL 8, `TEST_DATABASE=1`) | **629 / 629** en 33 archivos |
 | `pnpm typecheck` | OK |
 | Builds `@sa/api` / `@sa/web` / `@sa/admin` | OK |
 | Prerender real (`scripts/ci/verify-prerender.mjs`) | OK, exit 0 |
@@ -282,15 +298,20 @@ conexión sana).
 | `gitleaks detect --no-git` (árbol) | *no leaks found* |
 | **CI: 3 / 3 checks** | **verde** sobre `a1762f0` |
 
-**PR #8 fusionado a `main`** el 2026-08-16, por instrucción explícita del
-propietario: https://github.com/DaltonP93/WEB_SAA/pull/8
-Merge commit: `2359a11796ba8fd86baf385923a2d7740be28bdc`.
+**PR #8 y PR #9 fusionados a `main`**, ambos por instrucción explícita del
+propietario y con los tres checks en verde:
 
-La ronda 7 se había desarrollado bajo la consigna "sin merge, sin deploy, sin
-Ready for review"; el propietario levantó esa restricción y autorizó el merge una
-vez verdes los tres checks. **El deploy sigue sin hacerse**: fusionar a `main` no
-despliega nada por sí solo (no hay CD automático; el despliegue se dispara a mano
-con `scripts/deploy/update-vps.sh` en el VPS).
+- **[PR #8](https://github.com/DaltonP93/WEB_SAA/pull/8)** — la ronda 7. Se había
+  desarrollado bajo la consigna "sin merge, sin deploy, sin Ready for review"; el
+  propietario levantó esa restricción una vez verdes los checks.
+- **[PR #9](https://github.com/DaltonP93/WEB_SAA/pull/9)** — registro de ese merge
+  y análisis de la fase 8, que es la §6 de este documento.
+
+**El deploy sigue sin hacerse**: fusionar a `main` no despliega nada por sí solo.
+Verificado: `.github/workflows/` tiene un único workflow (`ci.yml`), disparado por
+`push` a main y `pull_request`, con tres jobs de validación y **ningún** job de
+deploy ni paso de ssh, rsync o scp. El despliegue se dispara a mano con
+`scripts/deploy/update-vps.sh` en el VPS.
 
 ### Pendiente que requiere decisión humana (no tocar por cuenta propia)
 
@@ -624,3 +645,136 @@ de la revisión legal y con alcance aprobado por escrito.
 
 **Estado de aprobación: pendiente.** No se trabaja en logos ni en campañas hasta
 que el propietario apruebe el alcance.
+
+---
+
+## 7. Ronda 8 — Preparación previa a las Olas A–D
+
+> Ronda correctiva **anterior** a empezar las olas del §6. No implementa logos ni
+> campañas: corrige la documentación de la que parte cualquier IA y un defecto
+> del deploy que apareció al analizar el §6.
+
+### 7.1 La documentación mentía, y ninguna herramienta lo detectaba
+
+`AGENTS.md` —el archivo que el propio repo declara "lectura obligatoria antes de
+tocar este repo"— afirmaba cuatro cosas falsas:
+
+| Decía | Realidad |
+|---|---|
+| `🔲 Tests automatizados (no hay; los agentes hacen smoke testing manual)` | 629 pruebas en 33 archivos y tres jobs de CI bloqueantes |
+| Publicaba un par correo/contraseña de seed literal | Desde la ronda 6 la contraseña se genera |
+| `update-vps.sh` "se re-ejecuta a sí mismo", y "hay que deployar dos veces" | Ver §7.2: la reejecución **nunca ocurría** |
+| El runbook no mencionaba `rollback-vps.sh` | Existe desde la ronda 5, con códigos 0–8 |
+
+**El hallazgo importante no es la línea, es que nadie la veía.** Se ejecutaron
+`check-secrets` y `gitleaks` sobre el árbol con la credencial presente: **los dos
+salían en verde**. Las dos herramientas buscan formas de *asignación*
+(`PASSWORD="…"`, `VAR="${VAR:-…}"`), y una credencial escrita en prosa —entre
+backticks, separada por una barra— no tiene esa forma. La línea sobrevivió siete
+rondas de auditoría por eso.
+
+Buscándola con un detector propio apareció **una segunda ocurrencia** que no
+estaba en el encargo: la misma credencial en la tabla de servicios de
+`README.md`, más un par `root`/`root` para phpMyAdmin.
+
+`tests/docs-sin-credenciales.test.ts` cubre el hueco. Detecta dos formas —el par
+`correo / valor` en prosa y la etiqueta pegada al valor (`Contraseña: \`x\``)— y
+**se autoverifica**: incluye casos sintéticos que el detector debe marcar, para
+que un detector roto no pase en verde dando una garantía que no da. Los falsos
+positivos se descartan por forma (nombres de variable en mayúsculas,
+expansiones `$VAR`, rutas, SHA, asignaciones), no por lista de excepciones.
+
+### 7.2 La autoreejecución del deploy nunca ocurría
+
+`update-vps.sh` hace `git reset --hard origin/main` en el paso 1, y ese reset
+puede reescribir el archivo que se está ejecutando. El script intentaba
+detectarlo así, **después** del reset:
+
+```bash
+CURRENT_HASH=$(sha256sum "$SELF" | awk '{print $1}')   # el archivo del repo
+RUNNING_HASH=$(sha256sum "$0"    | awk '{print $1}')   # el script en ejecución
+```
+
+En un deploy normal el script se invoca por su ruta en el repo, así que `$0` y
+`$SELF` **son el mismo archivo** — y para cuando se comparan, ya fue actualizado
+por el reset. Los hashes daban iguales siempre: la reejecución no ocurría nunca.
+El deploy terminaba corriendo la versión vieja del script y cualquier arreglo se
+aplicaba recién en el deploy siguiente. `AGENTS.md` documentaba ese síntoma como
+si fuera una limitación aceptada ("hay que deployar dos veces") en vez de un bug.
+
+Debajo había un segundo problema, más silencioso: **bash no carga el script
+entero en memoria, lo lee por offset mientras lo ejecuta**. Con el archivo
+reescrito debajo, el intérprete seguía leyendo el contenido nuevo desde la
+posición vieja, así que lo que se ejecutaba a partir del reset era una mezcla
+arbitraria de las dos versiones.
+
+**Corrección.** El script empieza copiándose a `/tmp` y reejecutándose desde la
+copia, antes de tocar el repo:
+
+- la copia inmuniza al intérprete de que el archivo cambie debajo;
+- y `$0` pasa a conservar el contenido con el que arrancó el deploy, así que la
+  comparación posterior contra el archivo del árbol **compara dos cosas
+  distintas** y detecta el cambio de verdad.
+
+`DEPLOY_REEXEC=1` viaja al proceso reejecutado y garantiza una sola reejecución.
+La copia se borra al salir (`trap … EXIT`) y a mano antes del `exec`, porque
+`exec` no dispara traps.
+
+**Qué se repite, exactamente.** La reejecución está colocada **entre el paso 1 y
+el paso 2**, así que lo único que vuelve a correr es el `git fetch` + `reset`, que
+la segunda vez es un no-op. **El `pnpm install` y los tres builds corren una sola
+vez.**
+
+Esto no es un detalle: el VPS tiene 1.9 GB de RAM y ya hubo un incidente de 19
+días de caída porque `vite build` tumbó el daemon de PM2 por presión de memoria
+(`AGENTS.md` §9). Si la reejecución repitiera los builds, este arreglo duplicaría
+el pico de memoria del deploy justo en el punto que ya falló una vez. No lo hace,
+y `tests/deploy-update-reexec.test.ts` lo fija con una prueba que cuenta las
+invocaciones — porque es la clase de propiedad que se rompe sin que nadie note al
+mover un bloque de lugar.
+
+`tests/deploy-update-reexec.test.ts` monta dos commits reales —el desplegado y el
+que trae el script nuevo—, ejecuta el script real contra un repo git real con
+binarios falsos, y verifica que el código de la versión nueva corre en la primera
+ejecución, que la reejecución ocurre exactamente una vez y que no queda copia
+temporal colgada.
+
+### 7.3 Hallazgo registrado, no corregido: el procesamiento de medios miente sobre el tipo
+
+**Hay que corregirlo antes de implementar logos (Ola B).** No se toca en esta
+ronda porque cambiar el pipeline de medios sin la decisión de formatos del §6.7
+sería trabajar dos veces.
+
+`api/src/routes/admin/media.ts:100-108` optimiza así:
+
+```ts
+if (mime === "image/png" && metadata.hasAlpha) {
+  // PNG comprimido: preserva transparencia
+} else {
+  // TODO lo demás → JPEG progresivo
+}
+```
+
+El archivo se reescribe con bytes **JPEG**, pero conserva su nombre y extensión
+originales, y la fila de `media` guarda `mime: req.file.mimetype` (línea 52), o
+sea el tipo **original**. Un `.png` subido sin alfa queda como un archivo llamado
+`.png`, declarado `image/png` en la base, con contenido JPEG.
+
+Dos consecuencias, la primera bloqueante para logos:
+
+1. **Se destruye la transparencia de WebP y GIF.** La condición que preserva el
+   canal alfa exige `mime === "image/png"`. Un WebP con transparencia —o un GIF—
+   cae en el `else` y se aplana contra un fondo sólido. Los logos de convenios
+   son casi siempre transparentes: subir uno en WebP hoy lo arruina en silencio.
+2. **La columna `mime` no es confiable.** Cualquier consumidor que confíe en el
+   tipo declarado (un CDN, un proxy de imágenes, un `<picture>` con `type`, el
+   nombre de archivo de una descarga) recibe un dato falso. Agrava el cuadro que
+   `X-Content-Type-Options: nosniff` esté activo tanto en Nginx
+   (`scripts/deploy/setup-vps.sh:233`) como en la API (`api/src/app.ts:66`):
+   la política del sitio es explícitamente "no adivines el tipo", mientras el
+   backend escribe un tipo que no corresponde a los bytes.
+
+La corrección tiene que decidir, junto con la pregunta 1 del §6.7 (¿se acepta
+SVG?), si el pipeline **convierte y renombra** —extensión, `url` y `mime`
+coherentes con los bytes— o si **preserva el formato de origen** para las
+imágenes con transparencia. Es trabajo de la Ola B, no de esta ronda.
