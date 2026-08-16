@@ -185,6 +185,26 @@ describe("la reejecución es una sola: no hay bucle", () => {
     expect(contar(res.stdout, MARCADOR)).toBe(1);
   }, 180_000);
 
+  it("la reejecución no repite el install ni los builds", () => {
+    // La reejecución está entre el paso 1 y el paso 2, así que lo único que
+    // vuelve a correr es el `git fetch` + `reset` (un no-op la segunda vez).
+    //
+    // Esta prueba existe porque es una propiedad que se rompe sin que nadie lo
+    // note al mover un bloque de lugar, y el costo sería concreto: el VPS tiene
+    // 1.9 GB de RAM y ya hubo un incidente en que `vite build` tumbó a PM2 por
+    // presión de memoria. Duplicar los builds duplicaría ese pico.
+    const esc = montar(conMarcador(SCRIPT_REAL));
+
+    const res = correr(esc);
+
+    expect(res.code, res.stderr).toBe(0);
+    expect(res.stdout).toContain("el script cambió en este pull");
+    const comandos = readFileSync(join(esc.raiz, "comandos.log"), "utf8").trim().split("\n");
+    for (const paso of ["pnpm install", "@sa/api build", "@sa/web build", "@sa/admin", "pm2 start"]) {
+      expect(comandos.filter((l) => l.includes(paso)), `"${paso}" corrió más de una vez`).toHaveLength(1);
+    }
+  }, 180_000);
+
   it("la guarda viaja al proceso reejecutado", () => {
     // Aunque el proceso nuevo vuelva a comparar, `DEPLOY_REEXEC=1` le impide
     // reejecutar de nuevo. Sin esa guarda, dos versiones que siguieran

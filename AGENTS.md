@@ -342,7 +342,7 @@ Los 25 puntos acordados con el cliente están implementados. Lo estructural:
   - Toggle publicar/despublicar inline en `PagesListPage` y `NewsListPage`.
   - `LucideIcon.tsx` — renderiza iconos [lucide](https://lucide.dev/icons/) por nombre kebab-case (`heart-pulse`). Usa `lucide-react/dynamicIconImports` + `React.lazy` + `Suspense` (⚠️ en lucide-react 0.460 **no existe** el subpath `lucide-react/dynamic`). `isIconName()` valida antes de renderizar. El helper `IconBadge` de `EntityManager` muestra el icono si el valor es un nombre lucide válido, y si no cae al emoji tal cual — antes el nombre se imprimía como texto crudo y se superponía a los títulos.
 
-✅ **Tests automatizados**: `pnpm test` (vitest) — **628 pruebas en 33 archivos**
+✅ **Tests automatizados**: `pnpm test` (vitest) — **629 pruebas en 33 archivos**
 al cierre de la ronda 8. Las que necesitan base real se activan con
 `TEST_DATABASE=1` y se saltan solas si no está. CI corre la suite completa contra
 MySQL 8. El smoke testing manual del Agente 3 **complementa** la suite, no la
@@ -378,7 +378,7 @@ python scripts/deploy/run-remote.py "bash /var/www/sanatorio/scripts/deploy/upda
 
 **Sólo va hacia adelante.** Si se le pasa `ROLLBACK_TO` aborta con **código 2** antes de tocar nada y remite a `rollback-vps.sh` (ver abajo). Aceptarlo hacía `git reset --hard` a la versión vieja *antes* de mirar la base, y eso deja `knex_migrations` con migraciones aplicadas cuyo archivo ya no existe: knex no las puede revertir.
 
-**Sobre el re-exec** (corregido en la ronda 8): el script corre desde una copia en `/tmp` y compara esa copia contra el archivo del árbol *después* del reset. Antes comparaba `$0` contra `$SELF`, que tras el reset son el mismo archivo ya actualizado — los hashes daban iguales siempre y **la re-ejecución no ocurría nunca**, así que un arreglo del script se aplicaba recién en el deploy siguiente. Ya no: el arreglo entra en el mismo deploy que lo trae. Consecuencia esperada: cuando el script cambia, el deploy corre dos veces (el segundo `git reset` es un no-op). La re-ejecución es **una sola**, garantizada por `DEPLOY_REEXEC=1`.
+**Sobre el re-exec** (corregido en la ronda 8): el script corre desde una copia en `/tmp` y compara esa copia contra el archivo del árbol *después* del reset. Antes comparaba `$0` contra `$SELF`, que tras el reset son el mismo archivo ya actualizado — los hashes daban iguales siempre y **la re-ejecución no ocurría nunca**, así que un arreglo del script se aplicaba recién en el deploy siguiente. Ya no: el arreglo entra en el mismo deploy que lo trae. La re-ejecución es **una sola**, garantizada por `DEPLOY_REEXEC=1`, y ocurre **entre el paso 1 y el paso 2** — o sea que lo único que se repite es el `git fetch` + `reset` (un no-op la segunda vez). **El `pnpm install` y los tres builds corren una sola vez**, lo cual importa en este VPS: tiene 1.9 GB de RAM y ya hubo un incidente en que `vite build` tumbó el daemon de PM2.
 
 ⚠️ `--frozen-lockfile` implica que **todo cambio de dependencia debe llevar el `pnpm-lock.yaml` commiteado**, o el deploy falla.
 

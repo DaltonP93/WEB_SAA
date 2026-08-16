@@ -40,7 +40,7 @@ Monorepo **pnpm 9** (`pnpm-workspace.yaml`: `apps/*`, `api`, `shared`).
 | `apps/admin` | React 18 · Vite | Panel de administración (`/admin`) |
 | `shared/types` | TypeScript | Tipos y constantes compartidas |
 
-**Pruebas:** 33 archivos en `tests/`, **628 pruebas**, `vitest`. Las que tocan
+**Pruebas:** 33 archivos en `tests/`, **629 pruebas**, `vitest`. Las que tocan
 base real se activan con `TEST_DATABASE=1` (si no, se saltan con `describe.skip`).
 
 **CI** (`.github/workflows/ci.yml`), tres jobs, todos bloqueantes:
@@ -289,7 +289,7 @@ conexión sana).
 
 | Comprobación | Resultado |
 |---|---|
-| Pruebas (Node 20 + MySQL 8, `TEST_DATABASE=1`) | **628 / 628** en 33 archivos |
+| Pruebas (Node 20 + MySQL 8, `TEST_DATABASE=1`) | **629 / 629** en 33 archivos |
 | `pnpm typecheck` | OK |
 | Builds `@sa/api` / `@sa/web` / `@sa/admin` | OK |
 | Prerender real (`scripts/ci/verify-prerender.mjs`) | OK, exit 0 |
@@ -661,7 +661,7 @@ tocar este repo"— afirmaba cuatro cosas falsas:
 
 | Decía | Realidad |
 |---|---|
-| `🔲 Tests automatizados (no hay; los agentes hacen smoke testing manual)` | 628 pruebas en 33 archivos y tres jobs de CI bloqueantes |
+| `🔲 Tests automatizados (no hay; los agentes hacen smoke testing manual)` | 629 pruebas en 33 archivos y tres jobs de CI bloqueantes |
 | Publicaba un par correo/contraseña de seed literal | Desde la ronda 6 la contraseña se genera |
 | `update-vps.sh` "se re-ejecuta a sí mismo", y "hay que deployar dos veces" | Ver §7.2: la reejecución **nunca ocurría** |
 | El runbook no mencionaba `rollback-vps.sh` | Existe desde la ronda 5, con códigos 0–8 |
@@ -720,9 +720,18 @@ copia, antes de tocar el repo:
 La copia se borra al salir (`trap … EXIT`) y a mano antes del `exec`, porque
 `exec` no dispara traps.
 
-**Consecuencia esperada y aceptada:** cuando el script cambia, el deploy corre
-dos veces. El segundo `git reset` es un no-op, así que es tiempo, no riesgo. Es
-el precio de que el arreglo entre en el mismo deploy que lo trae.
+**Qué se repite, exactamente.** La reejecución está colocada **entre el paso 1 y
+el paso 2**, así que lo único que vuelve a correr es el `git fetch` + `reset`, que
+la segunda vez es un no-op. **El `pnpm install` y los tres builds corren una sola
+vez.**
+
+Esto no es un detalle: el VPS tiene 1.9 GB de RAM y ya hubo un incidente de 19
+días de caída porque `vite build` tumbó el daemon de PM2 por presión de memoria
+(`AGENTS.md` §9). Si la reejecución repitiera los builds, este arreglo duplicaría
+el pico de memoria del deploy justo en el punto que ya falló una vez. No lo hace,
+y `tests/deploy-update-reexec.test.ts` lo fija con una prueba que cuenta las
+invocaciones — porque es la clase de propiedad que se rompe sin que nadie note al
+mover un bloque de lugar.
 
 `tests/deploy-update-reexec.test.ts` monta dos commits reales —el desplegado y el
 que trae el script nuevo—, ejecuta el script real contra un repo git real con
