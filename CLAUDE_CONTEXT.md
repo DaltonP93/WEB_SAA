@@ -392,3 +392,235 @@ npx vitest run tests/captcha-widget.test.tsx                    # jsdom
 | 3 | No se pudo calcular la lista, o trae un nombre que no es un nombre |
 | 4 | El rollback se abortó y la base quedó como antes |
 | 5 | La base quedó en un estado intermedio y no se pudo restaurar |
+
+---
+
+## 6. Fase 8 — Análisis y planificación (Agente Analista, sin implementar)
+
+> Salida del **Agente 1 (Analista)** de `AGENTS.md` §5, sobre `main = 2359a117`.
+> **Nada de esto está implementado.** Es el insumo para decidir alcance antes de
+> pasar al Agente 2 (Desarrollador). Lecturas previas obligatorias hechas:
+> `AGENTS.md`, `shared/types/blocks.ts`, `api/migrations/20260516000001_init.ts`.
+
+### 6.0 Hallazgo transversal: deriva documental en `AGENTS.md`
+
+`AGENTS.md` es "lectura obligatoria" y quedó desactualizado en cuatro puntos que
+afectan decisiones. Cualquier IA que abra el repo lee primero ese archivo:
+
+| Línea | Dice | Realidad |
+|---|---|---|
+| `AGENTS.md:336` | `🔲 Tests automatizados (no hay; los agentes hacen smoke testing manual)` | Hay 603 pruebas y 3 jobs de CI bloqueantes |
+| `AGENTS.md:58` | Publica un usuario y contraseña de seed literales | Desde la ronda 6 la contraseña se genera; ese literal es justo lo que `check-secrets` busca |
+| `AGENTS.md:364` | Describe `update-vps.sh` sin el rechazo de `ROLLBACK_TO` | La ronda 7 lo rechaza con código 2 |
+| `AGENTS.md:342-399` | El runbook §9 no menciona `rollback-vps.sh` | Existe y es el único camino de rollback (códigos 0–8) |
+
+### 6.1 Ola A — Cierre de preparación productiva
+
+Inventario de lo que falta cargar y **desde dónde se carga cada cosa**:
+
+| Dato | Dónde vive | Se carga desde | Estado |
+|---|---|---|---|
+| WhatsApp Turnos | `contact_channels.key='whatsapp-turnos'` | **Admin** → Canales de contacto | Vacío |
+| WhatsApp Estudios | `contact_channels.key='whatsapp-estudios'` | **Admin** | Vacío |
+| WhatsApp General | `contact_channels.key='whatsapp-general'` | **Admin** | Vacío |
+| WhatsApp SAMAP | `contact_channels.key='whatsapp-samap'` | **Admin** | Vacío |
+| Emergencias | `contact_channels.key='emergencias'` | **Admin** | Vacío |
+| GTH (correo) | `contact_channels.key='gth'` | **Admin** | Vacío |
+| Recepción / email general | `contact_channels.key='recepcion'`, `'email-general'` | **Admin** | Vacío |
+| Horarios | Tabla `schedules` | **Admin** → Horarios | Sin filas activas |
+| Biopsias (alcance) | Página `estudios-biopsias`, bloques `richText` | **Admin** → Page Builder | Texto genérico |
+| `PUBLIC_SITE_URL` | `api/.env` del VPS | **Servidor**, no admin | Apunta a la IP del VPS |
+
+**Trampa operativa.** `emergencyPhone` y `gthEmail` ya **no** están en
+Configuración → Contacto: `20260816000000_fuente_unica_contacto.ts:41-54` los
+movió a `contact_channels` y los dejó en `RETIRED_CONTACT_FIELDS`
+(`api/src/routes/admin/settings.ts:139-150`). Quien los busque donde estaban no
+los encuentra y la API responde 410. Sin una guía de carga esto genera un ticket
+garantizado.
+
+**`PUBLIC_SITE_URL` es el único que no es de admin** y el de mayor impacto SEO:
+alimenta canonical y `sitemap.xml` (`api/src/app.ts:149`) y el prerender
+(`apps/web/scripts/prerender.mjs:16`). Cambiarlo exige DNS + HTTPS confirmados y
+**es decisión del propietario** (`AGENTS.md:338`).
+
+Archivos relevantes: `api/migrations/20260813000000_contact_channels.ts:25-80`
+(catálogo de las 8 claves) · `api/migrations/20260813000001_schedules.ts:31` ·
+`shared/types/contact-values.ts` (validación por kind) ·
+`apps/web/src/components/Layout.tsx:221,299,509` (consumo de Emergencias) ·
+`api/.env.example:26`.
+
+### 6.2 Ola B — Logos
+
+El bloque **existe y es seguro** (la ronda 5 blindó `imageUrl` y `href`), pero
+**no está listo para logos reales**.
+
+```
+shared/types/blocks.ts:230-233                            LogosProps
+shared/types/blocks.ts:296                                registro
+apps/web/src/blocks/Logos.tsx                             render + validación de URLs
+apps/admin/src/components/BlockPropsEditor.tsx:181-188    editor de props
+api/src/routes/admin/media.ts:23,26,94-106                uploads + optimización
+api/migrations/20260812000000_web_minuta_ajustes.ts:832   única instancia (vacía), página convenios
+```
+
+**Dos caminos que no hay que confundir:** el logo institucional del header/footer
+es `settings.brand.logoUrl` (`Layout.tsx:281,331`), no el bloque `logos`. Este
+último es para convenios y aliados.
+
+| # | Brecha | Severidad | Detalle |
+|---|---|---|---|
+| B1 | **SVG rechazado** | Alta | `media.ts:23` permite `.jpg .jpeg .png .webp .gif .pdf`. Los logos de marca se entregan casi siempre en SVG/EPS/AI |
+| B2 | **Enlace sin nombre accesible** | Alta | `Logos.tsx:20` usa `alt={l.alt ?? ""}`; con `alt=""` dentro de un `<a>` el enlace queda sin nombre → falla WCAG 2.4.4 y 4.1.2 |
+| B3 | **Sin tope de ancho** | Media | `h-12 w-auto` sin `max-w`: un logo apaisado desborda en móvil (`flex-wrap` no ayuda si un solo ítem supera el viewport) |
+| B4 | **`opacity-80` sobre logos de terceros** | Media | Muchos manuales de marca prohíben alterar opacidad o color. Decisión del cliente, no técnica |
+| B5 | **Sin reordenar** | Media | El editor `kind:"items"` sólo tiene "Quitar" (`BlockPropsEditor.tsx:265`): no hay ↑/↓ ni DnD |
+| B6 | **Sin `width`/`height` ni `loading="lazy"`** | Baja | CLS y carga innecesaria |
+| B7 | **Sin vigencia de convenio** | Baja | No se puede despublicar un convenio sin borrarlo |
+
+### 6.3 Ola C — Centro de campañas (diseño, sin implementar)
+
+**Restricción heredada, no negociable.** `settings.scripts` fue retirado con 410
+y el mensaje ya fija el rumbo — `api/src/routes/admin/settings.ts:160`:
+*"no se inyecta JavaScript arbitrario en el sitio. Las integraciones de medición
+van a entrar por módulos propios."* (migración
+`20260819000000_retirar_scripts.ts`). **Ninguna etapa puede reintroducir un campo
+de texto libre ejecutable.**
+
+Hoy no existe nada de medición: un grep de `consent|gtag|dataLayer|analytics|pixel`
+sobre `apps/web/src`, `api/src` y `shared` sólo devuelve ese comentario.
+
+| Etapa | Alcance | Riesgo | Depende de |
+|---|---|---|---|
+| **C1 · Medición y consentimiento** | Banner, estado persistido, *ningún* tag antes del opt-in. Preferencia fuerte: eventos **server-side** (Meta Conversions API / GA4 Measurement Protocol) en vez de píxeles en el cliente | Legal (datos de salud) | — |
+| **C2 · OAuth de cuentas** | Meta Business y Google Ads. Tokens **cifrados at-rest**, refresh, scopes mínimos, un `redirect_uri` por entorno | Alto: custodia de tokens | C1 |
+| **C3 · Métricas y reportes** | Sólo lectura. Caché con TTL, límites de cuota, degradación si la API de terceros cae | Bajo | C2 |
+| **C4 · Creación/edición de campañas** | Escritura contra las APIs. Formularios tipados con Zod, sin HTML/JS libre | Alto: gasto real | C3 |
+| **C5 · Presupuestos, permisos, auditoría, revocación** | Topes de gasto, rol `campaigns`, bitácora inmutable, revocación de tokens | — | C4 |
+
+**Por qué server-side primero:** un píxel en el cliente obliga a abrir
+`script-src` y `connect-src` de la CSP hacia Meta y Google
+(`scripts/deploy/setup-vps.sh:240`), reabriendo buena parte de la superficie que
+las rondas 3–6 cerraron. Con Conversions API la CSP no se toca.
+
+**Advertencia de contexto:** es el sitio de un sanatorio. Enviar eventos de
+navegación de páginas como `/estudios-biopsias` a plataformas publicitarias puede
+constituir tratamiento de datos de salud. Necesita criterio legal **antes** de
+escribir código.
+
+**Credenciales e IDs que harán falta** — enumeración de *qué* se necesitará. Los
+valores van a `api/.env` en el servidor, fuera de git; **no se cargan ni se
+muestran en la terminal**:
+
+- **Meta**: App ID · App Secret · Business Manager ID · Ad Account ID (`act_…`) ·
+  Dataset/Pixel ID · System User token · versión de Graph API · dominio verificado.
+- **Google**: Developer token de Google Ads · OAuth Client ID + Secret ·
+  Customer ID (MCC y cuenta hija) · acciones de conversión · GA4 Measurement ID
+  + API Secret si se usa Measurement Protocol.
+- **Infra**: `redirect_uri` por entorno (requiere el dominio definitivo, o sea
+  **depende de la Ola A**) y clave de cifrado para los tokens.
+
+### 6.4 Ola D — Seguridad y operación
+
+**El NO-GO de producción se mantiene** por el secreto histórico del commit
+`9ced09d`. El procedimiento ya está escrito en `AGENTS.md:402-424` y lo ejecuta
+el propietario, por separado: rotar la contraseña de root → revisar accesos SSH
+(`last -F`, `/var/log/auth.log`, `authorized_keys`) → deshabilitar autenticación
+por contraseña → purgar el historial de forma coordinada (`git filter-repo`/BFG,
+todos re-clonan) → rotar de nuevo y revisar forks, CI y capturas.
+
+Desde el repo sólo corresponde dejar el NO-GO visible en el `README`, para que no
+viva únicamente en el §10 de un archivo largo.
+
+### 6.5 Riesgos
+
+| # | Riesgo | Impacto | Mitigación |
+|---|---|---|---|
+| R1 | Cambiar `PUBLIC_SITE_URL` sin DNS/HTTPS listos | Canonical y sitemap rotos, penalización SEO | Cambiar sólo tras confirmar DNS+TLS; verificar sitemap post-deploy |
+| R2 | Aceptar SVG sin sanear | XSS almacenado (SVG ejecuta JS) | Sanear server-side y servir con CSP propia |
+| R3 | Datos de contacto mal formados | `tel:`/`mailto:` rotos en producción | Ya cubierto por `contact-values.ts` en 3 capas |
+| R4 | Píxeles publicitarios en páginas clínicas | Riesgo legal por datos de salud | C1 server-side + criterio legal previo |
+| R5 | Tokens de Ads en texto plano | Compromiso de cuentas con gasto real | Cifrado at-rest + revocación (C5) |
+| R6 | C4 sin topes de presupuesto | Gasto no controlado | No fusionar C4 sin C5 |
+| R7 | Deriva de `AGENTS.md` | Cada IA nueva parte de premisas falsas | PR A-0 |
+| R8 | Deploy con `--frozen-lockfile` | Falla si falta el lockfile commiteado | Ya documentado (`AGENTS.md:368`) |
+| R9 | **1.9 GB de RAM en el VPS** | `vite build` ya mató PM2 una vez, con 19 días de caída (`AGENTS.md:388`) | La prevalidación en worktree de la ronda 7 **suma** presión: decidir explícitamente si en ese VPS se usa `SKIP_PREVALIDACION=1` |
+
+### 6.6 Dependencias externas
+
+| Dependencia | Bloquea | Quién la provee |
+|---|---|---|
+| Valores de contacto, horarios, alcance de Biopsias | Ola A | Cliente (sanatorio) |
+| DNS + certificado del dominio definitivo | `PUBLIC_SITE_URL`, `redirect_uri` de OAuth | Propietario |
+| Archivos de logos + autorización de uso | Ola B | Cliente / aseguradoras |
+| Manual de marca de cada aseguradora | B4 (opacidad) | Cliente |
+| Cuenta Meta Business + Ad Account | C2 | Propietario |
+| Developer token de Google Ads (requiere aprobación) | C2 | Google, **con demora de días** |
+| Criterio legal sobre datos de salud | C1 | Propietario |
+| Rotación de credenciales del VPS | GO de producción | Propietario |
+
+### 6.7 Decisiones que necesita tomar el propietario
+
+1. **¿Se acepta SVG para logos?** Sí (con saneo server-side) / No (el cliente entrega PNG-WebP). — *bloquea B-1*
+2. **¿Se mantiene `opacity-80` sobre los logos de terceros?** — *bloquea B-2*
+3. **¿Los logos enlazan al sitio de la aseguradora?** Define si B2 es crítico o cosmético.
+4. **¿Cuál es el dominio definitivo y cuándo estarán DNS+HTTPS?** — *bloquea A-3 y C2*
+5. **¿Medición server-side únicamente, o se aceptan píxeles en el cliente?** — *define si se toca la CSP*
+6. **¿Revisión legal antes de C1?** Recomendación: sí.
+7. **¿Cuándo se ejecutan los pasos 1–5 de `AGENTS.md` §10?** — *bloquea el GO de producción*
+8. **¿`SKIP_PREVALIDACION=1` en el VPS de 1.9 GB?** — *ver R9*
+
+### 6.8 Roadmap en PRs pequeños y ordenados
+
+Cada PR recorre el ciclo completo de `AGENTS.md` §5 (Analista → Desarrollador →
+Tester → Corrector).
+
+**Ola A — Preparación productiva** *(sin dependencias externas salvo A-3)*
+
+| PR | Alcance | Pruebas requeridas |
+|---|---|---|
+| **A-0** | Actualizar `AGENTS.md` (§8 pruebas, §9 rollback, quitar el literal de contraseña de §2) | `check-secrets` y `gitleaks` sobre el árbol; prueba que afirme que `AGENTS.md` no contiene credenciales literales |
+| **A-1** | `docs/CARGA-DE-DATOS.md`: guía de carga con la tabla de 6.1, incluida la trampa de `emergencyPhone`/`gthEmail` | Prueba de que cada clave documentada existe en el catálogo de `contact_channels` (evita que la guía se desincronice) |
+| **A-2** | Panel: pantalla "Datos pendientes" que liste qué falta leyendo el estado real | Integración: base sin canales → lista los 8; con uno cargado → lista 7 |
+| **A-3** | `PUBLIC_SITE_URL` al dominio definitivo | Verificación post-deploy de `sitemap.xml` y canonical; `verify-prerender.mjs` |
+
+> A-2 es el de mayor valor operativo: convierte "¿qué falta?" en algo que el
+> sanatorio ve solo.
+
+**Ola B — Logos** *(tras las decisiones 1–3)*
+
+| PR | Alcance | Pruebas requeridas |
+|---|---|---|
+| **B-1** | Habilitar la carga: decisión SVG, `max-w`, `loading="lazy"`, `width`/`height` | Si hay SVG: pruebas de saneo con SVG hostil (`<script>`, `onload`, `<foreignObject>`), en la línea de `tests/sanitize.test.ts`. Extender `tests/block-urls.test.tsx` con overflow |
+| **B-2** | Accesibilidad y presentación: `alt` obligatorio cuando hay `href`, decisión sobre `opacity-80` | jsdom: logo con `href` y sin `alt` → o no se enlaza, o el `<a>` tiene nombre accesible. Nunca un `<a>` sin nombre |
+| **B-3** | Reordenar ítems en `BlockPropsEditor` (↑/↓ o dnd-kit, ya presente en `apps/admin`) | Prueba de que reordenar persiste el orden en `props.logos` |
+
+**Ola C — Centro de campañas** *(no empezar sin aprobación de alcance)*
+
+| PR | Alcance | Pruebas requeridas |
+|---|---|---|
+| **C1a** | Modelo de consentimiento + banner. **Cero tags** | Sin consentimiento no se inserta ningún `<script>` ni sale ninguna request a terceros |
+| **C1b** | Envío server-side de eventos, detrás de un flag apagado por defecto | Flag apagado → cero llamadas salientes; encendido sin credenciales → degrada sin romper |
+| **C2** | OAuth + almacenamiento cifrado de tokens | El token nunca aparece en logs ni en respuestas de la API; la revocación borra de verdad; `gitleaks` |
+| **C3** | Métricas de sólo lectura | API de terceros caída → el panel degrada, no rompe |
+| **C4** | Creación/edición de campañas | Validación Zod exhaustiva; ningún campo acepta HTML/JS |
+| **C5** | Presupuestos, permisos, auditoría, revocación | Usuario sin rol `campaigns` recibe 403; toda escritura deja registro de auditoría |
+
+> **C4 no se fusiona sin C5.** Escribir campañas sin topes ni bitácora es gasto
+> real sin control.
+
+**Ola D — Seguridad** *(transversal, no bloquea a las demás)*
+
+| PR | Alcance | Pruebas requeridas |
+|---|---|---|
+| **D-1** | Nota de NO-GO visible en `README.md` | Prueba de que la nota existe mientras el hallazgo histórico siga presente |
+| **D-2** | *(sólo tras autorización)* purga del historial | Fuera del alcance de un PR: procedimiento coordinado del propietario |
+
+### 6.9 Secuencia recomendada
+
+**A-0 → A-1 → A-2** primero: son baratos, no dependen de nadie externo y
+desbloquean al cliente para que cargue datos. **B** en paralelo apenas se
+respondan las decisiones 1–3. **A-3** cuando el dominio esté. **C** sólo después
+de la revisión legal y con alcance aprobado por escrito.
+
+**Estado de aprobación: pendiente.** No se trabaja en logos ni en campañas hasta
+que el propietario apruebe el alcance.
