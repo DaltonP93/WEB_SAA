@@ -5,8 +5,8 @@
 > Formato ejecutivo. Se actualiza en cada tarea terminada o preparación de
 > cambios para GitHub.
 
-**Última actualización:** ronda 8 — preparación previa a las Olas A–D.
-**Cubre hasta:** PR #9 fusionado. La ronda 8 viaja en su propio PR.
+**Última actualización:** Ola A-1 — guía operativa de carga de datos.
+**Cubre hasta:** PR #10 fusionado. La Ola A-1 viaja en su propio PR.
 **Estado de `main`:** `git log --oneline -1 origin/main`.
 
 > **Por qué acá no hay ningún SHA de `main`.** Este documento fijaba
@@ -25,7 +25,8 @@
 | 6 | #6, #7 | Allowlist de ajustes, reseed seguro, rollback desde `knex_migrations` |
 | 7 | #8 | Rollback atómico, dumps verificados, reintento del CAPTCHA |
 | — | #9 | Registro del merge de #8 + análisis de la fase 8 (§6) |
-| 8 | *(este PR)* | Deriva documental, autoreejecución del deploy (§7) |
+| 8 | #10 | Deriva documental, autoreejecución del deploy (§7) |
+| A-1 | *(este PR)* | Guía operativa de carga de datos (§8) |
 
 ---
 
@@ -40,7 +41,7 @@ Monorepo **pnpm 9** (`pnpm-workspace.yaml`: `apps/*`, `api`, `shared`).
 | `apps/admin` | React 18 · Vite | Panel de administración (`/admin`) |
 | `shared/types` | TypeScript | Tipos y constantes compartidas |
 
-**Pruebas:** 33 archivos en `tests/`, **629 pruebas**, `vitest`. Las que tocan
+**Pruebas:** 34 archivos en `tests/`, **657 pruebas**, `vitest`. Las que tocan
 base real se activan con `TEST_DATABASE=1` (si no, se saltan con `describe.skip`).
 
 **CI** (`.github/workflows/ci.yml`), tres jobs, todos bloqueantes:
@@ -289,7 +290,7 @@ conexión sana).
 
 | Comprobación | Resultado |
 |---|---|
-| Pruebas (Node 20 + MySQL 8, `TEST_DATABASE=1`) | **629 / 629** en 33 archivos |
+| Pruebas (Node 20 + MySQL 8, `TEST_DATABASE=1`) | **657 / 657** en 34 archivos |
 | `pnpm typecheck` | OK |
 | Builds `@sa/api` / `@sa/web` / `@sa/admin` | OK |
 | Prerender real (`scripts/ci/verify-prerender.mjs`) | OK, exit 0 |
@@ -431,7 +432,7 @@ afectan decisiones. Cualquier IA que abra el repo lee primero ese archivo:
 | Línea | Dice | Realidad |
 |---|---|---|
 | `AGENTS.md:336` | `🔲 Tests automatizados (no hay; los agentes hacen smoke testing manual)` | Hay 603 pruebas y 3 jobs de CI bloqueantes |
-| `AGENTS.md:58` | Publica un usuario y contraseña de seed literales | Desde la ronda 6 la contraseña se genera; ese literal es justo lo que `check-secrets` busca |
+| `AGENTS.md:58` | Publica un usuario y contraseña de seed literales | Desde la ronda 6 la contraseña se genera. **Corrección de la ronda 8:** acá se afirmaba que ese literal "es justo lo que `check-secrets` busca". Era falso — se comprobó ejecutando `check-secrets` y `gitleaks` con la credencial presente y los dos salieron en verde. Ver §7.1 |
 | `AGENTS.md:364` | Describe `update-vps.sh` sin el rechazo de `ROLLBACK_TO` | La ronda 7 lo rechaza con código 2 |
 | `AGENTS.md:342-399` | El runbook §9 no menciona `rollback-vps.sh` | Existe y es el único camino de rollback (códigos 0–8) |
 
@@ -597,12 +598,12 @@ Tester → Corrector).
 
 **Ola A — Preparación productiva** *(sin dependencias externas salvo A-3)*
 
-| PR | Alcance | Pruebas requeridas |
-|---|---|---|
-| **A-0** | Actualizar `AGENTS.md` (§8 pruebas, §9 rollback, quitar el literal de contraseña de §2) | `check-secrets` y `gitleaks` sobre el árbol; prueba que afirme que `AGENTS.md` no contiene credenciales literales |
-| **A-1** | `docs/CARGA-DE-DATOS.md`: guía de carga con la tabla de 6.1, incluida la trampa de `emergencyPhone`/`gthEmail` | Prueba de que cada clave documentada existe en el catálogo de `contact_channels` (evita que la guía se desincronice) |
-| **A-2** | Panel: pantalla "Datos pendientes" que liste qué falta leyendo el estado real | Integración: base sin canales → lista los 8; con uno cargado → lista 7 |
-| **A-3** | `PUBLIC_SITE_URL` al dominio definitivo | Verificación post-deploy de `sitemap.xml` y canonical; `verify-prerender.mjs` |
+| PR | Estado | Alcance | Pruebas requeridas |
+|---|---|---|---|
+| **A-0** | ✅ **completado** (PR #10) | Actualizar `AGENTS.md` (§8 pruebas, §9 rollback, quitar el literal de contraseña de §2) | `check-secrets` y `gitleaks` sobre el árbol; prueba que afirme que `AGENTS.md` no contiene credenciales literales |
+| **A-1** | ✅ **completado** *(este PR)* | `docs/CARGA-DE-DATOS.md`: guía de carga con la tabla de 6.1, incluida la trampa de `emergencyPhone`/`gthEmail` | Prueba de que cada clave documentada existe en el catálogo de `contact_channels` (evita que la guía se desincronice) |
+| **A-2** | 🔲 pendiente | Panel: pantalla "Datos pendientes" que liste qué falta leyendo el estado real | Integración: base sin canales → lista los 8; con uno cargado → lista 7 |
+| **A-3** | 🔲 pendiente — **bloqueado** por dominio, DNS y HTTPS confirmados | `PUBLIC_SITE_URL` al dominio definitivo | Verificación post-deploy de `sitemap.xml` y canonical; `verify-prerender.mjs` |
 
 > A-2 es el de mayor valor operativo: convierte "¿qué falta?" en algo que el
 > sanatorio ve solo.
@@ -778,3 +779,70 @@ La corrección tiene que decidir, junto con la pregunta 1 del §6.7 (¿se acepta
 SVG?), si el pipeline **convierte y renombra** —extensión, `url` y `mime`
 coherentes con los bytes— o si **preserva el formato de origen** para las
 imágenes con transparencia. Es trabajo de la Ola B, no de esta ronda.
+
+---
+
+## 8. Ola A-1 — Guía operativa de carga de datos
+
+> Primera ola del roadmap del §6 que se implementa. Sólo documentación y
+> pruebas: **no toca datos reales, seeds, logos, `media.ts` ni campañas.**
+
+### 8.1 Qué se entregó
+
+`docs/CARGA-DE-DATOS.md`: guía paso a paso, escrita **para quien administra el
+sitio, no para quien lo programa**. Cubre los diez datos pendientes del §6.1 y
+para cada uno documenta seis cosas: pantalla del panel, clave técnica, formato
+válido, qué se ve mientras está vacío, cómo verificarlo por el endpoint público
+y en el sitio, y la advertencia de no inventar nada.
+
+Va en `docs/` —junto a `DEPLOY.md`— porque es documentación **operativa**, no de
+planificación: `AGENTS.md` §6 prohíbe los archivos de planificación, no las
+guías de operación.
+
+`tests/docs-carga-de-datos.test.ts` ata la guía a sus fuentes: el catálogo de
+canales, los rangos de dígitos de `contact-values.ts`, los textos de estado
+vacío, las rutas del panel en `AdminLayout.tsx` y los endpoints de `public.ts`.
+Una guía operativa desincronizada es peor que no tenerla —manda a alguien a una
+pantalla que no existe justo cuando está intentando publicar un teléfono de
+Emergencias—, así que si alguna fuente cambia, la guía falla en CI.
+
+Incluye además pruebas de que la guía **no contiene ningún teléfono ni ninguna
+dirección de correo**. Un "número de ejemplo" en una guía de carga es la forma
+más fácil de que ese número termine copiado al panel.
+
+### 8.2 Hallazgo: `emergencyPhone` y `gthEmail` no responden 410
+
+El encargo de esta ronda pedía documentar que esos dos campos "responden 410".
+**No es así, y la diferencia importa.**
+
+- `RETIRED_SETTING_KEYS` = `["social", "scripts"]` → **sí** responden `410 Gone`
+  con un mensaje que explica el motivo (`settings.ts:61-62`).
+- `emergencyPhone` y `gthEmail` están en `RETIRED_CONTACT_FIELDS`, que
+  `sanitizeSettingValue()` **borra del objeto** antes de guardar
+  (`settings.ts:188`). La petición responde **`200 {ok:true}`** y el campo se
+  descarta. Lo mismo con `phones`, `email`, `whatsapp` y `hours`.
+
+Quien escriba esos campos desde un panel viejo, un script o una integración va a
+recibir un "guardado" y el dato no va a estar en ningún lado. La guía lo
+documenta como es, con la advertencia destacada.
+
+**Vale la pena revisarlo.** La ronda 6 estableció el principio de que nada se
+descarta en silencio —el comentario está en `settings.ts:78-79`, justo arriba
+del bloque que rechaza claves no administrables— y estos seis campos son
+exactamente la excepción a ese principio, dentro de una escritura que por lo
+demás se acepta. Corregirlo sería hacer que un `contact` con campos retirados
+responda 410 como el resto. **No se hizo en esta ronda** porque cambia el
+contrato de la API y excede el alcance de A-1; queda como candidato para A-2.
+
+### 8.3 Estado de la Ola A
+
+| PR | Estado |
+|---|---|
+| **A-0** — `AGENTS.md` al día | ✅ completado (PR #10) |
+| **A-1** — guía de carga | ✅ completado (este PR) |
+| **A-2** — pantalla "Datos pendientes" en el panel | 🔲 pendiente |
+| **A-3** — `PUBLIC_SITE_URL` al dominio | 🔲 **bloqueado** hasta confirmar dominio, DNS y HTTPS |
+
+A-1 no desbloquea nada técnico: desbloquea al **sanatorio**, que ahora tiene por
+escrito dónde cargar cada cosa. Los datos siguen sin cargarse y eso es correcto
+mientras no lleguen confirmados.

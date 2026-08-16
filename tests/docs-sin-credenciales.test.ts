@@ -43,19 +43,57 @@ const PLACEHOLDER =
 /** `SEED_ADMIN_PASSWORD`, `DB_PASS`: nombres de variable, no valores. */
 const NOMBRE_DE_VARIABLE = /^[A-Z][A-Z0-9_]*$/;
 
-/** Rutas, URLs y archivos: no son contraseñas. */
-const RUTA_O_URL = /^(\.{0,2}\/|https?:|[\w.-]+\.(sh|ts|tsx|js|mjs|json|md|env|yml|yaml|sql|gz|py))/i;
+/**
+ * Rutas, URLs y archivos: no son contraseñas.
+ *
+ * Se reconocen por su **forma completa**, no por contener una barra. Una regla
+ * del tipo "descartá cualquier valor con `/`, `=`, `(` o `\`" es cómoda y
+ * peligrosa: `P@ss/w0rd!` y `C:\clave123` son contraseñas perfectamente
+ * plausibles, y con esa regla el detector las dejaba pasar en silencio. Los
+ * símbolos son justamente lo que hace fuerte a una contraseña; descartarlos
+ * convertía al detector en un colador para los casos que más importan.
+ */
+const RUTA = new RegExp(
+  [
+    "^(\\.{0,2}/|~/)", //            ./algo  ../algo  /etc/x  ~/x
+    "^https?://", //                 una URL
+    "^[\\w.@-]+(/[\\w.@-]+)+(:\\d+)?$", // ruta/segmentada/completa[:linea]
+    "\\.(sh|ts|tsx|js|mjs|cjs|json|md|env|yml|yaml|sql|gz|py|toml|lock)(:\\d+)?$",
+  ].join("|"),
+  "i",
+);
+
+/**
+ * `NODE_ENV=production`: una variable de entorno citada.
+ *
+ * Sólo en MAYÚSCULAS. Con nombres en minúscula la regla se tragaba `a=b1234X`,
+ * que es una contraseña plausible, no una asignación de configuración.
+ */
+const ASIGNACION_DE_ENTORNO = /^[A-Z][A-Z0-9_]*\s*=/;
+
+/** `down()`, `sanitizeSettingValue()`: una llamada citada. */
+const LLAMADA = /^[A-Za-z_][\w.-]*\(\)$/;
+
+/**
+ * Caracteres que aparecen en rutas, URLs e identificadores y nada más.
+ *
+ * La forma de ruta sólo se aplica a valores compuestos **exclusivamente** por
+ * estos caracteres. Sin esa condición, `P@ss-w0rd/2026` pasaba por "ruta con
+ * segmentos" y se descartaba: una barra no convierte a una contraseña en un
+ * archivo, pero una arroba sí descarta que un archivo sea una ruta normal.
+ */
+const SOLO_CARACTERES_DE_RUTA = /^[A-Za-z0-9._/:~-]+$/;
 
 function esValorSospechoso(valor: string): boolean {
   const v = valor.trim().replace(/^[`'"]+|[`'"]+$/g, "");
   if (v.length < 6) return false;
   if (PLACEHOLDER.test(v)) return false;
   if (NOMBRE_DE_VARIABLE.test(v)) return false;
-  if (RUTA_O_URL.test(v)) return false;
+  if (SOLO_CARACTERES_DE_RUTA.test(v) && RUTA.test(v)) return false;
+  if (ASIGNACION_DE_ENTORNO.test(v)) return false;
+  if (LLAMADA.test(v)) return false;
   // Un SHA de git o un hash no es una credencial.
   if (/^[0-9a-f]{7,40}$/i.test(v)) return false;
-  // Rutas, asignaciones y llamadas: son código citado, no valores.
-  if (/[/=()\\]/.test(v)) return false;
   return true;
 }
 
@@ -147,11 +185,47 @@ describe("el detector funciona", () => {
     expect(analizar("La contraseña sale de `SEED_ADMIN_PASSWORD`.")).toEqual([]);
   });
 
+  it("marca contraseñas con símbolos, que es donde el descarte por carácter fallaba", () => {
+    // Una regla del tipo "descartá lo que tenga / = ( ) o \" dejaba pasar
+    // justo las contraseñas fuertes. Los símbolos son lo que las hace fuertes.
+    for (const clave of [
+      "P@ss/w0rd!",
+      "a=b1234X",
+      "x(y)z123",
+      "C:\\clave123",
+      "N4vy//Sanatorio",
+      "clave(2026)=ok",
+    ]) {
+      expect(analizar(`Contraseña: \`${clave}\``).map((x) => x.valor), clave).toContain(clave);
+    }
+  });
+
+  it("marca el par correo / contraseña aunque la contraseña tenga símbolos", () => {
+    const h = analizar("**Seed**: `usuario@ejemplo.test` / `P@ss-w0rd/2026`");
+    expect(h.map((x) => x.valor)).toContain("P@ss-w0rd/2026");
+  });
+
   it("no marca rutas, comandos ni prosa sobre contraseñas", () => {
     expect(analizar("Deshabilitar el acceso por contraseña en `/etc/ssh/sshd_config`.")).toEqual([]);
     expect(analizar("`PasswordAuthentication no` y `PermitRootLogin prohibit-password`.")).toEqual([]);
     expect(analizar("El deploy deja la contraseña en `.deploy-credentials`.")).toEqual([]);
     expect(analizar("Rotar la contraseña de root del VPS es decisión del propietario.")).toEqual([]);
+  });
+
+  it("sigue sin marcar rutas, asignaciones y llamadas aunque ya no se descarten por carácter", () => {
+    // Estos se reconocen por su forma completa, no por contener un símbolo.
+    for (const noEsClave of [
+      "clave: `api/migrations/20260813000001_schedules.ts:31`",
+      "contraseña: `scripts/deploy/prepare-env.sh`",
+      "credenciales: `NODE_ENV=production`",
+      "clave: `https://sanatorio.test/admin`",
+      "contraseña es `SEED_ADMIN_PASSWORD`",
+      "contraseña es `$SEED_ADMIN_PASSWORD`",
+      "clave: `sanitizeSettingValue()`",
+      "contraseña: `~/.ssh/authorized_keys`",
+    ]) {
+      expect(analizar(noEsClave), noEsClave).toEqual([]);
+    }
   });
 });
 
