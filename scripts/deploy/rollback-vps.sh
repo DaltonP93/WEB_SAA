@@ -248,8 +248,17 @@ if [ -n "$RESTORE_DUMP" ]; then
   # `down()` de las migraciones que restauran por id de bloque no encuentra
   # nada que restaurar, y el dump es la única vuelta atrás real.
   log "3/6  Restaurando el dump ${RESTORE_DUMP} (en vez de revertir migraciones)"
-  restaurar_dump "$RESTORE_DUMP" \
-    || die "falló la restauración del dump. La base puede haber quedado a medias: revisá el error de mysql de arriba antes de levantar la aplicación." 5
+  if ! restaurar_dump "$RESTORE_DUMP"; then
+    # El `gzip -t` de más arriba ya descartó los dumps ilegibles, así que llegar
+    # hasta acá significa que mysql cortó con la base abierta: puede haber
+    # quedado parte del dump aplicada. No se puede dejar así, y hay un backup
+    # recién tomado y verificado del paso 2.
+    warn "falló la restauración de ${RESTORE_DUMP} con la base ya abierta."
+    if restaurar_dump "$BACKUP_FILE"; then
+      die "falló la restauración de ${RESTORE_DUMP} y se restauró el backup ${BACKUP_FILE}: la base quedó como antes y el código NO se bajó (seguís en ${CURRENT_SHA})." 4
+    fi
+    die "falló la restauración de ${RESTORE_DUMP} y el backup ${BACKUP_FILE} tampoco se pudo restaurar. La base quedó en un estado intermedio: NO levantes la aplicación hasta resolverlo." 5
+  fi
 else
   # Qué revertir sale de `knex_migrations`, no de contar archivos del repo:
   # si el deploy quedó a medias, esos dos números no coinciden.

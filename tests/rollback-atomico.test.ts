@@ -565,6 +565,31 @@ describeDb("el dump se verifica antes de abrir la base", () => {
     expect(arbol(esc).sha).toBe(esc.actual);
   }, 180_000);
 
+  it("si mysql corta a mitad de la restauración, vuelve el backup del paso 2", async () => {
+    // `gzip -t` sólo garantiza que el archivo se puede descomprimir. Un dump
+    // que se descomprime bien y contiene SQL inválido pasa esa comprobación y
+    // rompe con la base ya abierta: ahí puede quedar parte aplicada. Para eso
+    // está el backup que el paso 2 tomó y verificó.
+    const esc = montarDump();
+    const malo = join(esc.raiz, "sql-invalido.sql.gz");
+    execFileSync("bash", [
+      "-c",
+      `printf '%s\\n' "ESTO NO ES SQL;" | gzip > ${JSON.stringify(malo)}`,
+    ]);
+    // Se descomprime sin problemas: el problema aparece recién en mysql.
+    execFileSync("gzip", ["-t", malo]);
+
+    const res = correr(esc, { RESTORE_DUMP: malo });
+
+    expect(res.code).toBe(4);
+    expect(res.stderr).toMatch(/se restauró el backup/i);
+    expect(res.stderr).toMatch(/código NO se bajó/);
+    // Base como estaba, árbol como estaba, aplicación sin reiniciar.
+    expect(await etapas()).toEqual(["nueva", "vieja"]);
+    expect(arbol(esc)).toEqual({ sha: esc.actual, marca: "desplegada", tieneArchivoNuevo: true });
+    expect(leer(esc, "pm2.log")).toBe("");
+  }, 180_000);
+
   it("un dump válido sí restaura y el rollback termina", async () => {
     // El fail-closed no puede volverse un freno permanente.
     const esc = montarDump();
