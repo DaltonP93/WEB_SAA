@@ -55,7 +55,16 @@ WebSantarioV2/
 
 **Puertos locales**: API `4000`, web `5173`, admin `5174`.
 
-**Credenciales seed**: `admin@sanatorio.local` / `admin1234` (cambiar en producción).
+**Credenciales seed**: el usuario administrador se siembra con el correo de
+`SEED_ADMIN_EMAIL` y la contraseña de `SEED_ADMIN_PASSWORD`, ambas variables de
+entorno. **Este archivo no publica ninguna credencial literal**, ni siquiera de
+desarrollo: `tests/docs-sin-credenciales.test.ts` falla si vuelve a aparecer una.
+
+- **Local**: definilas en `api/.env` antes de `pnpm db:seed` (ver `api/.env.example`).
+- **Producción**: `SEED_ADMIN_PASSWORD` es obligatoria con `NODE_ENV=production`.
+  El deploy la genera al azar y la deja en `${APP_DIR}/.deploy-credentials`, sólo
+  legible por root, y únicamente cuando el seed realmente corrió
+  (ver `scripts/deploy/prepare-env.sh`).
 
 ---
 
@@ -333,7 +342,11 @@ Los 25 puntos acordados con el cliente están implementados. Lo estructural:
   - Toggle publicar/despublicar inline en `PagesListPage` y `NewsListPage`.
   - `LucideIcon.tsx` — renderiza iconos [lucide](https://lucide.dev/icons/) por nombre kebab-case (`heart-pulse`). Usa `lucide-react/dynamicIconImports` + `React.lazy` + `Suspense` (⚠️ en lucide-react 0.460 **no existe** el subpath `lucide-react/dynamic`). `isIconName()` valida antes de renderizar. El helper `IconBadge` de `EntityManager` muestra el icono si el valor es un nombre lucide válido, y si no cae al emoji tal cual — antes el nombre se imprimía como texto crudo y se superponía a los títulos.
 
-🔲 Tests automatizados (no hay; los agentes hacen smoke testing manual por ahora).
+✅ **Tests automatizados**: `pnpm test` (vitest) — **625 pruebas en 33 archivos**
+al cierre de la ronda 8. Las que necesitan base real se activan con
+`TEST_DATABASE=1` y se saltan solas si no está. CI corre la suite completa contra
+MySQL 8. El smoke testing manual del Agente 3 **complementa** la suite, no la
+reemplaza: lo que se puede afirmar con una prueba, se afirma con una prueba.
 🔲 Contenido real seed (las imágenes y los textos definitivos los carga el cliente desde el admin).
 🔲 `PUBLIC_SITE_URL` en el `api/.env` de producción todavía apunta a la **IP del VPS**, así que el `sitemap.xml` y todos los canonical usan la IP en vez del dominio. Cambiarlo cuando el DNS + HTTPS estén confirmados (requiere decisión del dueño del proyecto, no cambiarlo a ciegas).
 
@@ -361,11 +374,40 @@ Nginx sirve `apps/web/dist` en `/` (con `try_files $uri $uri/ /index.html`) y `a
 python scripts/deploy/run-remote.py "bash /var/www/sanatorio/scripts/deploy/update-vps.sh"
 ```
 
-`update-vps.sh` hace: `git reset --hard origin/main` → **se re-ejecuta a sí mismo si el propio script cambió** → `pnpm install --frozen-lockfile` → `pnpm db:migrate` → builds → reload de Nginx + restart de PM2.
+`update-vps.sh` hace: copia de sí mismo a `/tmp` → `git reset --hard origin/main` → **se re-ejecuta si el propio script cambió en el pull** → `pnpm install --frozen-lockfile` → `pnpm db:migrate` → builds → reload de Nginx + restart de PM2 → health check.
 
-⚠️ Por ese re-exec, **el primer deploy que modifica `update-vps.sh` corre con la versión vieja del script**. Si el cambio del deploy es el que querés probar, hay que deployar dos veces.
+**Sólo va hacia adelante.** Si se le pasa `ROLLBACK_TO` aborta con **código 2** antes de tocar nada y remite a `rollback-vps.sh` (ver abajo). Aceptarlo hacía `git reset --hard` a la versión vieja *antes* de mirar la base, y eso deja `knex_migrations` con migraciones aplicadas cuyo archivo ya no existe: knex no las puede revertir.
+
+**Sobre el re-exec** (corregido en la ronda 8): el script corre desde una copia en `/tmp` y compara esa copia contra el archivo del árbol *después* del reset. Antes comparaba `$0` contra `$SELF`, que tras el reset son el mismo archivo ya actualizado — los hashes daban iguales siempre y **la re-ejecución no ocurría nunca**, así que un arreglo del script se aplicaba recién en el deploy siguiente. Ya no: el arreglo entra en el mismo deploy que lo trae. Consecuencia esperada: cuando el script cambia, el deploy corre dos veces (el segundo `git reset` es un no-op). La re-ejecución es **una sola**, garantizada por `DEPLOY_REEXEC=1`.
 
 ⚠️ `--frozen-lockfile` implica que **todo cambio de dependencia debe llevar el `pnpm-lock.yaml` commiteado**, o el deploy falla.
+
+### Rollback
+
+**`update-vps.sh` no hace rollback.** El único camino es:
+
+```bash
+ROLLBACK_TO=<sha-anterior> bash /var/www/sanatorio/scripts/deploy/rollback-vps.sh
+```
+
+El orden es al revés de lo que parece: **primero se revierten las migraciones, con el código nuevo todavía en disco, y recién después se baja el árbol** — knex necesita el archivo de la migración para poder revertirla, y el `down()` que hace falta es el de la versión nueva. Detalle completo en [`docs/DEPLOY.md`](docs/DEPLOY.md#rollback).
+
+El script prevalida la versión destino en un `git worktree` aparte antes de tocar la base, y si algo falla *después* de revertirla, recupera el estado anterior (restaura el backup, vuelve al SHA que estaba, reconstruye y reinicia).
+
+| Código | Significado |
+|---|---|
+| 0 | Rollback completo y la aplicación responde |
+| 1 | Error de uso o de una etapa previa (nada se tocó) |
+| 2 | La versión destino no pasó la prevalidación (nada se tocó) |
+| 4 | Se abortó y la base quedó como antes; el código NO se bajó |
+| 5 | La base quedó en un estado intermedio y no se pudo restaurar |
+| 6 | El rollback se aplicó pero el health check no dio 200 |
+| 7 | Falló una etapa posterior a la base y se recuperó el estado anterior |
+| 8 | Falló una etapa posterior a la base y la recuperación quedó incompleta |
+
+Si la base se **sembró después** de migrar, el `down()` no restaura nada y hay que ir por dump: `RESTORE_DUMP=<archivo.sql.gz>`. `rollback-guard.mjs` lo detecta y bloquea el camino equivocado.
+
+`SKIP_PREVALIDACION=1` omite el worktree del paso 1 (menos disco y tiempo, pero un build roto se descubre con la base ya revertida). Ver el riesgo de memoria del VPS más abajo.
 
 ### Verificación post-deploy
 

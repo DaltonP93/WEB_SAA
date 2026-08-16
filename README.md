@@ -110,11 +110,16 @@ pnpm dev
 | Servicio | URL | Credenciales |
 |---|---|---|
 | 🌐 Sitio público | http://localhost:5173 | — |
-| 🛠️ Panel admin | http://localhost:5174 | `admin@sanatorio.local` / `admin1234` |
+| 🛠️ Panel admin | http://localhost:5174 | las de `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` |
 | ⚙️ API REST | http://localhost:4000 | Bearer JWT |
-| 🐬 phpMyAdmin | http://localhost:8080 | `root` / `root` |
+| 🐬 phpMyAdmin | http://localhost:8080 | las de tu MySQL local |
 
-> **Importante**: cambiá la contraseña del admin sembrado antes de cualquier deploy real.
+> **Las credenciales no se publican acá, ni siquiera las de desarrollo.** El
+> usuario administrador se siembra con `SEED_ADMIN_EMAIL` y `SEED_ADMIN_PASSWORD`
+> de `api/.env` (ver `api/.env.example`); definilas antes de `pnpm db:seed`.
+> En producción `SEED_ADMIN_PASSWORD` es obligatoria, el deploy la genera al azar
+> y la deja en `${APP_DIR}/.deploy-credentials`, sólo legible por root.
+> `tests/docs-sin-credenciales.test.ts` falla si vuelve a aparecer un literal.
 
 ## 🧩 Sistema de bloques
 
