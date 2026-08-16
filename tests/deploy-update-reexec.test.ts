@@ -237,6 +237,28 @@ describe("el script corre desde una copia, no desde el archivo que el reset rees
   });
 });
 
+describe("la copia falla con un mensaje, no con un error de cat", () => {
+  it("por tubería pide la ruta explícita y no toca nada", () => {
+    // `… | bash` deja `$0` en "bash": no hay archivo que copiar ni contra qué
+    // comparar después. Antes esto habría reventado con un error de `cat`.
+    const esc = montar(SCRIPT_REAL);
+    const antes = git(esc.dir, "rev-parse", "HEAD");
+
+    const res = spawnSync("bash", {
+      cwd: esc.dir,
+      input: readFileSync(join(esc.dir, "scripts", "deploy", "update-vps.sh"), "utf8"),
+      encoding: "utf8",
+      timeout: 120_000,
+      env: { ...process.env, PATH: `${esc.bin}:${process.env.PATH}`, APP_DIR: esc.dir },
+    });
+
+    expect(res.status).not.toBe(0);
+    expect(res.stderr).toMatch(/no se puede leer el propio script/i);
+    expect(res.stderr).toMatch(/Ejecutalo por su ruta/i);
+    expect(git(esc.dir, "rev-parse", "HEAD")).toBe(antes);
+  }, 180_000);
+});
+
 describe("el rechazo de ROLLBACK_TO sigue antes de todo", () => {
   it("no llega a sacar copia ni a tocar el repo", () => {
     // La copia se hace después del rechazo: pedir un rollback no puede dejar

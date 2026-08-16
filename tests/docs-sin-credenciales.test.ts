@@ -80,10 +80,23 @@ function paresCredenciales(linea: string): string[] {
  * documentación tiene que poder decir.
  */
 function valoresEtiquetados(linea: string): string[] {
-  const re = /(?:contrase[ñn]a|password|passwd|clave|credencial(?:es)?)\s*(?:es|son|:|=)\s*[`'"]([^`'"\n]{6,})[`'"]/gi;
+  const etiqueta = "(?:contrase[ñn]a|password|passwd|clave|credencial(?:es)?)\\s*(?:es|son|:|=)\\s*";
   const hallazgos: string[] = [];
-  for (const m of linea.matchAll(re)) if (esValorSospechoso(m[1])) hallazgos.push(m[1]);
-  return hallazgos;
+  // Entrecomillado o entre backticks: la forma normal en markdown.
+  for (const m of linea.matchAll(new RegExp(`${etiqueta}[\`'"]([^\`'"\n]{6,})[\`'"]`, "gi"))) {
+    if (esValorSospechoso(m[1])) hallazgos.push(m[1]);
+  }
+  // Sin comillas. Acá no alcanza con "≥6 caracteres": "Contraseña: la que generó
+  // el deploy" es prosa legítima. Se exige que el valor tenga forma de
+  // contraseña —un token sin espacios con dígitos o mayúsculas y minúsculas
+  // mezcladas—, que es lo que distingue `hunter2` de `generada`.
+  for (const m of linea.matchAll(new RegExp(`${etiqueta}([^\\s\`'"]{6,})`, "gi"))) {
+    const v = m[1].replace(/[.,;:)]+$/, "");
+    const pareceContrasena = /\d/.test(v) && /[a-z]/i.test(v);
+    const mezclaMayusculas = /[a-z]/.test(v) && /[A-Z]/.test(v);
+    if ((pareceContrasena || mezclaMayusculas) && esValorSospechoso(v)) hallazgos.push(v);
+  }
+  return [...new Set(hallazgos)];
 }
 
 function analizar(texto: string): { linea: number; valor: string; forma: string }[] {
@@ -107,6 +120,19 @@ describe("el detector funciona", () => {
   it("marca una contraseña etiquetada", () => {
     expect(analizar("Contraseña: `Zx9pQr-demo`").map((x) => x.valor)).toContain("Zx9pQr-demo");
     expect(analizar("La clave es `Zx9pQr-demo`.").map((x) => x.valor)).toContain("Zx9pQr-demo");
+  });
+
+  it("marca también la contraseña sin comillas", () => {
+    // La primera versión del detector sólo miraba valores entrecomillados: una
+    // credencial escrita en prosa plana se le escapaba entera.
+    expect(analizar("Contraseña: Zx9pQr7demo").map((x) => x.valor)).toContain("Zx9pQr7demo");
+    expect(analizar("password = hunter2000").map((x) => x.valor)).toContain("hunter2000");
+  });
+
+  it("pero no marca prosa que describe de dónde sale la contraseña", () => {
+    expect(analizar("Contraseña: la que generó el deploy.")).toEqual([]);
+    expect(analizar("Contraseña: obligatoria en producción.")).toEqual([]);
+    expect(analizar("La contraseña es aleatoria y queda sólo para root.")).toEqual([]);
   });
 
   it("marca exactamente la forma que tenía AGENTS.md", () => {

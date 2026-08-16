@@ -40,7 +40,7 @@ Monorepo **pnpm 9** (`pnpm-workspace.yaml`: `apps/*`, `api`, `shared`).
 | `apps/admin` | React 18 · Vite | Panel de administración (`/admin`) |
 | `shared/types` | TypeScript | Tipos y constantes compartidas |
 
-**Pruebas:** 33 archivos en `tests/`, **625 pruebas**, `vitest`. Las que tocan
+**Pruebas:** 33 archivos en `tests/`, **628 pruebas**, `vitest`. Las que tocan
 base real se activan con `TEST_DATABASE=1` (si no, se saltan con `describe.skip`).
 
 **CI** (`.github/workflows/ci.yml`), tres jobs, todos bloqueantes:
@@ -289,7 +289,7 @@ conexión sana).
 
 | Comprobación | Resultado |
 |---|---|
-| Pruebas (Node 20 + MySQL 8, `TEST_DATABASE=1`) | **625 / 625** en 33 archivos |
+| Pruebas (Node 20 + MySQL 8, `TEST_DATABASE=1`) | **628 / 628** en 33 archivos |
 | `pnpm typecheck` | OK |
 | Builds `@sa/api` / `@sa/web` / `@sa/admin` | OK |
 | Prerender real (`scripts/ci/verify-prerender.mjs`) | OK, exit 0 |
@@ -661,7 +661,7 @@ tocar este repo"— afirmaba cuatro cosas falsas:
 
 | Decía | Realidad |
 |---|---|
-| `🔲 Tests automatizados (no hay; los agentes hacen smoke testing manual)` | 625 pruebas en 33 archivos y tres jobs de CI bloqueantes |
+| `🔲 Tests automatizados (no hay; los agentes hacen smoke testing manual)` | 628 pruebas en 33 archivos y tres jobs de CI bloqueantes |
 | Publicaba un par correo/contraseña de seed literal | Desde la ronda 6 la contraseña se genera |
 | `update-vps.sh` "se re-ejecuta a sí mismo", y "hay que deployar dos veces" | Ver §7.2: la reejecución **nunca ocurría** |
 | El runbook no mencionaba `rollback-vps.sh` | Existe desde la ronda 5, con códigos 0–8 |

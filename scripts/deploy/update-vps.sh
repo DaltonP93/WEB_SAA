@@ -54,8 +54,14 @@ SELF="$APP_DIR/scripts/deploy/update-vps.sh"
 # actualizado: los hashes daban iguales siempre, la reejecución no ocurría nunca
 # y el deploy terminaba corriendo la versión vieja del script.
 if [ -z "${DEPLOY_SELF_COPY:-}" ]; then
-  DEPLOY_SELF_COPY="$(mktemp "${TMPDIR:-/tmp}/update-vps-XXXXXX.sh")"
-  cat "$0" > "$DEPLOY_SELF_COPY"
+  # Si el script llegó por una tubería (`… | bash`) no hay archivo que copiar, y
+  # tampoco habría forma de compararlo después. Se pide la ruta explícita en vez
+  # de fallar con un error de `cat`.
+  [ -r "$0" ] || die "no se puede leer el propio script ('$0'). Ejecutalo por su ruta: bash ${SELF}"
+  DEPLOY_SELF_COPY="$(mktemp "${TMPDIR:-/tmp}/update-vps-XXXXXX.sh")" \
+    || die "no se pudo crear el temporal para la copia del script (¿${TMPDIR:-/tmp} lleno o de sólo lectura?). Nada se modificó."
+  cat "$0" > "$DEPLOY_SELF_COPY" \
+    || die "no se pudo copiar el script a ${DEPLOY_SELF_COPY}. Nada se modificó."
   export DEPLOY_SELF_COPY
   exec bash "$DEPLOY_SELF_COPY" "$@"
 fi
