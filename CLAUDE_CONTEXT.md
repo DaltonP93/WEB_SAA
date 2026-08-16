@@ -5,11 +5,11 @@
 > Formato ejecutivo. Se actualiza en cada tarea terminada o preparación de
 > cambios para GitHub.
 
-**Última actualización:** ronda correctiva 7 · PR #8 (Draft)
-**HEAD documentado:** `e8e1a92972b222bccc29bc1ac1d99d401f8d5fbb`
-**Base:** `main` = `809059141786cd25fd0b0107368ec9956de37187`
-**Rama:** `claude/audit-fixes-ronda7`
-**CI:** 3/3 checks en verde sobre el HEAD documentado.
+**Última actualización:** ronda correctiva 7 · **PR #8 fusionado a `main`**
+**`main` actual:** `2359a11796ba8fd86baf385923a2d7740be28bdc` (merge commit de PR #8)
+**Base de la ronda:** `main` = `809059141786cd25fd0b0107368ec9956de37187`
+**Rama de trabajo:** `claude/audit-fixes-ronda7` (fusionada; ya no se desarrolla ahí)
+**CI:** 3/3 checks en verde sobre `a1762f0` antes del merge.
 
 ---
 
@@ -280,10 +280,17 @@ conexión sana).
 | `pnpm audit --prod` | *No known vulnerabilities found* |
 | `node scripts/check-secrets.mjs` | Sin credenciales en el árbol |
 | `gitleaks detect --no-git` (árbol) | *no leaks found* |
-| **CI: 3 / 3 checks** | **verde** sobre `e8e1a92` |
+| **CI: 3 / 3 checks** | **verde** sobre `a1762f0` |
 
-**PR #8 en Draft, sin merge y sin Ready for review**, por instrucción explícita del
+**PR #8 fusionado a `main`** el 2026-08-16, por instrucción explícita del
 propietario: https://github.com/DaltonP93/WEB_SAA/pull/8
+Merge commit: `2359a11796ba8fd86baf385923a2d7740be28bdc`.
+
+La ronda 7 se había desarrollado bajo la consigna "sin merge, sin deploy, sin
+Ready for review"; el propietario levantó esa restricción y autorizó el merge una
+vez verdes los tres checks. **El deploy sigue sin hacerse**: fusionar a `main` no
+despliega nada por sí solo (no hay CD automático; el despliegue se dispara a mano
+con `scripts/deploy/update-vps.sh` en el VPS).
 
 ### Pendiente que requiere decisión humana (no tocar por cuenta propia)
 
