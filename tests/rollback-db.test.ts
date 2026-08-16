@@ -347,15 +347,20 @@ try {
     // knex `migrate:down [<name>]` revierte esa. Sin el nombre, con timestamps
     // fuera de orden (dos ramas fusionadas) bajaría otra distinta.
     const script = readFileSync(resolve(ROOT, "scripts/deploy/rollback-db.sh"), "utf8");
-    expect(script).toMatch(/eval "\$DOWN_CMD '\$nombre'"/);
+    // El nombre viaja como argumento del arreglo, no concatenado en una cadena
+    // que `eval` vuelve a parsear (ver tests/rollback-db-failclosed.test.ts).
+    expect(script).toMatch(/"\$\{DOWN_ARGV\[@\]\}" "\$nombre"/);
     // Y después comprueba que efectivamente se haya ido.
-    expect(script).toContain("sigue_aplicada");
+    expect(script).toContain("estado_migracion");
   });
 
   it("exporta la conexión al comando de reversión", () => {
     // Si no, knex la toma de api/.env y podría revertir en otra base.
     const script = readFileSync(resolve(ROOT, "scripts/deploy/rollback-db.sh"), "utf8");
-    const loop = script.slice(script.indexOf("while IFS="), script.indexOf("done <<<"));
+    // El bucle de reversión, no el de validación de nombres que va antes.
+    const inicio = script.indexOf("REVERTIDAS=0");
+    expect(inicio).toBeGreaterThan(-1);
+    const loop = script.slice(inicio, script.indexOf("done <<<", inicio));
     for (const v of ["DB_HOST=", "DB_PORT=", "DB_USER=", "DB_PASS=", "DB_NAME="]) {
       expect(loop, v).toContain(v);
     }
@@ -387,7 +392,7 @@ describe("rollback-vps.sh usa la lista real y falla fuerte", () => {
   });
 
   it("propaga los códigos del rollback de la base", () => {
-    const bloque = script.slice(script.indexOf("RB_CODE"), script.indexOf("3/5"));
+    const bloque = script.slice(script.indexOf("RB_CODE"), script.indexOf("4/6"));
     expect(bloque).toContain("4)");
     expect(bloque).toContain("5)");
     expect(bloque).toMatch(/REVERSIÓN PARCIAL/);

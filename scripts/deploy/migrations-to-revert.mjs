@@ -55,6 +55,20 @@ const cfg = {
   database: process.env.DB_NAME ?? envFile("DB_NAME") ?? "sanatorio",
 };
 
+/**
+ * Un nombre de migración es un nombre de archivo, nada más.
+ *
+ * `knex_migrations` es una tabla escribible, y lo que salga de acá termina en
+ * una línea de comando (`migrate:down <nombre>`) y en una consulta SQL. Este es
+ * el único punto donde el valor todavía se ve entero: la salida de este script
+ * viaja línea por línea, y un `\n` embebido ya no se distingue de dos
+ * migraciones distintas. Se valida acá y se vuelve a validar en
+ * `rollback-db.sh`, que es quien lo ejecuta.
+ */
+const NOMBRE_VALIDO = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const nombreValido = (name) =>
+  typeof name === "string" && name.length <= 200 && !name.includes("..") && NOMBRE_VALIDO.test(name);
+
 /** Nombres de migración que tiene el árbol destino. */
 function destMigrations() {
   const dir = process.env.DEST_MIGRATIONS_DIR;
@@ -91,6 +105,19 @@ async function main() {
 
     const [rows] = await conn.query("SELECT name FROM knex_migrations ORDER BY id ASC");
     const applied = rows.map((r) => r.name);
+
+    // Si una sola fila no es un nombre de migración, no se emite nada: un valor
+    // manipulado no invalida sólo su propia línea, invalida la comparación
+    // entera —el árbol destino se compara por nombre exacto—.
+    const invalidos = applied.filter((name) => !nombreValido(name));
+    if (invalidos.length > 0) {
+      console.error(
+        "[migrations-to-revert] knex_migrations tiene nombres que no son nombres de migración:\n" +
+          invalidos.map((name) => `  ${JSON.stringify(name)}`).join("\n") +
+          "\n  No se revierte nada. Revisá esa tabla antes de continuar.",
+      );
+      process.exit(3);
+    }
 
     // Lo aplicado que el árbol destino no tiene. Se revierte al revés: las
     // migraciones dependen de las anteriores.

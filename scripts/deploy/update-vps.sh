@@ -7,22 +7,34 @@
 # Uso (como root, en el VPS):
 #   bash /var/www/sanatorio/scripts/deploy/update-vps.sh
 #
-# Rollback (ver docs/DEPLOY.md §Rollback):
-#   BRANCH=main ROLLBACK_TO=<sha> bash scripts/deploy/update-vps.sh
-#   Para revertir migraciones, usar el script del paquete —que corre knex a
-#   través de tsx—, NO knex directo: el migrador hace import() en runtime y
-#   Node 20 no sabe leer .ts sin ayuda.
-#     pnpm --filter @sa/api migrate:rollback
+# Este script sólo va HACIA ADELANTE. La vuelta atrás vive en
+# scripts/deploy/rollback-vps.sh, que es el único que la hace en el orden que
+# funciona: revierte las migraciones con el código nuevo todavía en disco y
+# recién después baja el árbol (docs/DEPLOY.md §Rollback). Bajar el código
+# primero deja en `knex_migrations` migraciones aplicadas cuyo archivo ya no
+# existe: knex no las puede revertir, y el `down()` que hacía falta era el de
+# la versión nueva.
 # ============================================================================
 set -euo pipefail
 
 APP_DIR="${APP_DIR:-/var/www/sanatorio}"
 BRANCH="${BRANCH:-main}"
-# SHA opcional para volver a una versión anterior en vez del HEAD de la rama.
-ROLLBACK_TO="${ROLLBACK_TO:-}"
 
 log() { echo -e "\033[1;34m==>\033[0m $*"; }
 die() { echo -e "\033[1;31mERROR:\033[0m $*" >&2; exit 1; }
+
+# Antes de tocar nada. Este script llegó a aceptar ROLLBACK_TO y hacía
+# `git reset --hard` a esa versión antes de mirar la base: el árbol quedaba
+# viejo con la base adelantada y sin forma de revertirla. Aceptarlo en silencio
+# —o ignorarlo— es peor que rechazarlo, así que se rechaza y se dice a dónde ir.
+if [ -n "${ROLLBACK_TO:-}" ]; then
+  echo -e "\033[1;31mERROR:\033[0m update-vps.sh no hace rollback: sólo actualiza hacia adelante." >&2
+  echo "  Nada se modificó." >&2
+  echo "  Para volver a ${ROLLBACK_TO}, el script que revierte la base primero:" >&2
+  echo "    ROLLBACK_TO=${ROLLBACK_TO} bash ${APP_DIR}/scripts/deploy/rollback-vps.sh" >&2
+  echo "  Detalle del procedimiento en docs/DEPLOY.md §Rollback." >&2
+  exit 2
+fi
 
 [ -d "$APP_DIR/.git" ] || die "$APP_DIR no es un repo git. ¿Corriste setup-vps.sh primero?"
 
@@ -32,12 +44,7 @@ log "1/6  git pull (rama ${BRANCH})"
 PREVIOUS_SHA="$(git rev-parse HEAD)"
 git fetch origin
 git checkout "$BRANCH"
-if [ -n "$ROLLBACK_TO" ]; then
-  log "    ROLLBACK_TO=${ROLLBACK_TO} → volviendo a esa versión"
-  git reset --hard "$ROLLBACK_TO"
-else
-  git reset --hard "origin/${BRANCH}"
-fi
+git reset --hard "origin/${BRANCH}"
 log "    versión anterior: ${PREVIOUS_SHA} · versión nueva: $(git rev-parse HEAD)"
 
 # Bash carga el script en memoria al inicio. Si el propio update-vps.sh
@@ -125,6 +132,6 @@ else
   echo -e "\033[1;31m✗ Healthcheck devolvió ${HEALTH} tras 20s\033[0m" >&2
   echo "  Logs:      pm2 logs sanatorio-api --lines 50 --nostream" >&2
   echo "  Detalle:   curl -s http://localhost/api/health" >&2
-  echo "  Rollback:  ROLLBACK_TO=${PREVIOUS_SHA} bash ${APP_DIR}/scripts/deploy/update-vps.sh" >&2
+  echo "  Rollback:  ROLLBACK_TO=${PREVIOUS_SHA} bash ${APP_DIR}/scripts/deploy/rollback-vps.sh" >&2
   exit 1
 fi

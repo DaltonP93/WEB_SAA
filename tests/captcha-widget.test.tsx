@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
@@ -22,6 +22,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  */
 
 const CONFIG = { provider: "turnstile", siteKey: "site-de-prueba" };
+
+/** El tope real que espera el componente, para no repetirlo acá como número. */
+const { GLOBAL_TIMEOUT_MS } = await import("../apps/web/src/components/Captcha");
+/** Un poco más, para que corra el sondeo que cae después del vencimiento. */
+const GLOBAL_POLL_MARGEN = 200;
 
 /** Opciones con las que el componente llamó a `render()` del proveedor. */
 let widgetOptions: Record<string, any> | null = null;
@@ -94,6 +99,9 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   delete (window as any).turnstile;
+  // Los `<script>` que hayan quedado en el documento no pueden pasar al caso
+  // siguiente: varias pruebas cuentan cuántas copias del SDK hay en la página.
+  for (const el of Array.from(document.querySelectorAll("script"))) el.remove();
 });
 
 describe("el widget avisa cuando el desafío falla", () => {
@@ -252,29 +260,162 @@ describe("el formulario de contacto frente a un captcha en error", () => {
   });
 });
 
+/**
+ * El caso que dejaba el formulario inservible hasta recargar la página.
+ *
+ * El `<script>` baja y dispara `load`, pero `window.turnstile` nunca aparece:
+ * un CDN que devolvió un cuerpo truncado, un SDK que no llegó a instalarse. El
+ * `load` no es la señal de que el proveedor esté listo, y el componente lo
+ * tomaba como tal: comprobaba la API justo después, fallaba, y en el caché
+ * quedaba una promesa **resuelta**. Cada reintento recibía esa misma promesa,
+ * volvía a encontrar la API ausente y volvía a fallar, para siempre.
+ *
+ * La corrección no es sólo borrar la entrada del caché: si el `<script>`
+ * inservible sigue en el documento, el reintento agrega un segundo SDK. Hay que
+ * descartar las dos cosas, y por eso acá se cuentan los `<script>` del DOM real
+ * —el stub los inserta de verdad— y no una lista paralela.
+ *
+ * Se usan timers falsos porque la espera de la API global tiene un tope.
+ */
 describe("el SDK no se duplica nunca", () => {
-  it("si el script carga pero el proveedor no expone su API, el reintento no mete otro", async () => {
-    // El `<script>` resuelve pero `window.turnstile` no aparece (CDN que
-    // devolvió un cuerpo truncado, SDK lento). Borrar del caché esa promesa
-    // —que está resuelta— haría que el reintento insertara un segundo SDK.
-    const realAppend = document.head.appendChild.bind(document.head);
+  /** Si el próximo `<script>` publica `window.turnstile` al cargar. */
+  let exponerApi = false;
+
+  const SRC = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+  const scriptsEnElDom = () => Array.from(document.querySelectorAll(`script[src="${SRC}"]`));
+
+  /** Avanza el reloj falso dejando que React procese lo que se dispare. */
+  const avanzar = async (ms: number) => {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  };
+
+  beforeEach(() => {
+    // Este stub sí inserta el nodo en el documento: es lo que se va a contar.
     vi.restoreAllMocks();
+    exponerApi = false;
+    const realAppend = document.head.appendChild.bind(document.head);
     vi.spyOn(document.head, "appendChild").mockImplementation(((node: any) => {
       if (node?.tagName !== "SCRIPT") return realAppend(node);
       requestedScripts.push(node.src);
-      queueMicrotask(() => node.onload?.(new Event("load")));
-      return node;
+      const insertado = realAppend(node);
+      queueMicrotask(() => {
+        if (exponerApi) {
+          (window as any).turnstile = {
+            render: (_el: HTMLElement, opts: Record<string, any>) => {
+              widgetOptions = opts;
+              renderCount += 1;
+              return `widget-${renderCount}`;
+            },
+            reset: (id?: string | number) => {
+              resetCalls.push(id);
+            },
+          };
+        }
+        node.onload?.(new Event("load"));
+      });
+      return insertado;
     }) as any);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("espera la API global antes de dar el script por bueno", async () => {
     renderWithQuery(<Captcha onToken={vi.fn()} onError={vi.fn()} />);
-    const alerta = await screen.findByRole("alert");
-    expect(alerta.textContent).toMatch(/no pudimos cargar/i);
+    await avanzar(0);
+
+    // El `load` ya llegó y la API no está. Todavía no es un error: el SDK
+    // puede tardar, y avisar acá rompería los casos lentos que sí funcionan.
+    expect(scriptsEnElDom()).toHaveLength(1);
+    await avanzar(GLOBAL_TIMEOUT_MS / 2);
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    // Agotada la espera sí se avisa.
+    await avanzar(GLOBAL_TIMEOUT_MS);
+    expect(screen.getByRole("alert").textContent).toMatch(/no pudimos cargar/i);
+  });
+
+  it("el reintento inserta UNA copia nueva y el formulario se recupera de verdad", async () => {
+    renderWithQuery(<ContactForm heading="Contacto" />);
+    await avanzar(0);
     expect(requestedScripts).toHaveLength(1);
+
+    // Primer intento: el SDK nunca aparece.
+    await avanzar(GLOBAL_TIMEOUT_MS + GLOBAL_POLL_MARGEN);
+    expect(screen.getByRole("alert").textContent).toMatch(/no pudimos cargar/i);
+    // El `<script>` inservible se fue del documento: si quedara, el reintento
+    // dejaría dos copias del proveedor en la página.
+    expect(scriptsEnElDom()).toHaveLength(0);
+    const boton = screen.getByRole("button", { name: /enviar/i }) as HTMLButtonElement;
+    expect(boton.disabled).toBe(true);
+
+    // Segundo intento, con el proveedor ya sano.
+    exponerApi = true;
+    fireEvent.click(screen.getByRole("button", { name: /reintentar/i }));
+    await avanzar(0);
+
+    // Exactamente una copia: ni cero (no se reintentó) ni dos (se acumuló).
+    expect(scriptsEnElDom()).toHaveLength(1);
+    expect(requestedScripts).toHaveLength(2);
+    expect(renderCount).toBe(1);
+
+    // Recuperación estable: token válido, alerta ausente, botón habilitado.
+    await act(async () => {
+      widgetOptions!.callback("token-bueno");
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(boton.disabled).toBe(false);
+
+    // Y sigue así pasado el tope de espera: no era un estado transitorio entre
+    // dos fallos, era la recuperación.
+    await avanzar(GLOBAL_TIMEOUT_MS * 2);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(scriptsEnElDom()).toHaveLength(1);
+    expect(boton.disabled).toBe(false);
+  });
+
+  it("dos fallos seguidos tampoco acumulan copias", async () => {
+    renderWithQuery(<Captcha onToken={vi.fn()} onError={vi.fn()} />);
+    await avanzar(0);
+    await avanzar(GLOBAL_TIMEOUT_MS + GLOBAL_POLL_MARGEN);
+    expect(screen.getByRole("alert")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: /reintentar/i }));
+    await avanzar(0);
+    // Durante el segundo intento hay una sola copia en vuelo…
+    expect(scriptsEnElDom()).toHaveLength(1);
 
-    // El script ya estaba cargado: se reutiliza la promesa resuelta.
-    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
-    expect(requestedScripts).toHaveLength(1);
+    await avanzar(GLOBAL_TIMEOUT_MS + GLOBAL_POLL_MARGEN);
+    // …y al fallar también se descarta.
+    expect(screen.getByRole("alert").textContent).toMatch(/no pudimos cargar/i);
+    expect(scriptsEnElDom()).toHaveLength(0);
+    expect(requestedScripts).toHaveLength(2);
+
+    // El tercer intento, con el CDN sano, se recupera igual.
+    exponerApi = true;
+    fireEvent.click(screen.getByRole("button", { name: /reintentar/i }));
+    await avanzar(0);
+    expect(scriptsEnElDom()).toHaveLength(1);
+    expect(renderCount).toBe(1);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("un componente nuevo después del fallo tampoco hereda nada", async () => {
+    const primero = renderWithQuery(<Captcha onToken={vi.fn()} onError={vi.fn()} />);
+    await avanzar(0);
+    await avanzar(GLOBAL_TIMEOUT_MS + GLOBAL_POLL_MARGEN);
+    expect(screen.getByRole("alert")).toBeTruthy();
+    primero.unmount();
+
+    exponerApi = true;
+    renderWithQuery(<Captcha onToken={vi.fn()} onError={vi.fn()} />);
+    await avanzar(0);
+
+    expect(renderCount).toBe(1);
+    expect(scriptsEnElDom()).toHaveLength(1);
   });
 });

@@ -168,7 +168,9 @@ Pasos que ejecuta:
 
 0. Requisito: **Node 20+**. Las migraciones corren con `tsx` (dependencia del
    workspace), así que no dependen de que Node sepa cargar TypeScript.
-1. `git fetch` + `reset --hard origin/main` (o al SHA de `ROLLBACK_TO`).
+1. `git fetch` + `reset --hard origin/main`. **Sólo va hacia adelante**: si se le
+   pasa `ROLLBACK_TO`, el script aborta antes de tocar nada (código 2) y remite a
+   `rollback-vps.sh`. Ver [Rollback](#rollback).
 2. `pnpm install --frozen-lockfile` — **sin fallback**: si el lockfile no
    coincide, el deploy se detiene en vez de instalar otra cosa.
 3. `mysqldump | gzip` a `/var/www/sanatorio/.db-backups/` (guarda los 10 últimos).
@@ -179,7 +181,7 @@ Pasos que ejecuta:
 5. Builds de api, web (con prerender SEO) y admin.
 6. Reload de Nginx + restart de PM2 (`sanatorio-api`).
 7. Health check con reintentos: si `/api/health` no da 200 en 20s, sale con
-   error e imprime el comando de rollback.
+   error e imprime el comando de `rollback-vps.sh`.
 
 ### Rollback
 
@@ -190,11 +192,37 @@ ROLLBACK_TO=<sha-anterior> bash /var/www/sanatorio/scripts/deploy/rollback-vps.s
 **El orden importa, y es al revés de lo que parece.** Primero se revierten las
 migraciones y después se baja el código:
 
-1. backup de la base (si falla, se aborta y el deploy actual queda intacto);
-2. `down()` de las migraciones nuevas **con el código nuevo todavía en disco**;
-3. recién ahí `git reset --hard <sha-anterior>`;
-4. install, builds y restart;
-5. health check.
+1. prevalidación: la versión destino se instala y compila en un `git worktree`
+   aparte, con el deploy actual intacto. Si no pasa, se aborta acá;
+2. backup de la base (si falla, se aborta y el deploy actual queda intacto);
+3. `down()` de las migraciones nuevas **con el código nuevo todavía en disco**,
+   o restauración del dump indicado (verificado antes con `gzip -t`);
+4. recién ahí `git reset --hard <sha-anterior>`;
+5. install y builds;
+6. Nginx, PM2 y health check.
+
+Revertir la base (paso 3) es el punto sin retorno: a partir de ahí la aplicación
+que corre es la nueva contra una base vieja. Si falla algo de los pasos 4 a 6, el
+script **recupera** el estado anterior —restaura el backup, vuelve al SHA que
+estaba, reconstruye y reinicia— en vez de dejar el servidor mezclado.
+
+La prevalidación del paso 1 necesita disco y tiempo para un `node_modules`
+aparte. En un servidor justo de espacio se puede omitir con
+`SKIP_PREVALIDACION=1`, a cambio de que un build roto se descubra recién con la
+base ya revertida (ahí entra la recuperación).
+
+Códigos de salida de `rollback-vps.sh`:
+
+| código | significado |
+|---|---|
+| 0 | rollback completo y la aplicación responde |
+| 1 | error de uso o de una etapa previa (nada se tocó) |
+| 2 | la versión destino no pasó la prevalidación (nada se tocó) |
+| 4 | se abortó y la base quedó como antes; el código NO se bajó |
+| 5 | la base quedó en un estado intermedio y no se pudo restaurar |
+| 6 | el rollback se aplicó pero el health check no dio 200 |
+| 7 | falló una etapa posterior a la base y se recuperó el estado anterior |
+| 8 | falló una etapa posterior a la base y la recuperación quedó incompleta |
 
 Bajar el código primero no funciona: knex decide qué revertir leyendo
 `knex_migrations` y buscando el archivo en disco. Después del checkout, las
