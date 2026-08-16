@@ -168,7 +168,9 @@ Pasos que ejecuta:
 
 0. Requisito: **Node 20+**. Las migraciones corren con `tsx` (dependencia del
    workspace), así que no dependen de que Node sepa cargar TypeScript.
-1. `git fetch` + `reset --hard origin/main` (o al SHA de `ROLLBACK_TO`).
+1. `git fetch` + `reset --hard origin/main`. **Sólo va hacia adelante**: si se le
+   pasa `ROLLBACK_TO`, el script aborta antes de tocar nada (código 2) y remite a
+   `rollback-vps.sh`. Ver [Rollback](#rollback).
 2. `pnpm install --frozen-lockfile` — **sin fallback**: si el lockfile no
    coincide, el deploy se detiene en vez de instalar otra cosa.
 3. `mysqldump | gzip` a `/var/www/sanatorio/.db-backups/` (guarda los 10 últimos).
@@ -179,7 +181,7 @@ Pasos que ejecuta:
 5. Builds de api, web (con prerender SEO) y admin.
 6. Reload de Nginx + restart de PM2 (`sanatorio-api`).
 7. Health check con reintentos: si `/api/health` no da 200 en 20s, sale con
-   error e imprime el comando de rollback.
+   error e imprime el comando de `rollback-vps.sh`.
 
 ### Rollback
 

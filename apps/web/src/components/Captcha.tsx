@@ -54,39 +54,97 @@ export function useCaptchaConfig(): { config: CaptchaConfig | null; isLoading: b
   return { config: captcha ?? null, isLoading };
 }
 
-const loaded = new Map<string, Promise<void>>();
+type GlobalName = "turnstile" | "grecaptcha";
 
 /**
- * Carga el script del proveedor una sola vez.
+ * Cuánto se espera a que el SDK publique su API global después del `load`.
  *
- * Una promesa **rechazada** se saca del caché: si quedaba guardada, un fallo
- * puntual del CDN dejaba el formulario roto para el resto de la sesión, porque
- * todo reintento recibía la misma promesa ya rechazada.
+ * El evento `load` del `<script>` dice que el cuerpo llegó y se ejecutó, no que
+ * el proveedor haya terminado de instalarse en `window`. Con un CDN que
+ * devuelve un cuerpo truncado, o simplemente lento, el `load` llega y
+ * `window.turnstile` todavía no está.
  */
-function loadScript(src: string): Promise<void> {
-  const existing = loaded.get(src);
-  if (existing) return existing;
+export const GLOBAL_TIMEOUT_MS = 8_000;
+const GLOBAL_POLL_MS = 50;
+
+/** El `<script>` insertado por cada src, junto con su promesa. */
+const loaded = new Map<string, { promise: Promise<void>; el: HTMLScriptElement }>();
+
+/**
+ * Saca del caché la entrada de `src` y quita su `<script>` del documento.
+ *
+ * Las dos cosas juntas, siempre: borrar sólo la entrada del caché haría que el
+ * próximo intento insertara un segundo `<script>` del mismo SDK —dos copias del
+ * proveedor pisándose el estado—, y quitar sólo el elemento dejaría cacheada
+ * una promesa que ya no corresponde a ningún script de la página.
+ */
+function descartar(src: string) {
+  const entrada = loaded.get(src);
+  loaded.delete(src);
+  entrada?.el.remove();
+  // Por las dudas: el elemento pudo haberse insertado en otra vuelta o por otro
+  // montaje del componente, y no puede quedar ninguno con este src.
+  for (const el of Array.from(document.querySelectorAll(`script[src="${src}"]`))) el.remove();
+}
+
+/**
+ * Carga el script del proveedor una sola vez y espera a que exponga su API.
+ *
+ * La promesa se resuelve recién cuando `window[global]` está disponible. Antes
+ * se resolvía con el `load` del `<script>` y el componente comprobaba la API
+ * justo después: si no estaba, fallaba, pero en el caché quedaba una promesa
+ * **resuelta**. Cada reintento la recibía, volvía a encontrar la API ausente y
+ * volvía a fallar; el formulario no se recuperaba nunca sin recargar la página.
+ * Y borrar esa entrada a mano tampoco alcanzaba, porque el `<script>` seguía en
+ * el documento y el reintento agregaba otro.
+ *
+ * Ahora un fallo —de descarga o de API que no aparece— descarta las dos cosas,
+ * así que el reintento inserta exactamente una copia nueva.
+ */
+function loadProvider(src: string, global: GlobalName): Promise<void> {
+  const existente = loaded.get(src);
+  if (existente) return existente.promise;
+
+  const el = document.createElement("script");
+  el.src = src;
+  el.async = true;
+  el.defer = true;
+
   const promise = new Promise<void>((resolve, reject) => {
-    const el = document.createElement("script");
-    el.src = src;
-    el.async = true;
-    el.defer = true;
     el.onload = () => resolve();
-    el.onerror = () => {
-      el.remove();
-      reject(new Error(`no se pudo cargar ${src}`));
-    };
-    document.head.appendChild(el);
-  }).catch((err) => {
-    loaded.delete(src);
-    throw err;
-  });
-  loaded.set(src, promise);
+    el.onerror = () => reject(new Error(`no se pudo cargar ${src}`));
+  })
+    .then(() => esperarApiGlobal(global))
+    .catch((err) => {
+      descartar(src);
+      throw err;
+    });
+
+  loaded.set(src, { promise, el });
+  document.head.appendChild(el);
   return promise;
+}
+
+/** Espera a que el proveedor publique su API global, con un tope. */
+function esperarApiGlobal(global: GlobalName): Promise<void> {
+  if (window[global]) return Promise.resolve();
+  return new Promise<void>((resolve, reject) => {
+    const limite = Date.now() + GLOBAL_TIMEOUT_MS;
+    const mirar = () => {
+      if (window[global]) return resolve();
+      if (Date.now() >= limite) {
+        reject(new Error(`el proveedor cargó pero no expuso ${global} en ${GLOBAL_TIMEOUT_MS}ms`));
+        return;
+      }
+      window.setTimeout(mirar, GLOBAL_POLL_MS);
+    };
+    window.setTimeout(mirar, GLOBAL_POLL_MS);
+  });
 }
 
 /** Sólo para las pruebas: deja el caché de scripts como al arrancar. */
 export function resetCaptchaScriptCache() {
+  for (const src of Array.from(loaded.keys())) descartar(src);
   loaded.clear();
 }
 
@@ -156,11 +214,11 @@ export default function Captcha({ onToken, onError }: Props) {
       }
     }
 
-    // Falló la descarga (o no hay widget que resetear): se vuelve a montar el
-    // widget. No hace falta tocar el caché —`loadScript` ya descarta sola la
-    // promesa rechazada— y borrarlo a mano sería peor: si la promesa se había
-    // resuelto (el script cargó pero el proveedor no expuso su API), el
-    // siguiente intento insertaría un segundo `<script>` del mismo SDK.
+    // Falló la carga (o no hay widget que resetear): se vuelve a montar. No
+    // hace falta tocar el caché acá, porque `loadProvider` ya descartó la
+    // entrada Y el `<script>` en los dos casos que llegan hasta acá —el que no
+    // se descargó y el que se descargó sin exponer su API—. Por eso el
+    // reintento inserta una única copia nueva en vez de sumar una segunda.
     widgetId.current = null;
     setAttempt((n) => n + 1);
     // config/onToken/onError son estables; `error` es lo único que cambia.
@@ -181,9 +239,11 @@ export default function Captcha({ onToken, onError }: Props) {
     setError(null);
     onError?.(null);
 
-    loadScript(script.src)
+    loadProvider(script.src, script.global)
       .then(() => {
         if (cancelled || !containerRef.current) return;
+        // `loadProvider` no resuelve sin la API global; el chequeo queda como
+        // red de seguridad por si el proveedor la borra entre medio.
         const widget = window[script.global];
         if (!widget) throw new Error("el proveedor no expuso su API");
         containerRef.current.innerHTML = "";

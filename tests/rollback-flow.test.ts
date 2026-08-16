@@ -275,8 +275,19 @@ describeDb("sin seed posterior, el rollback no se bloquea", () => {
 
 describe("el script de rollback hace las cosas en orden", () => {
   const script = readFileSync(resolve(ROOT, "scripts/deploy/rollback-vps.sh"), "utf8");
+  /**
+   * El orden se mide sobre el flujo, no sobre el archivo entero: los helpers
+   * (`reconstruir`, `reiniciar_servicio`, `recuperar`) se definen arriba y se
+   * ejecutan donde el flujo los llama, así que buscar strings en todo el texto
+   * mide el orden de las definiciones, no el de la ejecución.
+   *
+   * Que el orden real sea el correcto —y que un fallo posterior a la base
+   * termine con el servidor entero de vuelta donde estaba— lo prueba
+   * `tests/rollback-atomico.test.ts`, ejecutando el script.
+   */
+  const flujo = script.slice(script.indexOf("# === FLUJO PRINCIPAL"));
   const at = (needle: string) => {
-    const i = script.indexOf(needle);
+    const i = flujo.indexOf(needle);
     expect(i, `no se encontró ${needle}`).toBeGreaterThan(-1);
     return i;
   };
@@ -293,11 +304,18 @@ describe("el script de rollback hace las cosas en orden", () => {
   });
 
   it("reconstruye después del checkout", () => {
-    expect(at("git reset --hard")).toBeLessThan(at("@sa/api build"));
+    expect(at("git reset --hard")).toBeLessThan(at('reconstruir "$APP_DIR"'));
+  });
+
+  it("prevalida la versión destino antes del backup y de la base", () => {
+    // El worktree se arma y se compila con el deploy actual intacto: si la
+    // versión destino no instala o no buildea, no se llegó a tocar nada.
+    expect(at("worktree add")).toBeLessThan(at("mysqldump"));
+    expect(at("worktree add")).toBeLessThan(at("rollback-db.sh"));
   });
 
   it("si el backup falla, no sigue", () => {
-    const backup = script.slice(at("mysqldump"), at("git reset --hard"));
+    const backup = flujo.slice(at("mysqldump"), at("git reset --hard"));
     expect(backup).toContain("die ");
   });
 
