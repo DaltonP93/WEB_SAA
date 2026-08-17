@@ -51,7 +51,12 @@ function parseSettingValue(value: unknown): unknown {
 settingsRouter.get("/", async (_req, res) => {
   const rows = await db("settings").whereIn("key", ADMIN_SETTING_KEYS).select("key", "value");
   const out: Record<string, unknown> = {};
-  for (const r of rows) out[r.key] = parseSettingValue(r.value);
+  // Se sanea también al LEER. Sin esto, una fila vieja con campos retirados los
+  // devolvía al panel, el panel los mandaba de vuelta tal cual al guardar y
+  // recibía un 410 que no podía evitar: la única salida habría sido editar la
+  // base a mano. El PUT rechaza lo que alguien intenta administrar; el GET no
+  // se lo ofrece.
+  for (const r of rows) out[r.key] = sanitizeSettingValue(r.key, parseSettingValue(r.value));
   res.json(out);
 });
 
@@ -70,6 +75,32 @@ function rejectionFor(key: string): { status: number; error: string } | null {
   };
 }
 
+/**
+ * Campos retirados presentes en un valor de `contact`.
+ *
+ * Se mira sólo la presencia de la clave, no su contenido: mandar
+ * `contact.emergencyPhone: ""` también es intentar administrar un dato que ya
+ * no vive acá, y responder "guardado" a eso es igual de engañoso.
+ */
+export function retiredContactFieldsIn(value: unknown): string[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  const obj = value as Record<string, unknown>;
+  return RETIRED_CONTACT_FIELDS.filter((field) => field in obj);
+}
+
+function retiredContactRejection(campos: string[]): { status: number; error: string } {
+  const lista = campos.map((c) => `"contact.${c}"`).join(", ");
+  const plural = campos.length > 1;
+  return {
+    status: 410,
+    error:
+      `${lista} ya no se administra${plural ? "n" : ""} desde Ajustes. ` +
+      `Est${plural ? "os datos viven" : "e dato vive"} en Canales de contacto ` +
+      "(Contenido → Canales de contacto): los teléfonos, WhatsApp y correos son filas de " +
+      "`contact_channels`, y los horarios son filas de `schedules`.",
+  };
+}
+
 const putSchema = z.record(z.string(), z.unknown());
 settingsRouter.put("/", async (req, res) => {
   const parsed = putSchema.safeParse(req.body);
@@ -80,12 +111,26 @@ settingsRouter.put("/", async (req, res) => {
   const rejected = Object.keys(parsed.data)
     .map((key) => ({ key, reason: rejectionFor(key) }))
     .filter((r): r is { key: string; reason: { status: number; error: string } } => r.reason !== null);
+
+  // Los campos retirados DENTRO de `contact` son el mismo problema un nivel más
+  // abajo: `sanitizeSettingValue` los borraba y la respuesta seguía siendo
+  // 200 {ok:true}. Quien los escribía creía haber guardado.
+  const camposRetirados = "contact" in parsed.data ? retiredContactFieldsIn(parsed.data.contact) : [];
+  if (camposRetirados.length > 0) {
+    rejected.push({ key: "contact", reason: retiredContactRejection(camposRetirados) });
+  }
+
   if (rejected.length > 0) {
     // Si hay varias, manda la más específica: 410 (retirada) sobre 403.
     const status = Math.max(...rejected.map((r) => r.reason.status));
+    // Se rechaza el PUT entero antes de abrir la transacción: un payload mixto
+    // no puede guardar la mitad de las claves y rechazar la otra mitad.
     return res.status(status).json({
       error: rejected.map((r) => r.reason.error).join(" · "),
-      rejected: rejected.map((r) => r.key),
+      rejected: [
+        ...rejected.filter((r) => r.key !== "contact").map((r) => r.key),
+        ...camposRetirados.map((c) => `contact.${c}`),
+      ],
     });
   }
 
@@ -112,6 +157,19 @@ settingsRouter.put("/:key", async (req, res) => {
   const key = req.params.key;
   const rejection = rejectionFor(key);
   if (rejection) return res.status(rejection.status).json({ error: rejection.error });
+
+  // Mismo rechazo que en el PUT masivo, y por el mismo motivo: acá también se
+  // respondía 200 después de borrar el campo.
+  if (key === "contact") {
+    const camposRetirados = retiredContactFieldsIn(req.body);
+    if (camposRetirados.length > 0) {
+      const r = retiredContactRejection(camposRetirados);
+      return res.status(r.status).json({
+        error: r.error,
+        rejected: camposRetirados.map((c) => `contact.${c}`),
+      });
+    }
+  }
 
   if (key === "theme") {
     const errors = assertThemeColors(req.body);

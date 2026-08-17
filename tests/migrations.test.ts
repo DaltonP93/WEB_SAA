@@ -39,6 +39,7 @@ const CORRECTIVE = [
   "20260817000000_rojo_y_horarios_sin_confirmar.ts",
   "20260818000000_restaurar_href_social.ts",
   "20260819000000_retirar_scripts.ts",
+  "20260820000000_nota_emergencias_no_confirmada.ts",
 ];
 
 describeDb("migraciones", () => {

@@ -80,6 +80,38 @@ export function validateChannelValues(
   }
 }
 
+/**
+ * Los ocho canales institucionales, con el `kind` que les corresponde.
+ *
+ * No son "datos cargados": son parte del producto. El header lee `emergencias`
+ * por su clave, el pie arma la lista excluyendo `emergencias` y `gth` por sus
+ * claves, y varios bloques declaran `keys: ["whatsapp-estudios", …]`. Borrar
+ * una fila o cambiarle la `key` no deja un hueco visible: deja el sitio
+ * buscando una clave que ya no existe y mostrando "A confirmar" para siempre,
+ * sin ningún error que lo delate.
+ *
+ * El `kind` está acá por lo mismo: define qué formato se valida y qué enlace se
+ * genera. Pasar `emergencias` a `email` convertiría un `tel:` en un `mailto:`
+ * roto en el botón de urgencias.
+ *
+ * Todo lo demás —label, value, note, message, href, icon, active, order— se
+ * edita con normalidad, y los canales que el sanatorio cree después siguen
+ * teniendo CRUD completo.
+ */
+export const RESERVED_CHANNELS: Record<string, ContactChannelKind> = {
+  emergencias: "phone",
+  "whatsapp-turnos": "whatsapp",
+  "whatsapp-estudios": "whatsapp",
+  "whatsapp-general": "whatsapp",
+  "whatsapp-samap": "whatsapp",
+  recepcion: "phone",
+  "email-general": "email",
+  gth: "email",
+};
+
+export const isReservedChannel = (key: unknown): key is string =>
+  typeof key === "string" && Object.prototype.hasOwnProperty.call(RESERVED_CHANNELS, key);
+
 export const contactChannelsRouter = crudRouter({
   table: "contact_channels",
   defaultOrderBy: "order",
@@ -87,4 +119,28 @@ export const contactChannelsRouter = crudRouter({
   // En el PUT se valida la fila resultante: payload + lo que ya estaba.
   refineUpdate: (data, current, ctx) => validateChannelValues(data, ctx, current),
   serialize: (row: any) => ({ ...row, active: Boolean(row.active) }),
+  guard: {
+    canDelete: (row) =>
+      isReservedChannel(row.key)
+        ? `"${row.key}" es un canal institucional del sitio y no se puede eliminar. ` +
+          "Si no querés que aparezca, desmarcá 'Activo' en vez de borrarlo."
+        : null,
+    canUpdate: (row, payload) => {
+      if (!isReservedChannel(row.key)) return null;
+      if (payload.key !== undefined && payload.key !== row.key) {
+        return (
+          `no se puede cambiar la clave de "${row.key}": el sitio la busca por ese nombre ` +
+          "(encabezado, pie y varios bloques). Cambiala y esos lugares dejan de encontrarla."
+        );
+      }
+      const esperado = RESERVED_CHANNELS[row.key];
+      if (payload.kind !== undefined && payload.kind !== esperado) {
+        return (
+          `"${row.key}" tiene que seguir siendo de tipo "${esperado}": de ahí sale el formato ` +
+          "que se valida y el tipo de enlace que se genera."
+        );
+      }
+      return null;
+    },
+  },
 });

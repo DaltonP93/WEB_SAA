@@ -35,6 +35,23 @@ interface Props {
   subtitleKey?: string;
   /** false para entidades sin slug (usan otra clave estable). */
   withSlug?: boolean;
+  /**
+   * Valores iniciales al crear una fila nueva.
+   *
+   * Tienen que coincidir con el default de la columna en la base. El
+   * formulario arrancaba con `{}` y el checkbox se dibujaba con `?? true`, así
+   * que una fila nueva se veía marcada, el payload no incluía el campo y la
+   * base guardaba su propio default. En `schedules` ese default es `false`: la
+   * fila se creaba despublicada mientras la pantalla decía "Activado".
+   */
+  createDefaults?: Record<string, unknown>;
+  /**
+   * Filas que el producto define: no se pueden eliminar y tienen campos que no
+   * se editan. Devuelve el motivo, o `null` si la fila es libre.
+   */
+  protectedRow?: (row: any) => string | null;
+  /** Campos que no se editan en una fila protegida. */
+  lockedFields?: string[];
 }
 
 function slugify(s: string) {
@@ -50,6 +67,7 @@ function EntityRow({
   reorderable,
   onEdit,
   onDelete,
+  protegida,
   labelKey,
   subtitleKey,
 }: {
@@ -57,6 +75,8 @@ function EntityRow({
   reorderable: boolean;
   onEdit: () => void;
   onDelete: () => void;
+  /** Motivo por el que la fila no se puede eliminar, o null si se puede. */
+  protegida: string | null;
   labelKey: string;
   subtitleKey: string;
 }) {
@@ -87,7 +107,13 @@ function EntityRow({
         </div>
       </div>
       <button onClick={onEdit} className="btn-secondary">Editar</button>
-      <button onClick={onDelete} className="btn-danger">Eliminar</button>
+      {protegida ? (
+        <span className="text-xs text-gray-500 whitespace-nowrap" title={protegida}>
+          canal del sitio
+        </span>
+      ) : (
+        <button onClick={onDelete} className="btn-danger">Eliminar</button>
+      )}
     </div>
   );
 }
@@ -102,6 +128,9 @@ export default function EntityManager({
   labelKey = "name",
   subtitleKey = "slug",
   withSlug = true,
+  createDefaults,
+  protectedRow,
+  lockedFields = [],
 }: Props) {
   const qc = useQueryClient();
   const confirm = useConfirm();
@@ -175,16 +204,28 @@ export default function EntityManager({
     <div>
       <div className="flex justify-between items-center mb-6">
         <h1 className="text-2xl font-bold">{title}</h1>
-        <button onClick={() => setEditing({})} className="btn-primary">+ Nuevo</button>
+        <button onClick={() => setEditing({ ...(createDefaults ?? {}) })} className="btn-primary">+ Nuevo</button>
       </div>
 
       {editing && (
         <div className="card p-4 mb-4">
           <h2 className="font-semibold mb-3">{editing.id ? "Editar" : "Nuevo"}</h2>
           <div className="grid md:grid-cols-2 gap-3">
-            {fields.map((f) => (
+            {fields.map((f) => {
+              // Sólo en filas ya guardadas: al crear una fila nueva no hay
+              // nada que proteger todavía y todos los campos se editan.
+              const bloqueado =
+                Boolean(editing.id) && lockedFields.includes(f.key) && Boolean(protectedRow?.(editing));
+              return (
               <div key={f.key} className={f.kind === "textarea" ? "md:col-span-2" : ""}>
                 <label className="label">{f.label}</label>
+                {bloqueado ? (
+                  <>
+                    <input className="input bg-gray-100" value={String(editing[f.key] ?? "")} readOnly disabled />
+                    <p className="text-xs text-gray-500 mt-1">{protectedRow?.(editing)}</p>
+                  </>
+                ) : (
+                  <>
                 {f.kind === "textarea" ? (
                   <textarea className="input" rows={3} value={editing[f.key] ?? ""} onChange={(e) => setEditing({ ...editing, [f.key]: e.target.value })} />
                 ) : f.kind === "select" ? (
@@ -196,7 +237,7 @@ export default function EntityManager({
                   <label className="inline-flex min-h-10 items-center gap-2 text-sm">
                     <input
                       type="checkbox"
-                      checked={editing[f.key] ?? true}
+                      checked={Boolean(editing[f.key])}
                       onChange={(e) => setEditing({ ...editing, [f.key]: e.target.checked })}
                     />
                     <span>Activado</span>
@@ -214,8 +255,11 @@ export default function EntityManager({
                 ) : (
                   <input className="input" value={editing[f.key] ?? ""} onChange={(e) => setEditing({ ...editing, [f.key]: e.target.value })} />
                 )}
+                  </>
+                )}
               </div>
-            ))}
+              );
+            })}
             {withSlug && (
               <div>
                 <label className="label">Slug</label>
@@ -256,6 +300,7 @@ export default function EntityManager({
                   onDelete={() => askDelete(row)}
                   labelKey={labelKey}
                   subtitleKey={subtitleKey}
+                  protegida={protectedRow?.(row) ?? null}
                 />
               ))}
             </div>
