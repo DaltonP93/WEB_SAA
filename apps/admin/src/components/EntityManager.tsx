@@ -50,8 +50,15 @@ interface Props {
    * se editan. Devuelve el motivo, o `null` si la fila es libre.
    */
   protectedRow?: (row: any) => string | null;
-  /** Campos que no se editan en una fila protegida. */
-  lockedFields?: string[];
+  /**
+   * Campos que no se editan en una fila protegida.
+   *
+   * Puede depender de la fila: si una fila reservada quedó con un dato
+   * incorrecto, el campo que hay que reparar tiene que estar desbloqueado. Un
+   * formulario que informa el problema y a la vez impide arreglarlo deja al
+   * operador sin salida.
+   */
+  lockedFields?: string[] | ((row: any) => string[]);
 }
 
 function slugify(s: string) {
@@ -214,8 +221,10 @@ export default function EntityManager({
             {fields.map((f) => {
               // Sólo en filas ya guardadas: al crear una fila nueva no hay
               // nada que proteger todavía y todos los campos se editan.
+              const bloqueados =
+                typeof lockedFields === "function" ? lockedFields(editing) : lockedFields;
               const bloqueado =
-                Boolean(editing.id) && lockedFields.includes(f.key) && Boolean(protectedRow?.(editing));
+                Boolean(editing.id) && bloqueados.includes(f.key) && Boolean(protectedRow?.(editing));
               return (
               <div key={f.key} className={f.kind === "textarea" ? "md:col-span-2" : ""}>
                 <label className="label">{f.label}</label>

@@ -118,13 +118,45 @@ export const contactChannelsRouter = crudRouter({
   schema: baseSchema.superRefine((data, ctx) => validateChannelValues(data, ctx)),
   // En el PUT se valida la fila resultante: payload + lo que ya estaba.
   refineUpdate: (data, current, ctx) => validateChannelValues(data, ctx, current),
-  serialize: (row: any) => ({ ...row, active: Boolean(row.active) }),
+  /**
+   * El catálogo viaja con cada fila.
+   *
+   * `reserved` y `expectedKind` existen para que el panel no tenga que
+   * mantener su propia copia de las ocho claves. Una segunda lista se
+   * desincroniza sola: alcanza con agregar un canal institucional acá y
+   * olvidarlo allá para que el panel ofrezca un botón "Eliminar" que la API
+   * va a rechazar con 403.
+   */
+  serialize: (row: any) => ({
+    ...row,
+    active: Boolean(row.active),
+    reserved: isReservedChannel(row.key),
+    expectedKind: isReservedChannel(row.key) ? RESERVED_CHANNELS[row.key] : null,
+  }),
   guard: {
     canDelete: (row) =>
       isReservedChannel(row.key)
         ? `"${row.key}" es un canal institucional del sitio y no se puede eliminar. ` +
           "Si no querés que aparezca, desmarcá 'Activo' en vez de borrarlo."
         : null,
+    /**
+     * Recrear una fila reservada que falta: sólo con su tipo esperado.
+     *
+     * Si la fila se perdió —una base restaurada a medias, un borrado directo—
+     * el panel tiene que poder volver a crearla, pero no con cualquier tipo:
+     * el sitio la busca por su clave y espera ese `kind`.
+     */
+    canCreate: (payload) => {
+      if (!isReservedChannel(payload.key)) return null;
+      const esperado = RESERVED_CHANNELS[payload.key];
+      if (payload.kind !== esperado) {
+        return (
+          `"${payload.key}" es un canal institucional y tiene que crearse con tipo ` +
+          `"${esperado}": el sitio lo busca por esa clave y espera ese tipo de enlace.`
+        );
+      }
+      return null;
+    },
     canUpdate: (row, payload) => {
       if (!isReservedChannel(row.key)) return null;
       if (payload.key !== undefined && payload.key !== row.key) {
@@ -134,10 +166,18 @@ export const contactChannelsRouter = crudRouter({
         );
       }
       const esperado = RESERVED_CHANNELS[row.key];
+      // Se bloquea alejarse del tipo esperado, no acercarse a él: si una fila
+      // quedó con el `kind` equivocado —escrita directo en la base, o por una
+      // versión vieja— tiene que existir un camino para repararla. Poner el
+      // tipo correcto siempre se permite; el panel desbloquea el campo
+      // justamente en ese caso.
       if (payload.kind !== undefined && payload.kind !== esperado) {
         return (
           `"${row.key}" tiene que seguir siendo de tipo "${esperado}": de ahí sale el formato ` +
-          "que se valida y el tipo de enlace que se genera."
+          "que se valida y el tipo de enlace que se genera." +
+          (row.kind !== esperado
+            ? ` Esta fila hoy está como "${row.kind}", que es incorrecto: la reparación es dejarla en "${esperado}".`
+            : "")
         );
       }
       return null;
