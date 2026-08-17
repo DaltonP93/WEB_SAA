@@ -45,10 +45,13 @@ describe("la guía cubre exactamente el catálogo de canales", () => {
 
   it.each(canales)("documenta $key con su tipo $kind", ({ key, kind }) => {
     expect(GUIA, `falta la clave ${key} en la guía`).toContain(`\`${key}\``);
-    // La fila del dato tiene que declarar el tipo correcto.
-    const seccion = GUIA.slice(GUIA.indexOf(`\`${key}\``));
-    const hasta = seccion.slice(0, seccion.indexOf("###") === -1 ? 900 : seccion.indexOf("###"));
-    expect(hasta, `${key} no declara el tipo ${kind}`).toContain(`\`${kind}\``);
+    // Se ancla en la fila "Clave técnica" de su ficha, no en la primera vez que
+    // el nombre aparece en el documento: la prosa lo menciona antes.
+    const ancla = `| **Clave técnica** | \`${key}\` |`;
+    const desde = GUIA.indexOf(ancla);
+    expect(desde, `${key} no tiene su fila de clave técnica`).toBeGreaterThan(-1);
+    const ficha = GUIA.slice(desde, desde + 600);
+    expect(ficha, `${key} no declara el tipo ${kind}`).toContain(`\`${kind}\``);
   });
 
   it("no documenta claves que no existen", () => {
@@ -114,19 +117,22 @@ describe("las pantallas y endpoints que cita la guía existen", () => {
 });
 
 describe("la advertencia sobre los campos retirados es exacta", () => {
-  it("emergencyPhone y gthEmail se descartan en silencio, no dan 410", () => {
-    // Están en RETIRED_CONTACT_FIELDS, que `sanitizeSettingValue` borra del
-    // objeto: la respuesta sigue siendo 200 {ok:true}.
+  it("los seis campos retirados se rechazan con 410, y la guía lo dice así", () => {
+    // Cuando se escribió la guía, la API respondía 200 y los borraba en
+    // silencio. PR #12 lo cambió: ahora hay un rechazo explícito. La guía tiene
+    // que seguir al código, no al revés.
     const retirados = AJUSTES.slice(AJUSTES.indexOf("RETIRED_CONTACT_FIELDS = ["), AJUSTES.indexOf("];", AJUSTES.indexOf("RETIRED_CONTACT_FIELDS = [")));
-    for (const campo of ["emergencyPhone", "gthEmail"]) expect(retirados).toContain(`"${campo}"`);
-    expect(AJUSTES).toContain("for (const field of RETIRED_CONTACT_FIELDS) delete contact[field]");
-    // Y NO están en las claves que responden 410.
-    const retiradasConGone = AJUSTES.slice(AJUSTES.indexOf("RETIRED_SETTING_KEYS = ["));
-    expect(retiradasConGone.slice(0, 80)).not.toContain("emergencyPhone");
+    for (const campo of ["phones", "email", "whatsapp", "hours", "emergencyPhone", "gthEmail"]) {
+      expect(retirados, `${campo} salió de la lista de campos retirados`).toContain(`"${campo}"`);
+    }
+    // El rechazo existe en los dos caminos de escritura.
+    expect(AJUSTES).toContain("retiredContactFieldsIn");
+    expect(AJUSTES).toContain("retiredContactRejection");
 
-    // La guía tiene que decir exactamente eso, no lo contrario.
-    expect(GUIA).toMatch(/200 \{ok:true\}/);
-    expect(GUIA).toMatch(/descarta el campo sin guardarlo/i);
+    expect(GUIA).toMatch(/410 Gone/);
+    expect(GUIA, "la guía no puede seguir prometiendo un 200").not.toMatch(
+      /responde \*\*`200 \{ok:true\}`\*\* y \*\*descarta/,
+    );
   });
 
   it("social y scripts sí responden 410, y la guía los distingue", () => {

@@ -214,11 +214,18 @@ describeDb("un cambio en la tabla llega a todos los consumidores", () => {
         },
       }),
     });
-    expect(res.status).toBe(200);
+    // Antes esto respondía 200 y la API borraba los campos en silencio: quien
+    // los mandaba creía haber guardado. Desde PR #12 se rechaza el PUT entero
+    // con 410 y ni siquiera la dirección —que sí es administrable— se escribe.
+    expect(res.status).toBe(410);
+    const body = await res.json();
+    for (const field of RETIRED_CONTACT_FIELDS) {
+      expect(body.rejected, `no se reportó ${field}`).toContain(`contact.${field}`);
+    }
 
     const stored = await db("settings").where({ key: "contact" }).first("value");
     const contact = typeof stored.value === "string" ? JSON.parse(stored.value) : stored.value;
-    expect(contact.address).toBe("Dirección de prueba");
+    expect(contact.address, "el PUT rechazado no puede haber escrito nada").not.toBe("Dirección de prueba");
     for (const field of RETIRED_CONTACT_FIELDS) {
       expect(contact, `se pudo recrear ${field}`).not.toHaveProperty(field);
     }

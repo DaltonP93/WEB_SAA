@@ -43,6 +43,17 @@ export interface CrudOpts {
   prepare?: (input: any) => Record<string, unknown>;
   /** transformación de fila al leer */
   serialize?: (row: any) => any;
+  /**
+   * Filas que el producto define y el panel no puede destruir.
+   *
+   * Devuelven el motivo (string) cuando la operación no se permite, o `null`
+   * cuando sí. Se resuelve contra la fila **guardada**, no contra el payload:
+   * quien quiera saltearse la protección no puede hacerlo mandando otra cosa.
+   */
+  guard?: {
+    canDelete?: (row: any) => string | null;
+    canUpdate?: (row: any, payload: any) => string | null;
+  };
 }
 
 export function crudRouter(opts: CrudOpts): Router {
@@ -102,6 +113,8 @@ export function crudRouter(opts: CrudOpts): Router {
       .superRefine((data: any, ctx: z.RefinementCtx) => opts.refineUpdate?.(data, current, ctx));
     const parsed = partialSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "payload invalido", issues: parsed.error.issues });
+    const bloqueo = opts.guard?.canUpdate?.(current, parsed.data);
+    if (bloqueo) return res.status(403).json({ error: bloqueo });
     const taken = await iconTakenBy((parsed.data as any).icon, req.params.id);
     if (taken) {
       return res.status(409).json({ error: `el icono ya lo usa "${taken}": elegí otro` });
@@ -112,6 +125,10 @@ export function crudRouter(opts: CrudOpts): Router {
   });
 
   r.delete("/:id", async (req, res) => {
+    const current = await db(opts.table).where({ id: req.params.id }).first();
+    if (!current) return res.status(404).json({ error: "no encontrado" });
+    const bloqueo = opts.guard?.canDelete?.(current);
+    if (bloqueo) return res.status(403).json({ error: bloqueo });
     await db(opts.table).where({ id: req.params.id }).del();
     res.status(204).end();
   });

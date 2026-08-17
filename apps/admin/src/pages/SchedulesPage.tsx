@@ -16,6 +16,11 @@ export default function SchedulesPage() {
       labelKey="area"
       subtitleKey="hours"
       withSlug={false}
+      // La columna `active` tiene default 0 en la base. Sin declararlo acá el
+      // formulario mostraba el checkbox marcado, el payload no mandaba el
+      // campo y la fila se creaba despublicada: la pantalla decía una cosa y
+      // la base guardaba otra.
+      createDefaults={{ active: false }}
       fields={[
         { key: "area", label: "Área o tipo de atención" },
         { key: "key", label: "Clave (no cambiar si ya se usa)" },

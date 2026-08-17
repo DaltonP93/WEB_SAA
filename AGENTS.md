@@ -322,8 +322,12 @@ Los 25 puntos acordados con el cliente están implementados. Lo estructural:
   quede igual que producción.
 - **Pendientes del cliente** (quedan vacíos y la UI los muestra como "a confirmar", se cargan
   desde el admin sin tocar código): números de WhatsApp por tipo de atención, número de
-  Emergencias (`contact.emergencyPhone`), correo de GTH (`contact.gthEmail`), horarios
-  definitivos y alcance exacto de Biopsias.
+  Emergencias, correo de GTH, horarios definitivos y alcance exacto de Biopsias.
+  **Todos viven en `contact_channels`** (filas `emergencias`, `whatsapp-turnos`,
+  `whatsapp-estudios`, `whatsapp-general`, `whatsapp-samap`, `recepcion`,
+  `email-general`, `gth`) y los horarios en `schedules`. `contact.emergencyPhone` y
+  `contact.gthEmail` **ya no existen**: son campos retirados y la API los rechaza
+  con 410. Guía paso a paso en [`docs/CARGA-DE-DATOS.md`](docs/CARGA-DE-DATOS.md).
 
 ### Base previa (al 2026-07-30)
 
@@ -342,7 +346,7 @@ Los 25 puntos acordados con el cliente están implementados. Lo estructural:
   - Toggle publicar/despublicar inline en `PagesListPage` y `NewsListPage`.
   - `LucideIcon.tsx` — renderiza iconos [lucide](https://lucide.dev/icons/) por nombre kebab-case (`heart-pulse`). Usa `lucide-react/dynamicIconImports` + `React.lazy` + `Suspense` (⚠️ en lucide-react 0.460 **no existe** el subpath `lucide-react/dynamic`). `isIconName()` valida antes de renderizar. El helper `IconBadge` de `EntityManager` muestra el icono si el valor es un nombre lucide válido, y si no cae al emoji tal cual — antes el nombre se imprimía como texto crudo y se superponía a los títulos.
 
-✅ **Tests automatizados**: `pnpm test` (vitest) — **657 pruebas en 34 archivos**
+✅ **Tests automatizados**: `pnpm test` (vitest) — **731 pruebas en 38 archivos**
 al cierre de la ronda 8. Las que necesitan base real se activan con
 `TEST_DATABASE=1` y se saltan solas si no está. CI corre la suite completa contra
 MySQL 8. El smoke testing manual del Agente 3 **complementa** la suite, no la

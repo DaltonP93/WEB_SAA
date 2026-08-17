@@ -5,9 +5,11 @@
 > Formato ejecutivo. Se actualiza en cada tarea terminada o preparación de
 > cambios para GitHub.
 
-**Última actualización:** Ola A-1 — guía operativa de carga de datos.
-**Cubre hasta:** PR #10 fusionado. La Ola A-1 viaja en su propio PR.
+**Última actualización:** prerrequisitos de la Ola A-2.
+**Cubre hasta:** PR #11 fusionado.
 **Estado de `main`:** `git log --oneline -1 origin/main`.
+**Estado de CI:** los tres checks se exigen en verde antes de cada merge. El
+resultado vigente es el del último run sobre `origin/main`, no un SHA anotado acá.
 
 > **Por qué acá no hay ningún SHA de `main`.** Este documento fijaba
 > `**main actual:** <sha>` y quedaba obsoleto con cada commit — incluido el
@@ -26,7 +28,8 @@
 | 7 | #8 | Rollback atómico, dumps verificados, reintento del CAPTCHA |
 | — | #9 | Registro del merge de #8 + análisis de la fase 8 (§6) |
 | 8 | #10 | Deriva documental, autoreejecución del deploy (§7) |
-| A-1 | *(este PR)* | Guía operativa de carga de datos (§8) |
+| A-1 | #11 | Guía operativa de carga de datos (§8) |
+| A-2 (prerrequisitos) | #12 | Campos retirados con 410, canales protegidos, defaults de creación (§9) |
 
 ---
 
@@ -41,7 +44,7 @@ Monorepo **pnpm 9** (`pnpm-workspace.yaml`: `apps/*`, `api`, `shared`).
 | `apps/admin` | React 18 · Vite | Panel de administración (`/admin`) |
 | `shared/types` | TypeScript | Tipos y constantes compartidas |
 
-**Pruebas:** 34 archivos en `tests/`, **657 pruebas**, `vitest`. Las que tocan
+**Pruebas:** 38 archivos en `tests/`, **731 pruebas**, `vitest`. Las que tocan
 base real se activan con `TEST_DATABASE=1` (si no, se saltan con `describe.skip`).
 
 **CI** (`.github/workflows/ci.yml`), tres jobs, todos bloqueantes:
@@ -290,7 +293,7 @@ conexión sana).
 
 | Comprobación | Resultado |
 |---|---|
-| Pruebas (Node 20 + MySQL 8, `TEST_DATABASE=1`) | **657 / 657** en 34 archivos |
+| Pruebas (Node 20 + MySQL 8, `TEST_DATABASE=1`) | **731 / 731** en 38 archivos |
 | `pnpm typecheck` | OK |
 | Builds `@sa/api` / `@sa/web` / `@sa/admin` | OK |
 | Prerender real (`scripts/ci/verify-prerender.mjs`) | OK, exit 0 |
@@ -456,9 +459,14 @@ Inventario de lo que falta cargar y **desde dónde se carga cada cosa**:
 **Trampa operativa.** `emergencyPhone` y `gthEmail` ya **no** están en
 Configuración → Contacto: `20260816000000_fuente_unica_contacto.ts:41-54` los
 movió a `contact_channels` y los dejó en `RETIRED_CONTACT_FIELDS`
-(`api/src/routes/admin/settings.ts:139-150`). Quien los busque donde estaban no
-los encuentra y la API responde 410. Sin una guía de carga esto genera un ticket
-garantizado.
+(`api/src/routes/admin/settings.ts`).
+
+> **Corrección de los prerrequisitos de A-2 (PR #12).** Cuando se escribió este
+> análisis, la API **no** respondía 410 con esos campos: `sanitizeSettingValue()`
+> los borraba del objeto y la respuesta seguía siendo `200 {ok:true}`. Quien los
+> escribía recibía un "guardado" y el dato no quedaba en ningún lado. El PR #12
+> lo corrigió: ahora los seis campos retirados se rechazan con **410 explícito**,
+> en los dos endpoints y de forma atómica. Ver §9.1.
 
 **`PUBLIC_SITE_URL` es el único que no es de admin** y el de mayor impacto SEO:
 alimenta canonical y `sitemap.xml` (`api/src/app.ts:149`) y el prerender
@@ -846,3 +854,95 @@ contrato de la API y excede el alcance de A-1; queda como candidato para A-2.
 A-1 no desbloquea nada técnico: desbloquea al **sanatorio**, que ahora tiene por
 escrito dónde cargar cada cosa. Los datos siguen sin cargarse y eso es correcto
 mientras no lleguen confirmados.
+
+---
+
+## 9. Prerrequisitos de la Ola A-2
+
+> Ronda **previa** a construir la pantalla "Datos pendientes". La pantalla no se
+> implementa acá: primero se cierran cuatro defectos que la habrían hecho
+> reportar un estado que no es el real.
+
+### 9.1 Los campos retirados de `contact` ahora dan 410
+
+**Antes:** `sanitizeSettingValue()` borraba `phones`, `email`, `whatsapp`,
+`hours`, `emergencyPhone` y `gthEmail` del objeto y la API respondía
+`200 {ok:true}`. Quien los mandaba desde un panel viejo, un script o una
+integración recibía "guardado" y el dato no quedaba en ningún lado — ni en
+`settings`, ni en `contact_channels`, ni en un error.
+
+Era el mismo fallo que la ronda 6 corrigió un nivel más arriba, para las claves
+enteras, y contradecía el principio que esa ronda dejó escrito en el propio
+archivo: *nada se descarta en silencio*.
+
+**Ahora:** los dos caminos —`PUT /admin/settings/contact` y el `PUT` masivo con
+`contact` adentro— rechazan con **410** antes de escribir. El rechazo es del PUT
+completo: un payload mixto no guarda las claves válidas y descarta las otras.
+
+Se saneó también el **GET**. Sin eso, una fila vieja con campos retirados los
+devolvía al panel, el panel los reenviaba al guardar y cobraba un 410 imposible
+de evitar desde la UI: la única salida habría sido editar la base a mano.
+
+### 9.2 La nota no confirmada de la guardia
+
+`schedules.emergencias` traía *"Guardia activa todos los días del año."* desde
+`20260813000001`. Es una afirmación sobre la cobertura de la guardia que el
+sanatorio nunca confirmó. No llegaba al público —el endpoint filtra por `active`
+y por `hours` cargado— pero estaba a un clic: bastaba marcar la fila activa y
+cargarle un horario.
+
+`20260820000000_nota_emergencias_no_confirmada.ts` la retira **sólo** cuando se
+puede afirmar que nadie tocó la fila: nota exacta, `active=false`, `days` y
+`hours` vacíos. Cualquier otra combinación se registra en el snapshot con
+`motivo: "editada"` y queda para revisión manual. El `down()` restaura la nota
+**sólo si el campo sigue vacío**: si el sanatorio escribió la suya mientras
+tanto, revertir no la pisa.
+
+### 9.3 Los ocho canales institucionales están protegidos
+
+No son datos cargados: son parte del producto. El encabezado busca `emergencias`
+por su clave, el pie arma su lista excluyendo `emergencias` y `gth`, y varios
+bloques declaran `keys: ["whatsapp-estudios", …]`. Borrar una fila o cambiarle la
+clave **no deja un hueco visible**: deja el sitio buscando algo que ya no existe
+y mostrando "A confirmar" para siempre, sin un error que lo delate.
+
+La API responde **403** al `DELETE`, al cambio de `key` y al cambio de `kind` de
+esas ocho filas. El resto —label, value, note, message, href, icon, active,
+order— se edita con normalidad, y los canales que el sanatorio cree después
+conservan CRUD completo. El panel refleja la restricción: sin botón *Eliminar*,
+con `key` y `kind` bloqueados y con el motivo a la vista.
+
+El guard vive en `crudRouter` (`guard.canDelete` / `guard.canUpdate`) y se
+resuelve contra la **fila guardada**, no contra el payload.
+
+### 9.4 El checkbox mentía en la creación
+
+`EntityManager` dibujaba los checkbox con `checked={editing[f.key] ?? true}` y
+"Nuevo" arrancaba con `{}`. En una fila nueva el checkbox salía **marcado**, pero
+como nadie lo tocaba el campo no entraba en el payload y la base aplicaba su
+propio default. En `schedules` ese default es `false`.
+
+El síntoma para el sanatorio era de los peores: cargás un horario, la pantalla
+muestra que está activo, guardás, y el sitio sigue diciendo "Horarios en proceso
+de confirmación" sin ningún error.
+
+Ahora hay `createDefaults` explícito por pantalla, y **tiene que coincidir con el
+default de la columna**:
+
+| Pantalla | Campo | Default de la columna | `createDefaults` |
+|---|---|---|---|
+| Horarios | `active` | `0` | `false` |
+| Canales de contacto | `active` | `1` | `true` |
+| Estudios | `published` | `0` | `false` |
+
+**Estudios tenía el mismo defecto** y no estaba en el encargo: su columna
+`published` también tiene default `0` y el checkbox salía marcado. Se corrigió por
+ser idéntico, no por ampliar alcance.
+
+### 9.5 Cómo se verificó el estado, y por qué importa
+
+Las afirmaciones sobre el estado actual salen de **ejecutar la cadena completa de
+migraciones** sobre MySQL y leer la base, no de leer la migración que creó cada
+fila. La diferencia no es teórica: el label de `contact_channels.emergencias` es
+**"Emergencias"**, no *"Emergencias 24hs"* como decía la migración que lo creó —
+una posterior lo renombró, y la guía de A-1 había copiado el valor viejo.
