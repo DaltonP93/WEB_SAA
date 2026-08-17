@@ -8,9 +8,7 @@ export default function StudiesPage() {
       cacheKey="adm-studies"
       reorderable
       // `published` tiene default 0 en la base: un estudio nuevo nace sin
-
       // publicar, y el formulario tiene que mostrarlo así.
-
       createDefaults={{ published: false }}
       fields={[
         { key: "name", label: "Nombre" },

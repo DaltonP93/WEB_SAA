@@ -33,7 +33,7 @@ const NOTA_LEGACY = "Guardia activa todos los días del año.";
 
 describeDb("migración correctiva de la nota de Emergencias", () => {
   let db: Knex;
-  /** Todas las migraciones menos la correctiva: el estado "antes". */
+  /** La cadena cortada justo antes de la correctiva: el estado "antes". */
   let fuenteAnterior: any;
 
   const filaEmergencias = () => db("schedules").where({ key: "emergencias" }).first();
@@ -42,11 +42,36 @@ describeDb("migración correctiva de la nota de Emergencias", () => {
     return row ? (jsonColumn(row.value) as any) : null;
   };
 
+  /**
+   * Revierte hasta deshacer `MIGRACION`, sea cuál sea su posición en la cadena.
+   *
+   * Cuando se escribió esta prueba, la correctiva era la última migración y un
+   * `down()` alcanzaba. Después se sumó `20260821000000`, que la blinda, y un
+   * solo `down()` pasó a revertir **esa** en vez de ésta: las aserciones sobre
+   * el estado restaurado dejaron de mirar lo que decían mirar. Contar los
+   * `down()` a mano volvería a romperse con la próxima migración, así que se
+   * revierte hasta que `knex_migrations` ya no la registre.
+   */
+  const revertirCorrectiva = async () => {
+    for (let i = 0; i < 20; i++) {
+      const aplicada = await db("knex_migrations").where({ name: MIGRACION }).first();
+      if (!aplicada) return;
+      await db.migrate.down({ migrationSource } as never);
+    }
+    throw new Error(`no se pudo revertir ${MIGRACION} en 20 pasos`);
+  };
+
   beforeAll(async () => {
     db = await createTestDatabase(DB_NAME);
     const todas = await migrationSource.getMigrations();
-    expect(todas, "la correctiva tiene que ser la última").toContain(MIGRACION);
-    const previas = todas.filter((n) => n !== MIGRACION);
+    const corte = todas.indexOf(MIGRACION);
+    expect(corte, "la correctiva tiene que estar en la cadena").toBeGreaterThan(-1);
+    // Se **corta** la cadena, no se filtra una migración del medio. Filtrarla
+    // dejaba correr las posteriores antes que ella, un orden que ninguna base
+    // real puede tener: `20260821000000` se habría aplicado sobre la fila con la
+    // nota todavía puesta, y habría registrado "no estaba limpia" por una
+    // situación que sólo existe en la prueba.
+    const previas = todas.slice(0, corte);
     fuenteAnterior = {
       getMigrations: async () => previas,
       getMigrationName: (n: string) => n,
@@ -109,7 +134,7 @@ describeDb("migración correctiva de la nota de Emergencias", () => {
 
     it("el down() restaura la nota exacta", async () => {
       await db.migrate.latest({ migrationSource });
-      await db.migrate.down({ migrationSource } as never);
+      await revertirCorrectiva();
 
       expect((await filaEmergencias()).note).toBe(NOTA_LEGACY);
       expect(await snapshot()).toBeNull();
@@ -151,7 +176,7 @@ describeDb("migración correctiva de la nota de Emergencias", () => {
       const propia = "Otra nota del sanatorio.";
       await db("schedules").where({ key: "emergencias" }).update({ note: propia });
       await db.migrate.latest({ migrationSource });
-      await db.migrate.down({ migrationSource } as never);
+      await revertirCorrectiva();
 
       expect((await filaEmergencias()).note).toBe(propia);
     }, 240_000);
@@ -165,7 +190,7 @@ describeDb("migración correctiva de la nota de Emergencias", () => {
       const posterior = "Guardia confirmada por el sanatorio.";
       await db("schedules").where({ key: "emergencias" }).update({ note: posterior });
 
-      await db.migrate.down({ migrationSource } as never);
+      await revertirCorrectiva();
 
       // Revertir devuelve el estado anterior; no sobrescribe lo nuevo.
       expect((await filaEmergencias()).note).toBe(posterior);

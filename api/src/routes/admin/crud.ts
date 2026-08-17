@@ -53,6 +53,8 @@ export interface CrudOpts {
   guard?: {
     canDelete?: (row: any) => string | null;
     canUpdate?: (row: any, payload: any) => string | null;
+    /** Se resuelve contra el payload: todavía no hay fila. */
+    canCreate?: (payload: any) => string | null;
   };
 }
 
@@ -92,6 +94,8 @@ export function crudRouter(opts: CrudOpts): Router {
   r.post("/", async (req, res) => {
     const parsed = opts.schema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "payload invalido", issues: parsed.error.issues });
+    const bloqueoAlta = opts.guard?.canCreate?.(parsed.data);
+    if (bloqueoAlta) return res.status(403).json({ error: bloqueoAlta });
     const taken = await iconTakenBy((parsed.data as any).icon);
     if (taken) {
       return res.status(409).json({ error: `el icono ya lo usa "${taken}": elegí otro` });
@@ -108,13 +112,30 @@ export function crudRouter(opts: CrudOpts): Router {
     const current = await db(opts.table).where({ id: req.params.id }).first();
     if (!current) return res.status(404).json({ error: "no encontrado" });
 
-    const partialSchema = (base as ZodObject<any>)
-      .partial()
-      .superRefine((data: any, ctx: z.RefinementCtx) => opts.refineUpdate?.(data, current, ctx));
-    const parsed = partialSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: "payload invalido", issues: parsed.error.issues });
-    const bloqueo = opts.guard?.canUpdate?.(current, parsed.data);
+    // El orden importa y no es el evidente.
+    //
+    // 1. **Forma** del payload parcial. Sin validación semántica todavía.
+    // 2. **Guard** institucional, contra la fila guardada.
+    // 3. **Semántica** de la fila resultante (payload + lo que ya estaba).
+    //
+    // Antes 1 y 3 iban juntos, así que un cambio prohibido de `kind` podía
+    // responder 400 en vez de 403: la validación semántica se quejaba primero
+    // de que el valor guardado no correspondía al tipo pedido. El operador
+    // recibía "payload inválido" por un cambio que no es inválido sino
+    // prohibido, y el mensaje no decía nada de la restricción real. Ahora el
+    // guard decide antes de que la semántica pueda opinar.
+    const partialBase = (base as ZodObject<any>).partial();
+
+    const forma = partialBase.safeParse(req.body);
+    if (!forma.success) return res.status(400).json({ error: "payload invalido", issues: forma.error.issues });
+
+    const bloqueo = opts.guard?.canUpdate?.(current, forma.data);
     if (bloqueo) return res.status(403).json({ error: bloqueo });
+
+    const parsed = partialBase
+      .superRefine((data: any, ctx: z.RefinementCtx) => opts.refineUpdate?.(data, current, ctx))
+      .safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "payload invalido", issues: parsed.error.issues });
     const taken = await iconTakenBy((parsed.data as any).icon, req.params.id);
     if (taken) {
       return res.status(409).json({ error: `el icono ya lo usa "${taken}": elegí otro` });

@@ -5,8 +5,8 @@
 > Formato ejecutivo. Se actualiza en cada tarea terminada o preparación de
 > cambios para GitHub.
 
-**Última actualización:** prerrequisitos de la Ola A-2.
-**Cubre hasta:** PR #11 fusionado.
+**Última actualización:** ronda correctiva previa a la pantalla A-2 (§10).
+**Cubre hasta:** PR #12 fusionado. La ronda del §10 está **en Draft, sin fusionar**.
 **Estado de `main`:** `git log --oneline -1 origin/main`.
 **Estado de CI:** los tres checks se exigen en verde antes de cada merge. El
 resultado vigente es el del último run sobre `origin/main`, no un SHA anotado acá.
@@ -29,7 +29,8 @@ resultado vigente es el del último run sobre `origin/main`, no un SHA anotado a
 | — | #9 | Registro del merge de #8 + análisis de la fase 8 (§6) |
 | 8 | #10 | Deriva documental, autoreejecución del deploy (§7) |
 | A-1 | #11 | Guía operativa de carga de datos (§8) |
-| A-2 (prerrequisitos) | #12 | Campos retirados con 410, canales protegidos, defaults de creación (§9) |
+| A-2 (prerrequisitos) | #12 | ✅ fusionado — campos retirados con 410, canales protegidos, defaults de creación (§9) |
+| A-2 (blindaje) | Draft | Rollback de la nota de guardia blindado, 403 estable, catálogo sin deriva, contrato de `data-readiness` documentado (§10) |
 
 ---
 
@@ -293,23 +294,26 @@ conexión sana).
 
 | Comprobación | Resultado |
 |---|---|
-| Pruebas (Node 20 + MySQL 8, `TEST_DATABASE=1`) | **731 / 731** en 38 archivos |
+| Pruebas (Node 20 + MySQL/MariaDB, `TEST_DATABASE=1`) | **803 / 803** en 40 archivos |
 | `pnpm typecheck` | OK |
 | Builds `@sa/api` / `@sa/web` / `@sa/admin` | OK |
 | Prerender real (`scripts/ci/verify-prerender.mjs`) | OK, exit 0 |
 | `pnpm audit --prod` | *No known vulnerabilities found* |
 | `node scripts/check-secrets.mjs` | Sin credenciales en el árbol |
 | `gitleaks detect --no-git` (árbol) | *no leaks found* |
-| **CI: 3 / 3 checks** | **verde** sobre `a1762f0` |
+| **CI: 3 / 3 checks** | se exigen en verde antes de cada merge; el resultado vigente es el del último run |
 
-**PR #8 y PR #9 fusionados a `main`**, ambos por instrucción explícita del
-propietario y con los tres checks en verde:
+> Los 803 salen de **731 + 72** de la ronda del §10, medido corriendo las mismas
+> suites antes y después: `rollback-nota-emergencias-blindado` +11 (archivo
+> nuevo), `docs-datos-pendientes-contrato` +17 (archivo nuevo),
+> `canales-reservados` 32 → 54, `entity-manager-defaults` 11 → 33. **No se quitó
+> ni se relajó ninguna prueba existente**; las dos que se ajustaron
+> (`migrations`, `migracion-nota-emergencias`) se explican en el §10.6.
 
-- **[PR #8](https://github.com/DaltonP93/WEB_SAA/pull/8)** — la ronda 7. Se había
-  desarrollado bajo la consigna "sin merge, sin deploy, sin Ready for review"; el
-  propietario levantó esa restricción una vez verdes los checks.
-- **[PR #9](https://github.com/DaltonP93/WEB_SAA/pull/9)** — registro de ese merge
-  y análisis de la fase 8, que es la §6 de este documento.
+**Los PR #8 a #12 están fusionados a `main`**, todos por instrucción explícita
+del propietario y con los tres checks en verde. Ninguno tiene nada pendiente: se
+desarrollaron bajo la consigna "sin merge, sin deploy, sin Ready for review" y el
+propietario levantó esa restricción caso por caso una vez verdes los checks.
 
 **El deploy sigue sin hacerse**: fusionar a `main` no despliega nada por sí solo.
 Verificado: `.github/workflows/` tiene un único workflow (`ci.yml`), disparado por
@@ -324,10 +328,13 @@ deploy ni paso de ssh, rsync o scp. El despliegue se dispara a mano con
    `9ced09df`. El árbol actual está limpio; el valor sigue en la historia.
    Sacarlo exige reescribir el historial (`git filter-repo`) y coordinar con
    quienes tengan clones. **Sólo se informa: no se rotó ni se purgó nada.**
-   Es una decisión del propietario del repositorio.
+   Es una decisión del propietario del repositorio. **El NO-GO de producción se
+   mantiene mientras esa decisión no se tome.**
 2. **Logos y centro de campañas.** Explícitamente fuera de alcance desde la ronda 4
    y hasta nueva orden. **No trabajar en esto sin autorización separada.**
-3. **Merge, deploy y Ready for review** de PR #8: los decide el propietario.
+3. **Merge, deploy y Ready for review** de la ronda del §10, que está en Draft:
+   los decide el propietario. Los PR #8 a #12 ya están fusionados y no tienen
+   nada pendiente.
 
 ### Deuda técnica conocida (no bloqueante)
 
@@ -378,13 +385,13 @@ node scripts/check-secrets.mjs
 gitleaks detect --no-git --source . --config .gitleaks.toml --redact
 ```
 
-Suites individuales de esta ronda:
+Suites individuales de la ronda del §10:
 
 ```bash
-npx vitest run tests/deploy-update-no-rollback.test.ts          # no necesita base
-TEST_DATABASE=1 npx vitest run tests/rollback-db-failclosed.test.ts
-TEST_DATABASE=1 npx vitest run tests/rollback-atomico.test.ts
-npx vitest run tests/captcha-widget.test.tsx                    # jsdom
+TEST_DATABASE=1 npx vitest run tests/rollback-nota-emergencias-blindado.test.ts
+TEST_DATABASE=1 npx vitest run tests/canales-reservados.test.ts
+npx vitest run tests/entity-manager-defaults.test.tsx           # jsdom
+npx vitest run tests/docs-datos-pendientes-contrato.test.ts     # no necesita base
 ```
 
 ---
@@ -609,12 +616,15 @@ Tester → Corrector).
 | PR | Estado | Alcance | Pruebas requeridas |
 |---|---|---|---|
 | **A-0** | ✅ **completado** (PR #10) | Actualizar `AGENTS.md` (§8 pruebas, §9 rollback, quitar el literal de contraseña de §2) | `check-secrets` y `gitleaks` sobre el árbol; prueba que afirme que `AGENTS.md` no contiene credenciales literales |
-| **A-1** | ✅ **completado** *(este PR)* | `docs/CARGA-DE-DATOS.md`: guía de carga con la tabla de 6.1, incluida la trampa de `emergencyPhone`/`gthEmail` | Prueba de que cada clave documentada existe en el catálogo de `contact_channels` (evita que la guía se desincronice) |
-| **A-2** | 🔲 pendiente | Panel: pantalla "Datos pendientes" que liste qué falta leyendo el estado real | Integración: base sin canales → lista los 8; con uno cargado → lista 7 |
+| **A-1** | ✅ **completado** (PR #11) | `docs/CARGA-DE-DATOS.md`: guía de carga con la tabla de 6.1, incluida la trampa de `emergencyPhone`/`gthEmail` | Prueba de que cada clave documentada existe en el catálogo de `contact_channels` (evita que la guía se desincronice) |
+| **A-2** (prerrequisitos) | ✅ **completado** (PR #12) | 410 en campos retirados, canales institucionales protegidos, defaults de creación explícitos | §9 |
+| **A-2** (blindaje) | ✅ **completado** (Draft, §10) | Rollback de la nota de guardia blindado, 403 estable, catálogo sin deriva, contrato de `data-readiness` en `docs/DATOS-PENDIENTES-CONTRATO.md` | §10 |
+| **A-2** (pantalla) | 🔲 **pendiente** — único ítem abierto de la Ola A sin bloqueo externo | Panel: pantalla "Datos pendientes" que liste qué falta leyendo el estado real | Las nueve del §8 de `docs/DATOS-PENDIENTES-CONTRATO.md` |
 | **A-3** | 🔲 pendiente — **bloqueado** por dominio, DNS y HTTPS confirmados | `PUBLIC_SITE_URL` al dominio definitivo | Verificación post-deploy de `sitemap.xml` y canonical; `verify-prerender.mjs` |
 
 > A-2 es el de mayor valor operativo: convierte "¿qué falta?" en algo que el
-> sanatorio ve solo.
+> sanatorio ve solo. Su contrato ya está escrito y atado a sus fuentes en
+> `docs/DATOS-PENDIENTES-CONTRATO.md`; lo que falta es implementarlo.
 
 **Ola B — Logos** *(tras las decisiones 1–3)*
 
@@ -647,7 +657,8 @@ Tester → Corrector).
 
 ### 6.9 Secuencia recomendada
 
-**A-0 → A-1 → A-2** primero: son baratos, no dependen de nadie externo y
+**A-0 → A-1 → A-2** primero (A-0, A-1 y los dos PR previos de A-2 ya están
+hechos; queda la pantalla): son baratos, no dependen de nadie externo y
 desbloquean al cliente para que cargue datos. **B** en paralelo apenas se
 respondan las decisiones 1–3. **A-3** cuando el dominio esté. **C** sólo después
 de la revisión legal y con alcance aprobado por escrito.
@@ -818,37 +829,42 @@ Incluye además pruebas de que la guía **no contiene ningún teléfono ni ningu
 dirección de correo**. Un "número de ejemplo" en una guía de carga es la forma
 más fácil de que ese número termine copiado al panel.
 
-### 8.2 Hallazgo: `emergencyPhone` y `gthEmail` no responden 410
+### 8.2 Antecedente histórico: cómo se descubrió el descarte silencioso
 
-El encargo de esta ronda pedía documentar que esos dos campos "responden 410".
-**No es así, y la diferencia importa.**
+> **Este apartado describe un estado que ya no existe.** Se conserva porque
+> explica de dónde salió el 410 del §9.1, no porque quede algo por hacer. **El
+> comportamiento vigente es el del §9.1: los seis campos retirados responden
+> `410 Gone` en los dos endpoints.** Nada de lo que sigue es un pendiente.
 
-- `RETIRED_SETTING_KEYS` = `["social", "scripts"]` → **sí** responden `410 Gone`
-  con un mensaje que explica el motivo (`settings.ts:61-62`).
-- `emergencyPhone` y `gthEmail` están en `RETIRED_CONTACT_FIELDS`, que
-  `sanitizeSettingValue()` **borra del objeto** antes de guardar
-  (`settings.ts:188`). La petición responde **`200 {ok:true}`** y el campo se
-  descarta. Lo mismo con `phones`, `email`, `whatsapp` y `hours`.
+El encargo de A-1 pedía documentar que `emergencyPhone` y `gthEmail`
+"responden 410". En ese momento **no era así**, y la diferencia importaba:
 
-Quien escriba esos campos desde un panel viejo, un script o una integración va a
-recibir un "guardado" y el dato no va a estar en ningún lado. La guía lo
-documenta como es, con la advertencia destacada.
+- `RETIRED_SETTING_KEYS` = `["social", "scripts"]` → ya respondían `410 Gone`
+  con un mensaje que explicaba el motivo.
+- `emergencyPhone` y `gthEmail` estaban en `RETIRED_CONTACT_FIELDS`, que
+  `sanitizeSettingValue()` **borraba del objeto** antes de guardar. La petición
+  respondía **`200 {ok:true}`** y el campo se descartaba. Lo mismo con `phones`,
+  `email`, `whatsapp` y `hours`.
 
-**Vale la pena revisarlo.** La ronda 6 estableció el principio de que nada se
-descarta en silencio —el comentario está en `settings.ts:78-79`, justo arriba
-del bloque que rechaza claves no administrables— y estos seis campos son
-exactamente la excepción a ese principio, dentro de una escritura que por lo
-demás se acepta. Corregirlo sería hacer que un `contact` con campos retirados
-responda 410 como el resto. **No se hizo en esta ronda** porque cambia el
-contrato de la API y excede el alcance de A-1; queda como candidato para A-2.
+Quien escribiera esos campos desde un panel viejo, un script o una integración
+recibía un "guardado" y el dato no quedaba en ningún lado. A-1 lo documentó como
+era, con la advertencia destacada, en vez de repetir la premisa del encargo.
+
+Era la excepción a un principio que la propia ronda 6 había dejado escrito en ese
+archivo —*nada se descarta en silencio*— dentro de una escritura que por lo demás
+se aceptaba. Corregirlo cambiaba el contrato de la API y excedía el alcance de
+A-1, así que quedó anotado como candidato para A-2. **Se implementó en el PR #12
+y está cerrado** (§9.1).
 
 ### 8.3 Estado de la Ola A
 
 | PR | Estado |
 |---|---|
 | **A-0** — `AGENTS.md` al día | ✅ completado (PR #10) |
-| **A-1** — guía de carga | ✅ completado (este PR) |
-| **A-2** — pantalla "Datos pendientes" en el panel | 🔲 pendiente |
+| **A-1** — guía de carga | ✅ completado (PR #11) |
+| **A-2** — prerrequisitos (410, canales protegidos, defaults) | ✅ completado (PR #12, §9) |
+| **A-2** — blindaje del rollback, 403 estable, contrato escrito | ✅ completado (Draft, §10) |
+| **A-2** — pantalla "Datos pendientes" en el panel | 🔲 **pendiente** (único ítem abierto sin bloqueo externo) |
 | **A-3** — `PUBLIC_SITE_URL` al dominio | 🔲 **bloqueado** hasta confirmar dominio, DNS y HTTPS |
 
 A-1 no desbloquea nada técnico: desbloquea al **sanatorio**, que ahora tiene por
@@ -857,11 +873,12 @@ mientras no lleguen confirmados.
 
 ---
 
-## 9. Prerrequisitos de la Ola A-2
+## 9. Prerrequisitos de la Ola A-2 — ✅ PR #12 fusionado
 
 > Ronda **previa** a construir la pantalla "Datos pendientes". La pantalla no se
-> implementa acá: primero se cierran cuatro defectos que la habrían hecho
-> reportar un estado que no es el real.
+> implementó acá: primero se cerraron cuatro defectos que la habrían hecho
+> reportar un estado que no es el real. **Todo lo de esta sección está fusionado
+> en `main`**; lo que sigue describe el comportamiento vigente, no un plan.
 
 ### 9.1 Los campos retirados de `contact` ahora dan 410
 
@@ -946,3 +963,187 @@ migraciones** sobre MySQL y leer la base, no de leer la migración que creó cad
 fila. La diferencia no es teórica: el label de `contact_channels.emergencias` es
 **"Emergencias"**, no *"Emergencias 24hs"* como decía la migración que lo creó —
 una posterior lo renombró, y la guía de A-1 había copiado el valor viejo.
+
+---
+
+## 10. Ronda correctiva previa a la pantalla A-2
+
+> **Estado: Draft, sin fusionar.** Sin merge, sin deploy y sin *Ready for
+> review* por instrucción explícita del propietario. La pantalla "Datos
+> pendientes" **sigue sin implementarse**: acá se cierran los defectos que la
+> habrían hecho nacer sobre una base movediza, y se deja su contrato escrito.
+
+### 10.1 El rollback podía republicar la nota de la guardia
+
+`20260820000000_nota_emergencias_no_confirmada.ts` (PR #12, ya fusionada) retiró
+de `schedules.emergencias` la nota *"Guardia activa todos los días del año."* y
+dejó un `down()` capaz de restaurarla. Ese `down()` comprueba **una sola** cosa
+antes de escribir: que `note` esté vacío.
+
+No alcanza, y el caso peligroso es el más natural de todos:
+
+1. la migración limpia la nota y deja la fila inactiva, sin días ni horario;
+2. semanas después el sanatorio carga el horario real de la guardia y **activa**
+   la fila — sin escribir ninguna nota, porque no hace falta;
+3. la fila pasa a ser publicable;
+4. un rollback encuentra `note` vacío, cumple la única condición que ese `down()`
+   mira, y **publica la afirmación no confirmada junto al horario real**.
+
+Variantes equivalentes: se cargaron `days`, se activó la fila, se cambió el área,
+o se borró y se recreó.
+
+**Cómo se blindó sin editar la migración fusionada.** `20260820000000` puede
+estar aplicada en producción: editar el archivo cambiaría una migración que la
+base ya registró. En cambio, una migración **posterior** corre su `down()`
+**antes** en un rollback. Eso alcanza:
+`20260821000000_blindar_rollback_nota_emergencias.ts` mira si hay evidencia de
+intervención y, si la hay, reescribe el snapshot viejo como `motivo: "editada"`
+con `notaAnterior: null` y `neutralizadoPor`. Cuando el `down()` viejo corre, no
+tiene nada que restaurar. **No toca ni un dato del sanatorio**: sólo el registro
+interno que gobierna una restauración automática.
+
+**La decisión de diseño que costó dos intentos.** El primer enfoque comparaba la
+fila contra su estado *al instalar el blindaje*. Falla justo en el caso
+peligroso: entre que la nota se limpió y que el blindaje se aplicó pueden haber
+pasado semanas y varias ediciones, así que el diff da "sin cambios" precisamente
+cuando el horario ya estaba cargado. Se reemplazó por un predicado **absoluto**
+—`siguePudiendoRestaurarse()`: `note`, `days` y `hours` vacíos y la fila
+inactiva—, que son las mismas condiciones que el `up()` viejo exigió para
+limpiar. Para las ediciones que **no** cambian el estado publicable (renombrar el
+área, borrar y recrear) se agregó `tocadaDespuesDe()`, que compara
+`created_at`/`updated_at` contra el `createdAt` del snapshot viejo con 1 s de
+margen — `TIMESTAMP` tiene precisión de segundo y la propia migración vieja
+escribe `updated_at` al limpiar.
+
+**El blindaje no es un bloqueo permanente.** Si nadie tocó la fila, revertir sigue
+devolviendo exactamente el estado anterior: la reversibilidad documentada se
+conserva.
+
+`tests/rollback-nota-emergencias-blindado.test.ts` ejecuta el flujo **real entre
+versiones**: cadena de migraciones hasta la vieja → edición del cliente → cadena
+hasta la nueva → rollback de las dos. Once casos, uno por forma de intervención.
+
+### 10.2 El 403 institucional dependía de un dato ajeno
+
+Cambiar el `kind` de un canal reservado con **valor cargado** respondía **400**,
+no 403: la validación semántica de la fila resultante corría antes que el guard y
+se quejaba primero de que el valor guardado no correspondía al tipo pedido. Con
+el canal **vacío** el mismo intento daba 403. El operador leía "payload inválido"
+—un error de formato— por un cambio que no es inválido sino **prohibido**, y el
+mensaje no mencionaba la restricción real.
+
+El `PUT` de `crudRouter` quedó en cuatro fases explícitas:
+
+1. **forma** del payload parcial (400 si no valida);
+2. **guard** institucional contra la fila guardada (403);
+3. **semántica** de la fila resultante = payload + lo ya guardado (400);
+4. guardar.
+
+Se agregó también `guard.canCreate`, que el `POST` invoca después del parseo.
+
+Verificado como regresión real: con el orden anterior, seis de las pruebas nuevas
+fallan con 400 donde exigen 403.
+
+### 10.3 El catálogo institucional ya no está duplicado
+
+Las ocho claves vivían **dos veces**: en `api/src/routes/admin/contact_channels.ts`
+y en un `Set` local de `apps/admin/src/pages/ContactChannelsPage.tsx`. Dos listas
+se desincronizan solas —basta agregar un canal en la API y olvidarlo en el
+panel— y el síntoma es silencioso: el panel ofrece un botón *Eliminar* que la API
+contesta con 403.
+
+Se eliminó la copia del panel. Ahora `serialize` manda `reserved` y
+`expectedKind` con cada fila, y el panel decide con eso. **La pantalla A-2 no
+necesita una tercera lista.**
+
+Dos huecos que quedaban abiertos:
+
+- **Recrear una fila que falta.** Si la fila se perdió por fuera del panel (dump
+  restaurado a medias, `DELETE` directo), se puede volver a crear —pero sólo con
+  su `kind` esperado: el sitio la busca por su clave y espera ese tipo de enlace.
+- **Reparar un `kind` incorrecto.** Antes el mismo formulario que informaba el
+  problema lo bloqueaba. Ahora `canUpdate` impide **alejarse** del tipo esperado,
+  no **acercarse** a él, y el panel desbloquea el `<select>` exactamente cuando
+  está mal. Si además el valor guardado no corresponde, la semántica pide
+  corregir los dos campos en la misma edición.
+
+### 10.4 Cobertura DOM del panel
+
+Pruebas nuevas con DOM real (`tests/entity-manager-defaults.test.tsx`):
+
+- Estudios: el checkbox `published` arranca **desmarcado** y el `POST` lleva
+  `published: false` explícito. Sin el `createDefaults`, esta última falla.
+- Alta de canal: además de los `input`, el **`<select>` de `kind`** existe y es
+  editable. No es redundante: un campo bloqueado **se reemplaza** por un
+  `<input disabled>`, así que si la condición se equivocara el `select` no
+  existiría y el canal nuevo nacería sin tipo.
+- **Los ocho** canales institucionales —no sólo `emergencias`— reciben la misma
+  protección visual, y una fila libre en la misma lista sí ofrece *Eliminar*.
+- Los ocho, con el `kind` roto, desbloquean el `select` para repararlo. Con un
+  `lockedFields` estático, esas ocho pruebas fallan.
+
+### 10.5 Contrato de `GET /api/admin/data-readiness` (documentado, no implementado)
+
+`docs/DATOS-PENDIENTES-CONTRATO.md` fija la especificación de la pantalla A-2
+antes de escribirla. Va en `docs/` —como `DEPLOY.md` y `CARGA-DE-DATOS.md`—
+porque es documentación operativa; `AGENTS.md` §6 prohíbe los archivos de
+planificación, y además el propietario lo pidió explícitamente.
+
+Lo esencial:
+
+- autenticado (cuelga de `adminRouter`, que aplica `requireAuth`) y **de sólo
+  lectura**: ni escribe, ni migra, ni repara;
+- **no devuelve** teléfonos, correos, horarios, días, notas ni el contenido de
+  ningún snapshot: sólo estados y claves;
+- estados de sección `complete` / `pending` / `review` separados, porque "cargar
+  un teléfono" y "confirmar el alcance de Biopsias" no pesan igual;
+- por canal: `missing`, `wrong_kind`, `inactive`, `empty`, `invalid`, `complete`;
+- reutiliza `RESERVED_CHANNELS` e `isValidChannelValue()` — nada se reimplementa;
+- los horarios usan la condición real de publicación (`active = 1` y `hours` no
+  vacío, la misma que `/api/public/schedules`) y **no dan el conjunto por
+  completo porque exista una fila**: siempre devuelven `publishable` y `total`;
+- Biopsias queda en `review` **mientras no exista una confirmación explícita**;
+  no se deduce del texto de la página;
+- avisa si el snapshot de Emergencias quedó en `motivo: "editada"`, **sin exponer
+  su contenido**, y distingue los dos orígenes de ese estado.
+
+`tests/docs-datos-pendientes-contrato.test.ts` ata el contrato a sus fuentes: si
+`isValidChannelValue` cambia de nombre, si el endpoint público cambia su
+condición de publicación o si la clave del snapshot se mueve, el documento falla
+en CI en vez de envejecer en silencio.
+
+### 10.6 Dos pruebas existentes que la migración nueva rompió, y por qué el ajuste no las relaja
+
+Agregar una migración al final de la cadena rompió dos pruebas que contaban
+`down()` a mano. **Las dos fallaban por medir mal, no por un defecto del código
+nuevo**, y en los dos casos el arreglo las deja mirando lo que decían mirar.
+
+- **`tests/migrations.test.ts`.** Su lista `CORRECTIVE` es la que determina
+  cuántos `down()` ejecuta el rollback completo. Sin
+  `20260821000000` en la lista, revertía siete migraciones donde ahora hay ocho y
+  dejaba `20260814000000_contenido_no_confirmado` aplicada: el snapshot "después"
+  traía las descripciones ya corregidas y el diff acusaba al rollback de no
+  restaurar. Se agregó la migración a la lista. La aserción
+  (`after` === `before`) no cambió.
+- **`tests/migracion-nota-emergencias.test.ts`.** Hacía un único
+  `db.migrate.down()`, que antes revertía la correctiva y ahora revierte el
+  blindaje. Se reemplazó por `revertirCorrectiva()`, que revierte hasta que
+  `knex_migrations` ya no registre la migración bajo prueba —así no vuelve a
+  romperse con la próxima—. Las aserciones no cambiaron.
+
+  Su `beforeEach` tenía además un defecto que sólo se hizo visible ahora:
+  construía el estado "antes" **filtrando** la correctiva de la lista en vez de
+  **cortar** la cadena. Con una migración posterior, eso aplicaba el blindaje
+  *antes* que la correctiva —un orden que ninguna base real puede tener— y el
+  blindaje registraba "la fila no estaba limpia" por una situación inventada por
+  la prueba. Se cambió a `todas.slice(0, corte)`. El resultado es una cadena
+  aplicada en orden real, no una condición más laxa.
+
+### 10.7 Qué falta
+
+| Ítem | Estado |
+|---|---|
+| Pantalla "Datos pendientes" (`/admin/datos-pendientes` + endpoint + tarjeta del Dashboard) | 🔲 **pendiente** — contrato escrito, implementación no |
+| A-3 (`PUBLIC_SITE_URL` al dominio definitivo) | 🔲 **bloqueado** por dominio, DNS y HTTPS |
+| Purga del secreto histórico (`9ced09d`) | 🔲 **decisión del propietario** — NO-GO de producción vigente; sólo se informa |
+| Logos y campañas | 🔲 fuera de alcance hasta autorización separada |
