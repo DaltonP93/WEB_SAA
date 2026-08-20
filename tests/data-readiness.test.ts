@@ -47,6 +47,18 @@ const HORARIO_PRUEBA = "07:00 a 19:00";
 const DIAS_PRUEBA = "Lunes a viernes";
 const NOTA_PRUEBA = "Nota de prueba sobre el area.";
 
+/**
+ * Deja una columna JSON lista para volver a escribirla.
+ *
+ * MySQL 8 (CI) devuelve las columnas JSON ya parseadas y MariaDB (local) como
+ * string. Escribir de vuelta lo que se leyó manda un objeto donde el motor
+ * espera un literal JSON, y MySQL lo rechaza con "Invalid JSON text". El
+ * helper `jsonColumn()` de `helpers/db` resuelve el mismo problema en la
+ * dirección de lectura; éste es su par para la escritura.
+ */
+const textoJson = (valor: unknown): string =>
+  typeof valor === "string" ? valor : JSON.stringify(valor);
+
 interface Item {
   key: string;
   label: string;
@@ -375,7 +387,12 @@ describeDb("GET /api/admin/data-readiness", () => {
       // convertiría una cosa en la otra.
       const pagina = await db("pages").where({ slug: "estudios-biopsias" }).first();
       const bloque = await db("blocks").where({ page_id: pagina.id, type: "richText" }).first();
-      const original = bloque?.props;
+      // El valor original se guarda **como texto**: MySQL 8 devuelve las
+      // columnas JSON ya parseadas y MariaDB como string, así que escribir de
+      // vuelta lo que se leyó manda un objeto donde el motor espera un literal
+      // JSON y falla con "Invalid JSON text". Es la convención 3 del
+      // CLAUDE_CONTEXT, que acá aplica también a la escritura.
+      const original = textoJson(bloque?.props);
       const largo = `<p>${"Texto extenso sobre el procedimiento. ".repeat(60)}</p>`;
       if (bloque) {
         await db("blocks").where({ id: bloque.id }).update({ props: JSON.stringify({ html: largo }) });
@@ -388,16 +405,17 @@ describeDb("GET /api/admin/data-readiness", () => {
     });
 
     it("si la página no existe, cae al listado y sigue en review", async () => {
+      // Se le cambia el slug en vez de borrarla y reinsertarla: para el
+      // endpoint es lo mismo —no encuentra la página— y no hay que devolver a
+      // la base ninguna columna JSON leída de ella.
       const pagina = await db("pages").where({ slug: "estudios-biopsias" }).first();
-      const bloques = await db("blocks").where({ page_id: pagina.id });
-      await db("pages").where({ id: pagina.id }).del();
+      await db("pages").where({ id: pagina.id }).update({ slug: "estudios-biopsias-fuera-de-lugar" });
       try {
         const s = seccion(await pedir(), "biopsias");
         expect(s.route, "/pages/undefined sería una pantalla rota").toBe("/pages");
         expect(s.status).toBe("review");
       } finally {
-        await db("pages").insert(pagina);
-        if (bloques.length) await db("blocks").insert(bloques);
+        await db("pages").where({ id: pagina.id }).update({ slug: "estudios-biopsias" });
       }
     });
   });
@@ -405,15 +423,17 @@ describeDb("GET /api/admin/data-readiness", () => {
   // ---------------------------------------------------------------- avisos
 
   describe("aviso del snapshot de la nota de Emergencias", () => {
-    let original: any;
+    /** El snapshot original, guardado como texto para poder reinsertarlo. */
+    let original: string | null = null;
 
     beforeAll(async () => {
-      original = await db("settings").where({ key: SNAP_NOTA }).first();
+      const row = await db("settings").where({ key: SNAP_NOTA }).first();
+      original = row ? textoJson(row.value) : null;
     });
 
     afterEach(async () => {
       await db("settings").where({ key: SNAP_NOTA }).del();
-      if (original) await db("settings").insert(original);
+      if (original !== null) await db("settings").insert({ key: SNAP_NOTA, value: original });
     });
 
     const escribir = async (valor: Record<string, unknown>) => {
