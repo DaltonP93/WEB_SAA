@@ -41,6 +41,18 @@ export interface CrudOpts {
   defaultOrderBy?: string;
   /** transformación de payload antes de insert/update (JSON.stringify de campos json) */
   prepare?: (input: any) => Record<string, unknown>;
+  /**
+   * Escribe `updated_at` en cada PUT.
+   *
+   * El CRUD guardaba sólo las columnas del payload, así que la marca quedaba
+   * congelada en el valor que le puso la migración que creó la fila: una
+   * edición real desde el panel no la movía. Cualquier mecanismo que use esa
+   * marca para saber si alguien tocó la fila —el blindaje del rollback de la
+   * guardia lo hacía— quedaba mirando un dato que no cambia nunca.
+   *
+   * Es opt-in porque no todas las tablas del CRUD tienen la columna.
+   */
+  touchUpdatedAt?: boolean;
   /** transformación de fila al leer */
   serialize?: (row: any) => any;
   /**
@@ -140,7 +152,10 @@ export function crudRouter(opts: CrudOpts): Router {
     if (taken) {
       return res.status(409).json({ error: `el icono ya lo usa "${taken}": elegí otro` });
     }
-    await db(opts.table).where({ id: req.params.id }).update(prepare(parsed.data));
+    const cambios = prepare(parsed.data);
+    await db(opts.table)
+      .where({ id: req.params.id })
+      .update(opts.touchUpdatedAt ? { ...cambios, updated_at: db.fn.now() } : cambios);
     const row = await db(opts.table).where({ id: req.params.id }).first();
     res.json(serialize(row));
   });

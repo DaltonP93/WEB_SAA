@@ -1,15 +1,20 @@
 # Contrato de `GET /api/admin/data-readiness`
 
-Especificación de la pantalla **Datos pendientes** (Ola A-2). **Este documento no
-describe código existente**: el endpoint todavía no está implementado. Se escribe
-antes para que la implementación no tenga que inventar decisiones que ya tienen
-respuesta en el proyecto —el catálogo institucional, la validación de valores,
-la condición real de publicación de un horario— y para dejar por escrito qué
-**no** puede devolver.
+Especificación de la pantalla **Datos pendientes** (Ola A-2). El documento se
+escribió **antes** de implementar el endpoint, para que la implementación no
+tuviera que inventar decisiones que ya tienen respuesta en el proyecto —el
+catálogo institucional, la validación de valores, la condición real de
+publicación de un horario— y para dejar por escrito qué **no** puede devolver.
+El endpoint ya está implementado en
+`api/src/routes/admin/data_readiness.ts` y esta sigue siendo su especificación:
+cuando los dos discrepen, el que está mal es el que se cambió sin actualizar al
+otro.
 
 Referencia operativa complementaria: [`CARGA-DE-DATOS.md`](./CARGA-DE-DATOS.md),
 que explica al administrador cómo cargar cada dato. Este archivo explica al
-programador cómo se calcula si falta.
+programador cómo se calcula si falta. Las URLs `/admin/…` que aparecen allá son
+direcciones para escribir en el navegador y están bien como están; las `route`
+de acá son otra cosa (§2.2).
 
 ---
 
@@ -31,13 +36,20 @@ mostrar "a confirmar"?* — y lleva a la pantalla donde se carga cada cosa.
 |---|---|
 | **Método y ruta** | `GET /api/admin/data-readiness` |
 | **Autenticación** | Obligatoria. Cuelga de `adminRouter`, que ya aplica `requireAuth` |
-| **Efectos** | **Ninguno.** Sólo lectura: ni escribe, ni migra, ni repara |
-| **Idempotencia** | Total. Dos llamadas seguidas devuelven lo mismo |
+| **Efectos** | **Ninguno.** Sólo lectura: ni escribe, ni migra, ni repara, ni toca marcas de tiempo |
+| **Idempotencia** | Total, y en sentido literal: la respuesta **no lleva ningún campo dinámico**, así que dos llamadas seguidas sobre la misma base devuelven exactamente el mismo JSON |
 | **Caché** | Sin caché del lado del servidor. El panel lo pide con TanStack Query como cualquier otro recurso |
 
 Es de sólo lectura por diseño, no por omisión. Un endpoint que además "arregla lo
 que puede" convierte un diagnóstico en una escritura que nadie pidió, y sobre
 datos institucionales eso es exactamente lo que este proyecto viene evitando.
+
+**No hay `generatedAt`.** Un borrador de este contrato lo llevaba, y convivía mal
+con la promesa de la fila de arriba: con un timestamp adentro, "dos llamadas
+devuelven lo mismo" deja de ser cierto al pie de la letra y hay que explicar cuál
+es la excepción. Nadie lo consumía —ni la pantalla ni la tarjeta del Dashboard—,
+así que se sacó en vez de debilitar la promesa. Idempotencia acá significa que el
+GET no escribe **y** que la respuesta no cambia sola.
 
 ### 2.1 · Qué no puede devolver
 
@@ -59,6 +71,29 @@ ninguna necesidad.
 El `label` de un canal y el `area` de un horario sí viajan, porque son el nombre
 de la fila y no el dato pendiente. `value`, `hours`, `days` y `note` sólo viajan
 como **estado derivado** (`empty`, `complete`, …), nunca como contenido.
+
+### 2.2 · `route` son rutas internas del panel
+
+Cada sección y cada aviso traen una `route`. Es la ruta **interna de React
+Router**, sin el prefijo del panel:
+
+| Destino | `route` |
+|---|---|
+| Canales de contacto | `/contact-channels` |
+| Horarios | `/schedules` |
+| Biopsias | `/pages/:id` si la página existe, `/pages` si no |
+| La propia pantalla | `/datos-pendientes` |
+
+El admin se construye con `base: "/admin"` y su router arranca con
+`basename: import.meta.env.BASE_URL` (`apps/admin/src/main.tsx`), así que React
+Router antepone `/admin` **solo**. Devolver `/admin/schedules` haría que un
+`<Link>` apuntara a `/admin/admin/schedules`, que no existe: el enlace lleva a una
+pantalla en blanco, y a nada que delate por qué.
+
+La confusión es fácil porque [`CARGA-DE-DATOS.md`](./CARGA-DE-DATOS.md) sí escribe
+`/admin/horarios` y compañía — y hace bien: ahí son URLs que una persona copia en
+la barra del navegador. Son dos espacios de nombres distintos y ninguno de los
+dos está mal; lo que está mal es mezclarlos.
 
 ---
 
@@ -151,7 +186,25 @@ aparte como informativos, nunca como pendientes.
 
 ### 4.2 · Horarios
 
-Fuente: tabla `schedules`, las siete áreas que crea `20260813000001_schedules.ts`.
+Fuente: tabla `schedules`, cruzada contra `RESERVED_SCHEDULES` de
+`api/src/institutional-schedules.ts` —el catálogo de runtime de las siete áreas,
+con su clave y su nombre por defecto—.
+
+> **Enumerar la tabla no alcanza, y por eso el catálogo existe.** Para reportar
+> que **falta** una fila hay que saber cuáles tendrían que estar: recorrer
+> `schedules` sólo dice qué hay, y una fila perdida —un dump restaurado a medias,
+> un `DELETE` directo— desaparece del informe en vez de aparecer como problema.
+>
+> El catálogo tampoco se lee de `20260813000001_schedules.ts`. Una migración es
+> un archivo histórico: describe lo que se aplicó una vez, no lo que el producto
+> necesita hoy, y ningún código productivo debería importarla.
+> `tests/horarios-catalogo.test.ts` compara el catálogo contra las filas que deja
+> la cadena **completa** de migraciones y exige igualdad exacta en los dos
+> sentidos, que es la garantía que hace falta para poder tener las dos cosas.
+
+El `area` del catálogo es sólo el nombre por defecto: si la fila existe manda su
+`area` guardada, que el sanatorio puede renombrar. El nombre del catálogo se usa
+para poder nombrar una fila que **no está** en la base.
 
 La condición de "publicable" no se inventa: es **la misma que aplica
 `GET /api/public/schedules`** — `active = 1` y `hours` no vacío. Cualquier otra
@@ -180,6 +233,13 @@ propietario active a conciencia—, este ítem pasa a leerlo. Hasta entonces
 devuelve `review` con el motivo, y la pantalla lo muestra como una decisión
 pendiente del sanatorio, no como una tarea del administrador.
 
+**El enlace va directo al Page Builder** cuando la página existe:
+`route: "/pages/<id>"`. Mandar al listado obliga a buscarla entre todas, que es
+la misma fricción que se corrigió en el formulario de canales. Si la página **no
+existe**, la `route` cae a `/pages` —`/pages/undefined` sería una pantalla rota— y
+el estado sigue siendo `review`: que falte la página no es una confirmación
+pendiente, es un problema mayor, y el `reason` lo dice.
+
 ---
 
 ## 5 · Avisos
@@ -201,7 +261,7 @@ Hay dos orígenes distintos para ese `"editada"` y el aviso los distingue:
 | Situación | Cómo se reconoce | Qué significa |
 |---|---|---|
 | La migración `20260820000000` encontró la fila ya editada y **no la tocó** | `motivo: "editada"` y `notaAnterior` **no** es `null` | Hay una nota sobre la fila de Emergencias que nadie revisó. Requiere lectura manual en Horarios |
-| Un rollback desarmó la restauración automática | `motivo: "editada"`, `notaAnterior: null` y existe `neutralizadoPor` | La nota está limpia y siguió limpia. No hay nada que revisar en la fila; el aviso es informativo |
+| Un rollback desarmó la restauración automática | `motivo: "editada"`, `notaAnterior: null` y existe `neutralizadoPor` (con la clave del blindaje que lo hizo) | La nota está limpia y siguió limpia. No hay nada que revisar en la fila; el aviso es informativo |
 
 El aviso lleva `code`, `severity` y un `message` en español que dice **dónde
 mirar**, nunca **qué decía**.
@@ -223,14 +283,19 @@ Ilustrativa: fija los nombres y los tipos, no los valores.
 
 ```jsonc
 {
-  "generatedAt": "2026-08-17T13:00:00.000Z",
-  "overall": "pending",                 // complete | pending | review
+  "overall": "review",                  // complete | pending | review
+  "summary": {                          // el panel NO recalcula esto
+    "resolved": 4,
+    "pending": 10,
+    "review": 2,
+    "total": 16                         // 8 canales + 7 horarios + 1 Biopsias
+  },
   "sections": [
     {
       "id": "contact-channels",
       "label": "Canales de contacto",
       "status": "pending",
-      "route": "/admin/contact-channels",   // ruta del panel, para el enlace
+      "route": "/contact-channels",     // ruta interna del panel (§2.2)
       "complete": 3,
       "total": 8,
       "items": [
@@ -246,7 +311,7 @@ Ilustrativa: fija los nombres y los tipos, no los valores.
       "id": "schedules",
       "label": "Horarios de atención",
       "status": "pending",
-      "route": "/admin/schedules",
+      "route": "/schedules",
       "publishable": 1,
       "total": 7,
       "items": [
@@ -257,66 +322,112 @@ Ilustrativa: fija los nombres y los tipos, no los valores.
       "id": "biopsias",
       "label": "Alcance de Biopsias",
       "status": "review",
-      "route": "/admin/pages",
+      "route": "/pages/12",             // "/pages" si la página no existe
       "pageSlug": "estudios-biopsias",
-      "reason": "Requiere confirmación escrita del sanatorio."
+      "reason": "Requiere confirmación escrita del sanatorio…"
     }
   ],
   "warnings": [
     {
       "code": "emergencias_nota_sin_revisar",
       "severity": "warning",              // warning | info
-      "route": "/admin/schedules",
-      "message": "La fila de Emergencias tiene una nota anterior sin revisar. Abrí Horarios y verificá su contenido."
+      "route": "/schedules",
+      "message": "La fila de Emergencias tiene una nota anterior que nadie revisó. …"
     }
   ]
 }
 ```
 
-Notas sobre la forma:
+### 6.1 · `summary`: el resumen lo arma el servidor
+
+`summary` existe para que la tarjeta del Dashboard y la pantalla no tengan que
+derivar el mismo número desde `sections`. Serían dos definiciones del mismo
+criterio en dos archivos, y bastaría con tocar una para que la tarjeta dijera
+"faltan 3" y la pantalla mostrara cuatro filas en rojo.
+
+Cada ítem cae en **exactamente una** columna, y las tres suman `total`:
+
+| Columna | Canales | Horarios | Biopsias |
+|---|---|---|---|
+| `resolved` | `complete` | `complete` e `inactive` | — |
+| `pending` | `inactive`, `empty` | `empty` | — |
+| `review` | `missing`, `wrong_kind`, `invalid` | `missing` | siempre 1 |
+
+`total` es siempre **16**: los ocho canales del catálogo, las siete áreas de
+horarios y la revisión de Biopsias. Es el catálogo lo que se cuenta, no las filas
+que haya en la base — si no, borrar una fila haría bajar el total y el informe
+mejoraría al empeorar la base.
+
+**Un horario con `hours` cargado e inactivo cuenta como resuelto.** El dato está;
+no publicarlo es una decisión que alguien tomó. Contarlo como pendiente
+convertiría esa decisión en una tarea que nunca se termina. En canales es al
+revés, y el porqué está en §3.2.
+
+Notas sobre el resto de la forma:
 
 - `items[].label` es el nombre de la fila (`contact_channels.label`,
-  `schedules.area`), no su valor.
-- `route` es una ruta del panel, no un enlace absoluto: el front la resuelve.
+  `schedules.area`), no su valor. Cuando la fila no existe se usa el nombre por
+  defecto del catálogo, que es lo único que se puede decir de algo que falta.
+- `route` es una ruta interna del panel, no un enlace absoluto (§2.2).
 - `warnings[].message` está en español (es-PY) como el resto de la UI. Los
   `code` son estables y en inglés, para que el front pueda ramificar sin
   depender del texto.
 - `overall` es el peor estado de las secciones, con `review` peor que `pending`.
+  Mientras Biopsias siga sin confirmación explícita, `overall` es `review` por
+  definición: siempre hay algo que una persona tiene que decidir.
 
 ---
 
 ## 7 · Superficie en el panel
 
-- **Ruta nueva**: `/admin/datos-pendientes`, en el menú lateral.
-- **Tarjeta en el Dashboard**: título, `complete`/`total` global y el peor estado.
-  Es lo primero que ve quien entra al panel, y su función es que nadie tenga que
-  acordarse de revisar.
+- **Ruta nueva**: `/datos-pendientes` en el router del admin —o sea
+  `/admin/datos-pendientes` en la barra del navegador—, con su entrada en el menú
+  lateral.
+- **Tarjeta en el Dashboard**: título, `resolved`/`total` global y el peor
+  estado, todo leído de `summary`. Es lo primero que ve quien entra al panel, y
+  su función es que nadie tenga que acordarse de revisar.
 - **Enlaces por ítem**: cada fila lleva a la pantalla donde se carga —Canales,
   Horarios o el Page Builder de la página de Biopsias—. Sin esto la pantalla
   informa un problema y deja al operador buscando dónde resolverlo, que es el
   mismo error que se corrigió en el formulario de canales cuando bloqueaba el
   campo que había que reparar.
+- **La pantalla no imprime ningún valor institucional.** Nombres, estados,
+  cantidades y acciones. El endpoint tampoco los manda, así que no hay nada que
+  filtrar del lado del panel — pero la regla vale igual para lo que se agregue
+  después.
 
 ---
 
 ## 8 · Pruebas que la implementación tiene que traer
 
 No es una lista de deseos: son los casos donde una implementación razonable se
-equivoca.
+equivoca. Están en `tests/data-readiness.test.ts`,
+`tests/data-readiness-panel.test.tsx` y `tests/horarios-catalogo.test.ts`.
 
 1. El endpoint **exige autenticación** (401 sin token).
-2. La respuesta **no contiene** ningún `value`, `hours`, `days` ni `note` de la
+2. **No tiene efectos**: un volcado de las tablas antes y después de llamarlo es
+   idéntico, marcas de tiempo incluidas.
+3. La respuesta **no contiene** ningún `value`, `hours`, `days` ni `note` de la
    base. Se verifica contra filas cargadas a propósito con datos de prueba,
    buscando esos literales en el JSON serializado.
-3. Un canal con valor **inválido** guardado directo en la base da `invalid`, no
+4. Un canal con valor **inválido** guardado directo en la base da `invalid`, no
    `complete`.
-4. Un canal institucional **borrado** directo en la base da `missing` y lleva la
+5. Un canal institucional **borrado** directo en la base da `missing` y lleva la
    sección a `review`.
-5. Un solo horario publicable **no** deja la sección en `complete`.
-6. Un horario con horas cargadas e `active = 0` **no** cuenta como pendiente.
-7. Biopsias da `review` aunque su página tenga texto largo y sin la nota en
-   cursiva.
-8. Con el snapshot de Emergencias en `motivo: "editada"`, el aviso aparece y el
-   JSON **no** contiene la nota legacy.
-9. El catálogo usado es el de la API: si se agrega una clave a
-   `RESERVED_CHANNELS`, la sección la cuenta sin tocar esta pantalla.
+6. Un canal con el `kind` cambiado directo en la base da `wrong_kind`.
+7. `inactive` y `empty` se distinguen: no colapsan en un único "falta".
+8. Un solo horario publicable **no** deja la sección en `complete`.
+9. Un horario con horas cargadas e `active = 0` **no** cuenta como pendiente, y
+   sí cuenta como resuelto en `summary`.
+10. Un horario **borrado** da `missing`, que el catálogo de runtime es lo único
+    que puede detectar.
+11. Biopsias da `review` aunque su página tenga texto largo y sin la nota en
+    cursiva, y su `route` apunta al Page Builder de esa página.
+12. Con el snapshot de Emergencias en `motivo: "editada"`, el aviso aparece y el
+    JSON **no** contiene la nota legacy.
+13. Los catálogos usados son los de la API: si se agrega una clave a
+    `RESERVED_CHANNELS`, la sección la cuenta sin tocar esta pantalla.
+14. Las `route` son internas: ningún enlace de la pantalla produce
+    `/admin/admin/…` bajo `basename="/admin"`.
+15. El DOM de la pantalla, del menú y de la tarjeta del Dashboard no imprime
+    ningún teléfono, correo, horario ni nota.

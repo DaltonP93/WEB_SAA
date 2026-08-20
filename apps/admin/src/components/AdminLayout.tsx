@@ -25,6 +25,7 @@ const SECTIONS: { title: string; items: NavItem[] }[] = [
   {
     title: "Operación",
     items: [
+      { to: "/datos-pendientes", label: "Datos pendientes", icon: "clipboard-list" },
       { to: "/messages", label: "Mensajes", icon: "mail", badge: "msg" },
     ],
   },

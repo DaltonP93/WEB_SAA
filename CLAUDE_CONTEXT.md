@@ -5,8 +5,8 @@
 > Formato ejecutivo. Se actualiza en cada tarea terminada o preparación de
 > cambios para GitHub.
 
-**Última actualización:** ronda correctiva previa a la pantalla A-2 (§10).
-**Cubre hasta:** PR #12 fusionado. La ronda del §10 está **en Draft, sin fusionar**.
+**Última actualización:** implementación de la pantalla A-2 "Datos pendientes" (§11).
+**Cubre hasta:** PR #13 fusionado. La ronda del §11 está **en Draft, sin fusionar**.
 **Estado de `main`:** `git log --oneline -1 origin/main`.
 **Estado de CI:** los tres checks se exigen en verde antes de cada merge. El
 resultado vigente es el del último run sobre `origin/main`, no un SHA anotado acá.
@@ -30,7 +30,8 @@ resultado vigente es el del último run sobre `origin/main`, no un SHA anotado a
 | 8 | #10 | Deriva documental, autoreejecución del deploy (§7) |
 | A-1 | #11 | Guía operativa de carga de datos (§8) |
 | A-2 (prerrequisitos) | #12 | ✅ fusionado — campos retirados con 410, canales protegidos, defaults de creación (§9) |
-| A-2 (blindaje) | Draft | Rollback de la nota de guardia blindado, 403 estable, catálogo sin deriva, contrato de `data-readiness` documentado (§10) |
+| A-2 (blindaje) | #13 | ✅ fusionado — rollback de la nota de guardia blindado, 403 estable, catálogo sin deriva, contrato de `data-readiness` documentado (§10) |
+| A-2 (pantalla) | Draft | Blindaje por campos mutables, catálogo de horarios de runtime, endpoint `data-readiness` y pantalla "Datos pendientes" (§11) |
 
 ---
 
@@ -45,7 +46,7 @@ Monorepo **pnpm 9** (`pnpm-workspace.yaml`: `apps/*`, `api`, `shared`).
 | `apps/admin` | React 18 · Vite | Panel de administración (`/admin`) |
 | `shared/types` | TypeScript | Tipos y constantes compartidas |
 
-**Pruebas:** 38 archivos en `tests/`, **731 pruebas**, `vitest`. Las que tocan
+**Pruebas:** 44 archivos en `tests/`, **899 pruebas**, `vitest`. Las que tocan
 base real se activan con `TEST_DATABASE=1` (si no, se saltan con `describe.skip`).
 
 **CI** (`.github/workflows/ci.yml`), tres jobs, todos bloqueantes:
@@ -74,6 +75,18 @@ Estas ya causaron errores antes. Respetarlas:
 5. **knex se ejecuta a través de `tsx`.** El migrador hace `import()` en runtime
    y Node 20 no lee `.ts` sin ayuda. Nunca invocar knex directo.
 6. **No editar migraciones ya fusionadas.** Corregir siempre con una migración nueva.
+7. **Las rutas del panel que viajan por la API son internas, sin `/admin`.** El
+   admin se sirve bajo `/admin` y su router arranca con
+   `basename: import.meta.env.BASE_URL`, así que React Router antepone el prefijo
+   solo. Un `route: "/admin/schedules"` en una respuesta produce un `<Link>` a
+   `/admin/admin/schedules`: pantalla en blanco y ningún error. Las URLs
+   `/admin/…` de `docs/CARGA-DE-DATOS.md` son otra cosa —direcciones para
+   escribir en el navegador— y están bien así.
+8. **El CRUD sólo escribe `updated_at` si la tabla lo pide.** `crudRouter` guarda
+   las columnas del payload y nada más; `touchUpdatedAt: true` agrega la marca.
+   Sin eso, `updated_at` queda congelado en el valor que puso la migración que
+   creó la fila, y cualquier mecanismo que la use para detectar ediciones lee un
+   dato inmóvil (pasó con el blindaje del rollback de la guardia, §11.1).
 
 ---
 
@@ -294,7 +307,7 @@ conexión sana).
 
 | Comprobación | Resultado |
 |---|---|
-| Pruebas (Node 20 + MySQL/MariaDB, `TEST_DATABASE=1`) | **803 / 803** en 40 archivos |
+| Pruebas (Node 20 + MySQL/MariaDB, `TEST_DATABASE=1`) | **899 / 899** en 44 archivos |
 | `pnpm typecheck` | OK |
 | Builds `@sa/api` / `@sa/web` / `@sa/admin` | OK |
 | Prerender real (`scripts/ci/verify-prerender.mjs`) | OK, exit 0 |
@@ -303,14 +316,17 @@ conexión sana).
 | `gitleaks detect --no-git` (árbol) | *no leaks found* |
 | **CI: 3 / 3 checks** | se exigen en verde antes de cada merge; el resultado vigente es el del último run |
 
-> Los 803 salen de **731 + 72** de la ronda del §10, medido corriendo las mismas
-> suites antes y después: `rollback-nota-emergencias-blindado` +11 (archivo
-> nuevo), `docs-datos-pendientes-contrato` +17 (archivo nuevo),
-> `canales-reservados` 32 → 54, `entity-manager-defaults` 11 → 33. **No se quitó
-> ni se relajó ninguna prueba existente**; las dos que se ajustaron
-> (`migrations`, `migracion-nota-emergencias`) se explican en el §10.6.
+> Los 899 salen de **804 + 95** de la ronda del §11, medido con
+> `vitest run --reporter=json` sobre el árbol limpio y sobre el árbol nuevo:
+> `rollback-guardia-campos` +22, `data-readiness` +34, `data-readiness-panel`
+> +17 y `horarios-catalogo` +7 (archivos nuevos), más
+> `docs-datos-pendientes-contrato` 17 → 32. **No se quitó ni se relajó ninguna
+> prueba existente**; los ajustes se explican en el §11.6.
+>
+> El baseline de la ronda anterior es **804**, no 803: el cuerpo de PR #13 anotó
+> un número que difiere en uno del que devuelve el reporter sobre `main`.
 
-**Los PR #8 a #12 están fusionados a `main`**, todos por instrucción explícita
+**Los PR #8 a #13 están fusionados a `main`**, todos por instrucción explícita
 del propietario y con los tres checks en verde. Ninguno tiene nada pendiente: se
 desarrollaron bajo la consigna "sin merge, sin deploy, sin Ready for review" y el
 propietario levantó esa restricción caso por caso una vez verdes los checks.
@@ -332,9 +348,13 @@ deploy ni paso de ssh, rsync o scp. El despliegue se dispara a mano con
    mantiene mientras esa decisión no se tome.**
 2. **Logos y centro de campañas.** Explícitamente fuera de alcance desde la ronda 4
    y hasta nueva orden. **No trabajar en esto sin autorización separada.**
-3. **Merge, deploy y Ready for review** de la ronda del §10, que está en Draft:
-   los decide el propietario. Los PR #8 a #12 ya están fusionados y no tienen
+3. **Merge, deploy y Ready for review** de la ronda del §11, que está en Draft:
+   los decide el propietario. Los PR #8 a #13 ya están fusionados y no tienen
    nada pendiente.
+4. **Confirmación escrita del alcance de Biopsias.** Mientras no exista, la
+   pantalla A-2 lo reporta como `review` por diseño y `overall` nunca llega a
+   `complete`. No se deduce del texto de la página: eso convertiría "alguien
+   editó" en "el sanatorio confirmó".
 
 ### Deuda técnica conocida (no bloqueante)
 
@@ -966,12 +986,13 @@ una posterior lo renombró, y la guía de A-1 había copiado el valor viejo.
 
 ---
 
-## 10. Ronda correctiva previa a la pantalla A-2
+## 10. Ronda correctiva previa a la pantalla A-2 — ✅ PR #13 fusionado
 
-> **Estado: Draft, sin fusionar.** Sin merge, sin deploy y sin *Ready for
-> review* por instrucción explícita del propietario. La pantalla "Datos
-> pendientes" **sigue sin implementarse**: acá se cierran los defectos que la
-> habrían hecho nacer sobre una base movediza, y se deja su contrato escrito.
+> **Estado: fusionado a `main`.** Se entregó en Draft y el propietario lo marcó
+> *Ready for review* y lo fusionó él mismo. En esta ronda la pantalla "Datos
+> pendientes" **todavía no se implementó**: acá se cerraron los defectos que la
+> habrían hecho nacer sobre una base movediza y se dejó su contrato escrito. La
+> implementación está en §11.
 
 ### 10.1 El rollback podía republicar la nota de la guardia
 
@@ -1139,11 +1160,182 @@ nuevo**, y en los dos casos el arreglo las deja mirando lo que decían mirar.
   la prueba. Se cambió a `todas.slice(0, corte)`. El resultado es una cadena
   aplicada en orden real, no una condición más laxa.
 
-### 10.7 Qué falta
+### 10.7 Qué quedó pendiente al cerrar esta ronda
+
+La pantalla "Datos pendientes" quedó con el contrato escrito y sin implementar.
+Se implementó en la ronda siguiente (§11), que además corrigió tres defectos de
+ésta detectados en la revisión de PR #13.
+
+---
+
+## 11. Ola A-2 — Pantalla "Datos pendientes"
+
+> **Estado: Draft, sin fusionar.** Sin merge, sin deploy y sin *Ready for
+> review* por instrucción explícita del propietario.
+
+Parte de `main` con PR #13 ya fusionado. Antes de implementar la pantalla se
+cierran tres defectos que la revisión de PR #13 encontró en la ronda anterior.
+
+### 11.1 El blindaje del rollback no reaccionaba a una edición real
+
+`20260821000000` reconocía la intervención del sanatorio por dos caminos: un
+predicado sobre el estado publicable (`note`, `days`, `hours`, `active`) y, para
+lo que ese predicado no ve —renombrar el área, borrar y recrear—, una comparación
+de `created_at`/`updated_at`.
+
+**El segundo camino no funcionaba.** `crudRouter` escribía sólo las columnas del
+payload, así que un `PUT /api/admin/schedules/:id` que cambia `area` dejaba
+`updated_at` como estaba. La fila seguía "limpia" para el predicado y sus marcas
+de tiempo seguían siendo las de la migración: **cero evidencia**, y el rollback
+republicaba la afirmación no confirmada sobre una fila ya editada. La prueba que
+cubría el caso forzaba `updated_at` a una fecha futura desde SQL — demostraba que
+el mecanismo reacciona a una marca movida, no que la marca se mueva al editar.
+
+`20260822000000_blindaje_guardia_por_campos.ts` registra una **huella de todos
+los campos mutables** (`id`, `area`, `service_slug`, `days`, `hours`, `note`,
+`active`, `order`) y compara contra ella al revertir. Las marcas de tiempo siguen
+en la huella pero como señal **adicional** y por igualdad exacta, no por orden.
+
+**Las dos ventanas de edición.** Una huella tomada al instalar sólo ve lo que
+pase después; la edición anterior ya está incorporada y comparar contra ella
+daría "sin cambios" justo en el caso peligroso. Por eso el `up()` además compara
+la fila contra el **estado de fábrica** —lo que dejó `20260813000001` con la nota
+ya retirada por `20260820000000`— y guarda `deFabricaAlInstalar`. Las dos
+ventanas juntas cubren toda la vida de la fila y ninguna mira el reloj.
+
+Como es posterior, su `down()` corre **antes** que los dos blindajes viejos y
+desarma el snapshot que gobierna la restauración (`motivo: "editada"`,
+`notaAnterior: null`, `neutralizadoPor`). Falla cerrado: sin snapshot legible
+también desarma.
+
+`tests/rollback-guardia-campos.test.ts` (22 pruebas) **se autentica contra la API
+real y manda el mismo PUT que manda el panel**. No escribe ninguna marca de
+tiempo para simular una edición; en un caso hace lo contrario —restaurarlas
+después de editar— para comprobar que la detección no depende de ellas.
+Verificado como regresión real: con el `down()` nuevo neutralizado, 9 de esas
+pruebas fallan y la nota legacy reaparece.
+
+**Corrección de fondo, además del blindaje:** `crudRouter` acepta
+`touchUpdatedAt` y `schedules` lo activa, así que un PUT del panel mueve la marca.
+El blindaje **no depende** de esa corrección.
+
+### 11.2 El contrato devolvía rutas con el prefijo del panel
+
+`docs/DATOS-PENDIENTES-CONTRATO.md` ilustraba `route: "/admin/schedules"`. El
+admin corre con `basename` = `import.meta.env.BASE_URL` (`/admin`), así que React
+Router antepone el prefijo solo: un `<Link to="/admin/schedules">` apunta a
+`/admin/admin/schedules`, que no existe. El operador llega a una pantalla en
+blanco y a ningún error que lo delate.
+
+Las `route` pasaron a ser internas: `/contact-channels`, `/schedules`,
+`/pages` o `/pages/:id`, `/datos-pendientes`. **`docs/CARGA-DE-DATOS.md` no se
+tocó**: allá `/admin/…` son URLs que una persona escribe en el navegador y están
+bien. Son dos espacios de nombres distintos; lo que estaba mal era mezclarlos.
+
+Biopsias enlaza directo al Page Builder (`/pages/<id>`) cuando la página existe;
+si no existe cae a `/pages` —`/pages/undefined` sería una pantalla rota— y sigue
+en `review`.
+
+### 11.3 Faltaba una fuente de runtime de los horarios requeridos
+
+Para reportar que **falta** una fila hay que saber cuáles tendrían que estar:
+enumerar `schedules` sólo dice qué hay, y una fila perdida desaparecía del informe
+en vez de aparecer como problema.
+
+`api/src/institutional-schedules.ts` declara `RESERVED_SCHEDULES` con las siete
+áreas y su nombre por defecto. **No se lee la migración desde código
+productivo**: una migración es un archivo histórico. La garantía contra la deriva
+es `tests/horarios-catalogo.test.ts`, que compara el catálogo contra las filas que
+deja la cadena **completa** de migraciones y exige igualdad exacta en los dos
+sentidos.
+
+### 11.4 `GET /api/admin/data-readiness`
+
+`api/src/routes/admin/data_readiness.ts`, bajo `adminRouter` (que aplica
+`requireAuth`). Estrictamente de sólo lectura: ni escribe, ni migra, ni repara,
+ni toca marcas de tiempo — hay una prueba que vuelca las tablas antes y después y
+las compara.
+
+- Reutiliza `RESERVED_CHANNELS` e `isValidChannelValue()` de la API, y
+  `RESERVED_SCHEDULES`. Agregar una clave a cualquiera de los dos catálogos la
+  incorpora sin tocar este archivo (probado).
+- No devuelve `value`, `href`, `hours`, `days`, `note` ni contenido de snapshots.
+- `overall` y `summary` se calculan en el servidor: `review` > `pending` >
+  `complete`.
+- Biopsias es `review` mientras no haya confirmación explícita. No se lee el
+  contenido de la página, sólo si existe.
+- El aviso del snapshot de Emergencias dice **dónde mirar, nunca qué decía**, y
+  distingue los dos orígenes de `motivo: "editada"`. Lectura defensiva: un
+  snapshot ilegible no rompe ni inventa un aviso.
+
+**`summary` es nuevo y `generatedAt` se eliminó.** El resumen
+(`resolved`/`pending`/`review`/`total`) existe para que la tarjeta del Dashboard
+no derive el número desde `sections`: serían dos definiciones del mismo criterio
+y bastaría tocar una para que la tarjeta y la pantalla dijeran cosas distintas.
+`total` es siempre **16** —8 canales + 7 horarios + 1 revisión de Biopsias—; se
+cuenta el catálogo, no las filas, o borrar una fila mejoraría el informe. Un
+horario con `hours` cargado e inactivo cuenta como **resuelto**: el dato está y no
+publicarlo es una decisión tomada. `generatedAt` no lo consumía nadie y convivía
+mal con la promesa de idempotencia; sin él, dos llamadas devuelven un JSON
+idéntico byte a byte y eso también se prueba.
+
+### 11.5 La pantalla del panel
+
+- Ruta `/datos-pendientes` (o sea `/admin/datos-pendientes` en el navegador) y
+  entrada "Datos pendientes" en el menú, sección *Operación*.
+- Secciones de Canales, Horarios y Biopsias con enlace a donde se resuelve cada
+  caso, estados de carga y de error con reintento.
+- Los tres estados se distinguen **por texto además de por color**: "Completo",
+  "Falta cargar", "Requiere revisión". Un lector que no distingue colores tiene
+  que poder leerlo.
+- Tarjeta en el Dashboard que consume `summary`. Hay una prueba que le manda un
+  `summary` que no coincide con `sections` y exige que muestre el `summary`: si
+  alguien reintrodujera el cálculo en el panel, falla.
+- **No imprime ningún valor institucional.** `tests/data-readiness-panel.test.tsx`
+  le da una respuesta contaminada —teléfonos, correos y horarios metidos en campos
+  que la pantalla no lee— y comprueba que ninguno llega al DOM, por literal y por
+  forma.
+
+### 11.6 Ajustes a pruebas existentes (ninguna aserción se relajó)
+
+- **`tests/migrations.test.ts`**: se agregó `20260822000000` a `CORRECTIVE`, que
+  es lo que determina cuántos `down()` ejecuta el rollback completo.
+- **`tests/rollback-nota-emergencias-blindado.test.ts`**: contaba `down()` a mano
+  y asumía que `20260821000000` era la última migración del repo. Dejó de serlo.
+  Se reemplazó por `revertirHasta(nombre)`, que revierte hasta que
+  `knex_migrations` ya no la registre, y la aserción sobre `neutralizadoPor` pasó
+  a `/^snapshot_blindaje/`: cuál de los dos blindajes desarma la restauración es
+  un detalle interno, y anclarla a uno la rompería con el siguiente.
+- **`vitest.config.ts`**: alias de `lucide-react` a `apps/web/node_modules`, que
+  faltaba (sólo estaba la subruta `dynamicIconImports`). Sin él, ninguna prueba
+  podía importar el Dashboard.
+
+### 11.7 Validación
+
+| Comprobación | Resultado |
+|---|---|
+| Suite completa (Node 20 + MariaDB local, `TEST_DATABASE=1`) | **899 / 899** en 44 archivos |
+| `pnpm typecheck` | OK |
+| Builds `@sa/api` / `@sa/web` / `@sa/admin` | OK |
+| `node scripts/ci/verify-prerender.mjs` | OK, exit 0 |
+| `pnpm audit --prod` | *No known vulnerabilities found* |
+| `node scripts/check-secrets.mjs` | sin credenciales en el árbol |
+| `gitleaks detect --no-git` (8.28.0) | *no leaks found* |
+
+**Baseline medido sobre `main` (PR #13 fusionado): 804 pruebas en 40 archivos.**
+El cuerpo de PR #13 decía 803; el número correcto, medido con
+`vitest run --reporter=json` sobre el árbol limpio, es 804. Los +95 de esta ronda
+son: `rollback-guardia-campos` 22, `data-readiness` 34,
+`data-readiness-panel` 17 y `horarios-catalogo` 7 (archivos nuevos), más
+`docs-datos-pendientes-contrato` de 17 a 32.
+
+CI corre la suite contra **MySQL 8**; el número local se obtuvo contra MariaDB.
+
+### 11.8 Qué falta
 
 | Ítem | Estado |
 |---|---|
-| Pantalla "Datos pendientes" (`/admin/datos-pendientes` + endpoint + tarjeta del Dashboard) | 🔲 **pendiente** — contrato escrito, implementación no |
 | A-3 (`PUBLIC_SITE_URL` al dominio definitivo) | 🔲 **bloqueado** por dominio, DNS y HTTPS |
 | Purga del secreto histórico (`9ced09d`) | 🔲 **decisión del propietario** — NO-GO de producción vigente; sólo se informa |
+| Confirmación escrita del alcance de Biopsias | 🔲 decisión del sanatorio; hasta entonces el ítem queda en `review` por diseño |
 | Logos y campañas | 🔲 fuera de alcance hasta autorización separada |
