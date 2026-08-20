@@ -23,11 +23,13 @@ export default defineConfig({
       // directamente (los componentes las resuelven solos, un archivo de
       // prueba en la raíz no).
       "react-router-dom": path.resolve(__dirname, "apps/web/node_modules/react-router-dom"),
-      // lucide-react es dependencia de apps/web, no de la raíz.
+      // lucide-react es dependencia de apps/web, no de la raíz. La subruta va
+      // antes que el paquete: el matcher es por prefijo y gana la primera.
       "lucide-react/dynamicIconImports": path.resolve(
         __dirname,
         "apps/web/node_modules/lucide-react/dynamicIconImports.js",
       ),
+      "lucide-react": path.resolve(__dirname, "apps/web/node_modules/lucide-react"),
     },
   },
   test: {

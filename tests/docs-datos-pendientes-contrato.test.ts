@@ -35,6 +35,10 @@ const PUBLICO = leer("api/src/routes/public.ts");
 const BLINDAJE = leer("api/migrations/20260821000000_blindar_rollback_nota_emergencias.ts");
 const VIEJA = leer("api/migrations/20260820000000_nota_emergencias_no_confirmada.ts");
 const HORARIOS = leer("api/migrations/20260813000001_schedules.ts");
+const ENDPOINT = leer("api/src/routes/admin/data_readiness.ts");
+const CATALOGO_HORARIOS = leer("api/src/institutional-schedules.ts");
+const CARGA = leer("docs/CARGA-DE-DATOS.md");
+const PANTALLA = leer("apps/admin/src/pages/DataReadinessPage.tsx");
 
 describe("el contrato reutiliza lo que ya existe", () => {
   it("nombra el catálogo institucional de la API, no uno nuevo", () => {
@@ -149,5 +153,131 @@ describe("el contrato no inventa datos del cliente", () => {
   it("dice que es de sólo lectura", () => {
     expect(PROSA).toMatch(/s[óo]lo lectura/i);
     expect(PROSA).toMatch(/ni escribe, ni migra, ni repara/i);
+  });
+});
+
+describe("las rutas del contrato son internas del panel", () => {
+  /** El bloque de ejemplo con la forma de la respuesta. */
+  const EJEMPLO = CONTRATO.slice(CONTRATO.indexOf("```jsonc"), CONTRATO.indexOf("```", CONTRATO.indexOf("```jsonc") + 8));
+
+  it("el ejemplo de respuesta no devuelve ninguna ruta con prefijo /admin", () => {
+    // Bajo `basename="/admin"` React Router antepone el prefijo solo:
+    // devolverlo también daría /admin/admin/… y una pantalla en blanco.
+    const rutas = [...EJEMPLO.matchAll(/"route":\s*"([^"]+)"/g)].map((m) => m[1]);
+    expect(rutas.length).toBeGreaterThan(0);
+    for (const ruta of rutas) {
+      expect(ruta, `${ruta} se duplicaría bajo basename`).not.toMatch(/^\/admin(\/|$)/);
+    }
+    expect(rutas).toContain("/contact-channels");
+    expect(rutas).toContain("/schedules");
+  });
+
+  it("explica por qué, nombrando el basename real del admin", () => {
+    expect(PROSA).toMatch(/basename/);
+    expect(PROSA).toMatch(/\/admin\/admin/);
+    expect(leer("apps/admin/src/main.tsx")).toContain("basename");
+  });
+
+  it("el endpoint devuelve esas mismas rutas", () => {
+    expect(ENDPOINT).toContain('"/contact-channels"');
+    expect(ENDPOINT).toContain('"/schedules"');
+    expect(ENDPOINT).toContain('"/pages"');
+    // Ninguna constante de ruta con el prefijo puesto.
+    expect(ENDPOINT).not.toMatch(/"\/admin\//);
+  });
+
+  it("la pantalla existe en el router del panel con la ruta del contrato", () => {
+    expect(CONTRATO).toContain("/datos-pendientes");
+    expect(leer("apps/admin/src/App.tsx")).toContain('path="datos-pendientes"');
+    expect(leer("apps/admin/src/components/AdminLayout.tsx")).toContain('to: "/datos-pendientes"');
+  });
+
+  it("la guía operativa conserva sus URLs /admin/…, que son de otra cosa", () => {
+    // Allá son direcciones que una persona escribe en el navegador y están
+    // bien; corregirlas "por consistencia" rompería la guía.
+    expect(CARGA).toMatch(/\/admin\//);
+    expect(PROSA).toMatch(/CARGA-DE-DATOS\.md/);
+  });
+});
+
+describe("el resumen global y la idempotencia", () => {
+  it("documenta summary con sus cuatro campos", () => {
+    for (const campo of ["resolved", "pending", "review", "total"]) {
+      expect(CONTRATO, `summary sin ${campo}`).toContain(`"${campo}"`);
+    }
+    expect(PROSA).toMatch(/8 canales \+ 7 horarios \+ 1 Biopsias|ocho canales.*siete [áa]reas/i);
+  });
+
+  it("el endpoint arma el resumen y el panel no lo recalcula", () => {
+    expect(ENDPOINT).toContain("const summary = {");
+    expect(ENDPOINT).toContain("resolved:");
+    // La pantalla lee summary; si volviera a derivarlo de sections, la tarjeta
+    // y la pantalla podrían decir cosas distintas.
+    expect(PANTALLA).toMatch(/summary\./);
+  });
+
+  it("un horario cargado e inactivo cuenta como resuelto, y está escrito", () => {
+    expect(PROSA).toMatch(/inactivo cuenta como resuelto|`hours` cargado e inactivo cuenta/i);
+    expect(ENDPOINT).toMatch(/i\.status === "complete" \|\| i\.status === "inactive"/);
+  });
+
+  it("no queda ningún generatedAt: ni en el contrato, ni en el endpoint", () => {
+    // Un timestamp adentro hacía que "dos llamadas devuelven lo mismo" dejara
+    // de ser cierto al pie de la letra. Nadie lo consumía.
+    expect(ENDPOINT).not.toContain("generatedAt");
+    expect(CONTRATO).toMatch(/No hay `generatedAt`/);
+    expect(CONTRATO).not.toMatch(/"generatedAt":/);
+  });
+});
+
+describe("el catálogo de horarios es de runtime, no de una migración", () => {
+  it("el contrato lo nombra y el módulo existe", () => {
+    expect(CONTRATO).toContain("RESERVED_SCHEDULES");
+    expect(CATALOGO_HORARIOS).toContain("export const RESERVED_SCHEDULES");
+    expect(ENDPOINT).toContain("RESERVED_SCHEDULES");
+  });
+
+  it("declara las mismas siete claves que crea la migración", () => {
+    const enMigracion = [...HORARIOS.matchAll(/key: "([a-z-]+)", area:/g)].map((m) => m[1]);
+    const enCatalogo = [...CATALOGO_HORARIOS.matchAll(/^\s+"?([a-z-]+)"?:\s*"/gm)].map((m) => m[1]);
+    expect(enMigracion).toHaveLength(7);
+    expect(enCatalogo.sort()).toEqual(enMigracion.sort());
+  });
+
+  it("ningún código productivo importa una migración", () => {
+    const fuentes = import.meta.glob("../api/src/**/*.ts", {
+      query: "?raw",
+      import: "default",
+      eager: true,
+    }) as Record<string, string>;
+
+    const culpables = Object.entries(fuentes)
+      .filter(([, code]) => /from\s+["'].*migrations\//.test(code))
+      .map(([p]) => p);
+    expect(culpables).toEqual([]);
+  });
+});
+
+describe("el endpoint cumple las prohibiciones del contrato", () => {
+  it("no selecciona ni menciona los campos que no puede devolver", () => {
+    // `value` y `hours` sí se leen para calcular el estado; lo que no puede
+    // pasar es que salgan en la respuesta. Se comprueba que el objeto que se
+    // serializa no los nombre como clave.
+    const salida = ENDPOINT.slice(ENDPOINT.indexOf("res.json({"));
+    for (const campo of ["value:", "hours:", "days:", "note:", "href:", "notaAnterior"]) {
+      expect(salida, `la respuesta arma ${campo}`).not.toContain(campo);
+    }
+  });
+
+  it("no escribe: ni update, ni insert, ni delete", () => {
+    for (const escritura of [".update(", ".insert(", ".del(", ".delete("]) {
+      expect(ENDPOINT, `el endpoint hace ${escritura}`).not.toContain(escritura);
+    }
+  });
+
+  it("Biopsias no se deduce del contenido de la página", () => {
+    // No se lee ningún bloque ni ningún texto: sólo si la página existe.
+    expect(ENDPOINT).not.toContain('"blocks"');
+    expect(ENDPOINT).toContain('status: "review" as const');
   });
 });

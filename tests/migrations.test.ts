@@ -41,6 +41,7 @@ const CORRECTIVE = [
   "20260819000000_retirar_scripts.ts",
   "20260820000000_nota_emergencias_no_confirmada.ts",
   "20260821000000_blindar_rollback_nota_emergencias.ts",
+  "20260822000000_blindaje_guardia_por_campos.ts",
 ];
 
 describeDb("migraciones", () => {

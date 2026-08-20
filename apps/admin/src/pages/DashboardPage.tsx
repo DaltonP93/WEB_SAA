@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { Mail, Stethoscope, HeartPulse, FileText, type LucideIcon } from "lucide-react";
+import { Mail, Stethoscope, HeartPulse, FileText, ClipboardList, type LucideIcon } from "lucide-react";
 import { api } from "../api";
+import type { Readiness } from "./DataReadinessPage";
 
 const SITE_URL = (import.meta.env.VITE_PUBLIC_SITE_URL as string | undefined) ?? window.location.origin;
 
@@ -45,6 +46,64 @@ function Stat({
   );
 }
 
+const ESTADO: Record<Readiness["overall"], { texto: string; chip: string }> = {
+  complete: { texto: "Completo", chip: "bg-emerald-100 text-emerald-800 border-emerald-200" },
+  pending: { texto: "Falta cargar", chip: "bg-amber-100 text-amber-900 border-amber-200" },
+  review: { texto: "Requiere revisión", chip: "bg-red-100 text-red-800 border-red-200" },
+};
+
+/**
+ * Estado de carga de los datos institucionales, en la primera pantalla.
+ *
+ * Los números salen tal cual de `summary`: el servidor ya decidió qué cuenta
+ * como resuelto, qué falta cargar y qué necesita que una persona lo mire.
+ * Recalcularlo desde `sections` sería una segunda definición del mismo criterio
+ * —y la tarjeta y la pantalla terminarían diciendo cosas distintas—.
+ */
+function ReadinessCard() {
+  const q = useQuery<Readiness>({
+    queryKey: ["adm-data-readiness"],
+    queryFn: async () => (await api.get("/admin/data-readiness")).data,
+  });
+
+  if (q.isError) return null;
+
+  const estado = q.data ? ESTADO[q.data.overall] : null;
+
+  return (
+    <Link
+      to="/datos-pendientes"
+      className="card p-5 mb-6 block hover:shadow-lg hover:-translate-y-0.5 transition-all duration-200"
+    >
+      <div className="flex items-center gap-3">
+        <div className="w-8 h-8 rounded-md bg-primary/10 text-primary flex items-center justify-center">
+          <ClipboardList className="w-4 h-4" />
+        </div>
+        <div className="text-sm font-semibold">Datos pendientes</div>
+        {estado && (
+          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full border ${estado.chip}`}>
+            {estado.texto}
+          </span>
+        )}
+        <span className="ml-auto text-xs text-brand">Ver detalle →</span>
+      </div>
+
+      {q.isLoading || !q.data ? (
+        <div className="h-9 w-40 mt-3 bg-gray-200 rounded animate-pulse" />
+      ) : (
+        <>
+          <div className="text-3xl font-bold text-brand tabular-nums mt-2">
+            {q.data.summary.resolved} / {q.data.summary.total}
+          </div>
+          <div className="text-xs text-gray-500 mt-1">
+            {q.data.summary.pending} sin cargar · {q.data.summary.review} para revisar
+          </div>
+        </>
+      )}
+    </Link>
+  );
+}
+
 export default function DashboardPage() {
   const msgs = useQuery({ queryKey: ["adm-msg"], queryFn: async () => (await api.get("/admin/contact-messages")).data });
   const docs = useQuery({ queryKey: ["adm-doctors"], queryFn: async () => (await api.get("/admin/doctors")).data });
@@ -67,6 +126,8 @@ export default function DashboardPage() {
   return (
     <div>
       <h1 className="text-2xl font-bold mb-6">Inicio</h1>
+
+      <ReadinessCard />
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <Stat to="/messages" label="Mensajes nuevos" value={messagesNew} loading={msgs.isLoading} icon={Mail} />

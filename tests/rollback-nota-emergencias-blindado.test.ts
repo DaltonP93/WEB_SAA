@@ -55,11 +55,32 @@ describeDb("blindaje del rollback de la nota de la guardia", () => {
     } as never;
   };
 
+  /**
+   * Revierte hasta deshacer `nombre`, sea cuál sea su posición en la cadena.
+   *
+   * Contar los `down()` a mano ataba estas pruebas a que el blindaje fuera la
+   * última migración del repo. Dejó de serlo en cuanto se sumó
+   * `20260822000000`, y entonces un `down()` revertía otra cosa: las
+   * aserciones seguían pasando o fallando por motivos que ya no eran los que
+   * decían mirar.
+   */
+  const revertirHasta = async (nombre: string) => {
+    for (let i = 0; i < 20; i++) {
+      const aplicada = await db("knex_migrations").where({ name: nombre }).first();
+      if (!aplicada) return;
+      await db.migrate.down({ migrationSource } as never);
+    }
+    throw new Error(`no se pudo revertir ${nombre} en 20 pasos`);
+  };
+
   beforeAll(async () => {
     db = await createTestDatabase(DB_NAME);
     todas = await migrationSource.getMigrations();
-    expect(todas.at(-1), "la nueva tiene que ser la última").toBe(NUEVA);
-    expect(todas.at(-2)).toBe(VIEJA);
+    expect(todas, "el blindaje tiene que estar en la cadena").toContain(NUEVA);
+    expect(
+      todas.indexOf(NUEVA),
+      "el blindaje tiene que correr después de la correctiva que blinda",
+    ).toBeGreaterThan(todas.indexOf(VIEJA));
   }, 120_000);
 
   afterAll(async () => {
@@ -90,8 +111,7 @@ describeDb("blindaje del rollback de la nota de la guardia", () => {
     }, 240_000);
 
     it("la nota legacy NO reaparece al revertir las dos migraciones", async () => {
-      await db.migrate.down({ migrationSource } as never); // la nueva
-      await db.migrate.down({ migrationSource } as never); // la vieja
+      await revertirHasta(VIEJA);
 
       const f = await fila();
       expect(f.note ?? "", "se republicó una afirmación no confirmada").toBe("");
@@ -101,12 +121,17 @@ describeDb("blindaje del rollback de la nota de la guardia", () => {
     }, 240_000);
 
     it("el snapshot viejo queda desarmado y con la marca de quién lo hizo", async () => {
-      await db.migrate.down({ migrationSource } as never);
+      // Se revierten los blindajes y se para justo antes de la correctiva: es
+      // el momento en que su restauración automática ya tiene que estar
+      // desarmada. Cuál de los blindajes lo hizo es un detalle interno —hoy es
+      // el de campos, que corre primero— y anclar la prueba a uno concreto la
+      // volvería a romper con el siguiente.
+      await revertirHasta(NUEVA);
 
       const viejo = await snap(SNAP_VIEJO);
       expect(viejo.motivo).toBe("editada");
       expect(viejo.notaAnterior).toBeNull();
-      expect(viejo.neutralizadoPor).toBe(SNAP_NUEVO);
+      expect(viejo.neutralizadoPor).toMatch(/^snapshot_blindaje/);
     }, 240_000);
   });
 
@@ -145,8 +170,7 @@ describeDb("blindaje del rollback de la nota de la guardia", () => {
       await intervenir(db);
       await db.migrate.latest({ migrationSource });
 
-      await db.migrate.down({ migrationSource } as never);
-      await db.migrate.down({ migrationSource } as never);
+      await revertirHasta(VIEJA);
 
       expect((await fila())?.note ?? "").toBe("");
     }, 240_000);
@@ -158,10 +182,10 @@ describeDb("blindaje del rollback de la nota de la guardia", () => {
       // tocó la fila, revertir tiene que devolver exactamente el estado previo.
       await db.migrate.latest({ migrationSource });
 
-      await db.migrate.down({ migrationSource } as never); // la nueva
+      await revertirHasta(NUEVA); // todos los blindajes, ninguno más
       expect((await snap(SNAP_VIEJO)).motivo, "no había evidencia: no se desarma").toBe("limpiada");
 
-      await db.migrate.down({ migrationSource } as never); // la vieja
+      await revertirHasta(VIEJA);
       expect((await fila()).note).toBe(NOTA_LEGACY);
     }, 240_000);
   });
