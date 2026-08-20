@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "../api";
 import LucideIcon from "./LucideIcon";
 
-type NavItem = { to: string; label: string; icon: string; end?: boolean; badge?: "msg" };
+type NavItem = { to: string; label: string; icon: string; end?: boolean; badge?: "msg" | "turnos" };
 
 const TOP: NavItem = { to: "/", label: "Inicio", icon: "home", end: true };
 
@@ -25,6 +25,7 @@ const SECTIONS: { title: string; items: NavItem[] }[] = [
   {
     title: "Operación",
     items: [
+      { to: "/turnos", label: "Turnos", icon: "calendar-check", badge: "turnos" },
       { to: "/datos-pendientes", label: "Datos pendientes", icon: "clipboard-list" },
       { to: "/messages", label: "Mensajes", icon: "mail", badge: "msg" },
     ],
@@ -42,9 +43,17 @@ export default function AdminLayout() {
   const nav = useNavigate();
 
   const msgs = useQuery({ queryKey: ["adm-msg"], queryFn: async () => (await api.get("/admin/contact-messages")).data });
+  // El contador sale del `total` del servidor, no del largo de la lista: la
+  // respuesta viene acotada por un límite y contar lo que llegó daría de menos
+  // en cuanto haya más solicitudes pendientes que el tope de una página.
+  const turnos = useQuery({
+    queryKey: ["adm-appointments", { status: "pendiente", from: "", to: "" }],
+    queryFn: async () => (await api.get("/admin/appointments?status=pendiente")).data,
+  });
 
   const msgCount = ((msgs.data ?? []) as any[]).filter((m) => m.status === "nuevo").length;
-  const badges: Record<string, number> = { msg: msgCount };
+  const turnosCount = Number((turnos.data as { total?: number } | undefined)?.total ?? 0);
+  const badges: Record<string, number> = { msg: msgCount, turnos: turnosCount };
 
   function logout() {
     localStorage.removeItem("token");

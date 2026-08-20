@@ -289,7 +289,24 @@ describeDb("migraciones correctivas frente a ediciones del cliente", () => {
     }
 
     // Una por una y en orden inverso: rollback() volvería el batch entero.
-    for (let i = 0; i < CORRECTIVE.length; i++) await migrateDown(db);
+    //
+    // Se revierte **hasta deshacer la primera correctiva**, no un número fijo
+    // de pasos. Contar `CORRECTIVE.length` ataba esta prueba a que la lista
+    // enumerara todas las migraciones posteriores al corte: en cuanto se sumó
+    // una que no era correctiva, el bucle se quedó corto y dejó
+    // `20260814000000` aplicada. El snapshot "después" traía entonces las
+    // descripciones ya corregidas y el diff acusaba al rollback de no
+    // restaurar, por un defecto que estaba en la cuenta y no en las
+    // migraciones.
+    for (let i = 0; i < 40; i++) {
+      const aplicada = await db("knex_migrations").where({ name: CORRECTIVE[0] }).first();
+      if (!aplicada) break;
+      await migrateDown(db);
+    }
+    expect(
+      await db("knex_migrations").where({ name: CORRECTIVE[0] }).first(),
+      "no se llegó a revertir la primera correctiva",
+    ).toBeUndefined();
 
     const after = await contentSnapshot(db);
     // El diff de vitest sobre dos snapshots completos es ilegible; con

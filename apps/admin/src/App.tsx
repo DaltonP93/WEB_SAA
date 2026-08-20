@@ -13,6 +13,7 @@ import StudiesPage from "./pages/StudiesPage";
 import ContactChannelsPage from "./pages/ContactChannelsPage";
 import SchedulesPage from "./pages/SchedulesPage";
 import DataReadinessPage from "./pages/DataReadinessPage";
+import AppointmentsPage from "./pages/AppointmentsPage";
 import MenusPage from "./pages/MenusPage";
 import ContactMessagesPage from "./pages/ContactMessagesPage";
 import MediaPage from "./pages/MediaPage";
@@ -42,6 +43,7 @@ export const routes = createRoutesFromElements(
       <Route path="schedules" element={<SchedulesPage />} />
       <Route path="datos-pendientes" element={<DataReadinessPage />} />
       <Route path="menus" element={<MenusPage />} />
+      <Route path="turnos" element={<AppointmentsPage />} />
       <Route path="messages" element={<ContactMessagesPage />} />
       <Route path="media" element={<MediaPage />} />
       <Route path="users" element={<UsersPage />} />

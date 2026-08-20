@@ -6,7 +6,7 @@ import { rateLimit } from "../rate-limit.js";
 import { captchaPublicConfig, verifyCaptcha } from "../captcha.js";
 import { publicChannelValues } from "../contact-values.js";
 import { isEmergencyCta } from "../institutional-red.js";
-import { badRequest, notFound } from "../http.js";
+import { HttpError, badRequest, notFound } from "../http.js";
 
 export const publicRouter = Router();
 
@@ -250,9 +250,70 @@ const appointmentSchema = z.object({
   preferredAt: z.string().trim().max(40).optional(),
   message: plainText(2000).optional(),
   captchaToken: z.string().max(4000).optional(),
+  /**
+   * Aceptación explícita del uso de los datos para gestionar la solicitud.
+   *
+   * `literal(true)` y no `boolean()`: un `false`, un `"no"` o la ausencia del
+   * campo tienen que fallar igual. Sin esto, un cliente que no dibuje la
+   * casilla registraría solicitudes sin consentimiento y nada lo delataría.
+   */
+  consent: z.literal(true, {
+    errorMap: () => ({ message: "hay que aceptar el uso de los datos para gestionar la solicitud" }),
+  }),
+  /**
+   * Clave del intento, generada por el cliente.
+   *
+   * Identifica al formulario, no a la petición: el mismo formulario reenviado
+   * —doble clic, reintento del navegador, respuesta perdida— trae la misma
+   * clave y no puede crear una segunda solicitud.
+   */
+  submissionKey: z
+    .string()
+    .trim()
+    .min(8)
+    .max(64)
+    .regex(/^[A-Za-z0-9_-]+$/, "clave de envío inválida"),
   // Honeypot: si viene con contenido, es spam.
   website: z.string().max(200).optional(),
 });
+
+/** Momento preferido: se acepta vacío, pero si viene tiene que ser una fecha. */
+function parsePreferredAt(value: string | undefined): Date | null | undefined {
+  if (value === undefined || value.trim() === "") return null;
+  const t = new Date(value);
+  return Number.isFinite(t.getTime()) ? t : undefined;
+}
+
+/**
+ * Comprueba que el médico y la especialidad existan y se correspondan.
+ *
+ * Los dos ids llegan del cliente. Sin verificarlos, una solicitud puede quedar
+ * apuntando a un médico que no existe —la FK lo rechazaría con un 500— o, peor,
+ * a un médico real con una especialidad que no ejerce: eso no falla en ningún
+ * lado y le llega al operador como un dato plausible y equivocado.
+ */
+async function validarReferencias(doctorId?: number, specialtyId?: number): Promise<string | null> {
+  if (specialtyId !== undefined) {
+    const especialidad = await db("specialties").where({ id: specialtyId }).first("id");
+    if (!especialidad) return "la especialidad indicada no existe";
+  }
+  if (doctorId === undefined) return null;
+
+  const medico = await db("doctors").where({ id: doctorId }).first("id");
+  if (!medico) return "el médico indicado no existe";
+  if (specialtyId === undefined) return null;
+
+  const vinculo = await db("doctor_specialty")
+    .where({ doctor_id: doctorId, specialty_id: specialtyId })
+    .first();
+  return vinculo ? null : "el médico indicado no atiende esa especialidad";
+}
+
+/** ¿El error es el choque contra el índice único de `submission_key`? */
+function esClaveRepetida(err: unknown): boolean {
+  const e = err as { code?: string; errno?: number; message?: string };
+  return e?.code === "ER_DUP_ENTRY" || e?.errno === 1062;
+}
 
 /**
  * Saneo profundo de los props de un bloque.
@@ -393,16 +454,48 @@ publicRouter.post("/appointments", formsLimiter, async (req, res) => {
     throw badRequest("verificación anti-spam fallida");
   }
   const d = parsed.data;
-  const [id] = await db("appointments").insert({
+
+  const preferido = parsePreferredAt(d.preferredAt);
+  if (preferido === undefined) throw badRequest("payload invalido", { preferredAt: ["fecha inválida"] });
+
+  const problema = await validarReferencias(d.doctorId, d.specialtyId);
+  if (problema) throw badRequest(problema);
+
+  // Idempotencia, primer intento: si la clave ya está, se devuelve lo que hay.
+  const existente = await db("appointments").where({ submission_key: d.submissionKey }).first("id");
+  if (existente) return res.status(200).json({ id: existente.id, duplicate: true });
+
+  const fila = {
     name: d.name,
     phone: d.phone,
     email: d.email,
     specialty_id: d.specialtyId ?? null,
     doctor_id: d.doctorId ?? null,
-    preferred_at: d.preferredAt ?? null,
+    preferred_at: preferido,
     message: d.message ?? null,
-  });
-  res.status(201).json({ id });
+    submission_key: d.submissionKey,
+    consent_at: new Date(),
+  };
+
+  try {
+    const [id] = await db("appointments").insert(fila);
+    return res.status(201).json({ id });
+  } catch (err) {
+    // Idempotencia, segundo intento: dos peticiones simultáneas pasan las dos
+    // por el `select` de arriba y las dos insertan. El índice único deja pasar
+    // una sola; la que pierde encuentra acá la fila de la que ganó.
+    if (esClaveRepetida(err)) {
+      const fila = await db("appointments").where({ submission_key: d.submissionKey }).first("id");
+      if (fila) return res.status(200).json({ id: fila.id, duplicate: true });
+    }
+    // El error de mysql2 trae el SQL con los valores incrustados: nombre,
+    // teléfono, correo y mensaje del paciente. Loguearlo tal cual mandaría
+    // datos personales a los logs del servidor, así que se corta acá y sólo
+    // se conserva el código del motor.
+    const code = (err as { code?: string })?.code ?? "desconocido";
+    console.error(`[appointments] no se pudo registrar la solicitud (${code})`);
+    throw new HttpError(500, "no se pudo registrar la solicitud");
+  }
 });
 
 const contactSchema = z.object({

@@ -1,14 +1,52 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useSearchParams } from "react-router-dom";
-import { Loader2 } from "lucide-react";
+import { Link, useSearchParams } from "react-router-dom";
+import { AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { api } from "../api";
 import type { AppointmentFormProps } from "@sa/shared/blocks";
 import { CHANNEL_KEYS, waDigits, useContactChannels } from "../lib/contact-channels";
+import { irA } from "../lib/navigate";
+import Captcha, { useCaptchaConfig } from "../components/Captcha";
+
+/**
+ * Solicitud de turno: se registra y después sale a WhatsApp.
+ *
+ * WhatsApp sigue siendo el canal con el que se coordina el turno — el registro
+ * no lo reemplaza—. Lo que agrega es que la solicitud **exista** para el
+ * sanatorio aunque la conversación nunca ocurra: antes el formulario abría
+ * WhatsApp y no dejaba rastro de nada.
+ *
+ * El orden importa: primero el `201`, después la salida. Si se hiciera al
+ * revés, la navegación se lleva la página y el registro nunca termina.
+ *
+ * ## Lo que este formulario no puede hacer
+ *
+ * - **Perder lo que la persona escribió.** Si la API falla, el estado queda
+ *   intacto y se puede reintentar. Y queda una salida explícita —"Continuar
+ *   sólo por WhatsApp"— que dice con todas las letras que la solicitud no se
+ *   registró.
+ * - **Registrar dos veces.** Cada formulario lleva una clave de envío estable;
+ *   el doble clic, el reintento y la respuesta perdida traen la misma y la API
+ *   devuelve la solicitud que ya existe.
+ * - **Guardar nada en el navegador.** Ni el borrador, ni el token del CAPTCHA.
+ */
 
 const inputClass =
   "border rounded px-3 py-2 w-full bg-white focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition";
+
+/** Clave de envío del intento. Aleatoria, opaca y sin ningún dato adentro. */
+function nuevaClave(): string {
+  const c = globalThis.crypto;
+  if (c && typeof c.randomUUID === "function") return c.randomUUID();
+  if (c && typeof c.getRandomValues === "function") {
+    const bytes = c.getRandomValues(new Uint8Array(16));
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+const VACIO = { name: "", phone: "", email: "", specialtyId: "", preferredAt: "", message: "" };
 
 export default function AppointmentForm({ heading = "Solicitar turno", defaultSpecialtyId }: AppointmentFormProps) {
   const [searchParams] = useSearchParams();
@@ -26,12 +64,25 @@ export default function AppointmentForm({ heading = "Solicitar turno", defaultSp
   });
 
   const [form, setForm] = useState({
-    name: "",
+    ...VACIO,
     specialtyId: defaultSpecialtyId ? String(defaultSpecialtyId) : "",
-    preferredAt: "",
-    message: "",
   });
-  const [submitting, setSubmitting] = useState(false);
+  const [consent, setConsent] = useState(false);
+  /** Honeypot: los bots lo completan, las personas no lo ven. */
+  const [website, setWebsite] = useState("");
+  const [state, setState] = useState<"idle" | "loading" | "ok" | "error">("idle");
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // La clave vive lo que vive el formulario: un reenvío del mismo intento
+  // trae la misma y la API no crea una segunda solicitud.
+  const claveRef = useRef(nuevaClave());
+
+  const { config: captcha } = useCaptchaConfig();
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
+  const [captchaError, setCaptchaError] = useState<string | null>(null);
+  const [serverCaptchaError, setServerCaptchaError] = useState<string | null>(null);
+  const [captchaKey, setCaptchaKey] = useState(0);
+  const captchaPending = Boolean(captcha) && !captchaToken;
 
   // Cuando el doctor se carga, pre-seleccionar su especialidad (si tiene 1).
   useEffect(() => {
@@ -52,6 +103,7 @@ export default function AppointmentForm({ heading = "Solicitar turno", defaultSp
   function waHref(): string {
     const lines = ["Hola, quisiera solicitar un turno."];
     if (form.name.trim()) lines.push(`Nombre: ${form.name.trim()}`);
+    if (form.phone.trim()) lines.push(`Teléfono: ${form.phone.trim()}`);
     if (doctor.data?.name) lines.push(`Médico: ${doctor.data.name}`);
     const spec = specialtyName();
     if (spec) lines.push(`Especialidad: ${spec}`);
@@ -60,12 +112,74 @@ export default function AppointmentForm({ heading = "Solicitar turno", defaultSp
     return `https://wa.me/${waNumber}?text=${encodeURIComponent(lines.join("\n"))}`;
   }
 
-  function submit(e: React.FormEvent) {
+  /** Lo mínimo para no mandar a la API algo que va a rebotar igual. */
+  function problema(): string | null {
+    if (form.name.trim().length < 2) return "Escribí tu nombre completo.";
+    if (form.phone.trim().length < 4) return "Escribí un teléfono de contacto.";
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(form.email.trim())) return "Escribí un correo válido.";
+    if (!consent) return "Necesitamos tu aceptación para gestionar la solicitud.";
+    return null;
+  }
+
+  async function submit(e: React.FormEvent) {
     e.preventDefault();
+    // Doble clic, Enter repetido: mientras hay una solicitud en curso no sale
+    // otra. El `disabled` del botón cubre el clic; esto cubre el resto.
+    if (state === "loading") return;
     if (!waNumber) return;
-    setSubmitting(true);
-    window.open(waHref(), "_blank", "noopener,noreferrer");
-    setTimeout(() => setSubmitting(false), 800);
+
+    const falla = problema();
+    if (falla) {
+      setErrorMsg(falla);
+      setState("error");
+      return;
+    }
+
+    setState("loading");
+    setErrorMsg(null);
+    try {
+      await api.post("/public/appointments", {
+        name: form.name.trim(),
+        phone: form.phone.trim(),
+        email: form.email.trim(),
+        specialtyId: form.specialtyId ? Number(form.specialtyId) : undefined,
+        doctorId: doctor.data?.id ?? undefined,
+        preferredAt: form.preferredAt || undefined,
+        message: form.message.trim() || undefined,
+        consent: true,
+        submissionKey: claveRef.current,
+        captchaToken: captchaToken ?? undefined,
+        website,
+      });
+
+      const destino = waHref();
+      setState("ok");
+      // Se limpia lo que ya no hace falta. El token del CAPTCHA es de un solo
+      // uso y no se conserva; la clave se renueva para que una segunda
+      // solicitud sea una solicitud nueva y no un duplicado ignorado.
+      setForm({ ...VACIO });
+      setConsent(false);
+      setCaptchaToken(null);
+      setCaptchaKey((k) => k + 1);
+      claveRef.current = nuevaClave();
+      // Navegación en la misma pestaña: después de un `await`, `window.open()`
+      // ya no cuenta como respuesta a un gesto y el navegador lo bloquea.
+      irA(destino);
+    } catch (err) {
+      const message = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
+      if (message?.includes("anti-spam")) {
+        setServerCaptchaError("La verificación anti-spam no pasó. Probá de nuevo.");
+        setCaptchaToken(null);
+        setCaptchaKey((k) => k + 1);
+      }
+      // El formulario queda como estaba: se puede corregir y reintentar.
+      setErrorMsg(
+        message && !message.includes("anti-spam")
+          ? message
+          : "No pudimos registrar tu solicitud. Probá de nuevo en un momento.",
+      );
+      setState("error");
+    }
   }
 
   return (
@@ -86,6 +200,14 @@ export default function AppointmentForm({ heading = "Solicitar turno", defaultSp
           <input id="appt-name" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className={inputClass} />
         </div>
         <div>
+          <label htmlFor="appt-phone" className="block text-sm font-medium mb-1">Teléfono</label>
+          <input id="appt-phone" required value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className={inputClass} />
+        </div>
+        <div>
+          <label htmlFor="appt-email" className="block text-sm font-medium mb-1">Email</label>
+          <input id="appt-email" required type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className={inputClass} />
+        </div>
+        <div>
           <label htmlFor="appt-specialty" className="block text-sm font-medium mb-1">Especialidad (opcional)</label>
           <select id="appt-specialty" value={form.specialtyId} onChange={(e) => setForm({ ...form, specialtyId: e.target.value })} className={inputClass}>
             <option value="">Seleccionar especialidad</option>
@@ -100,11 +222,76 @@ export default function AppointmentForm({ heading = "Solicitar turno", defaultSp
           <label htmlFor="appt-message" className="block text-sm font-medium mb-1">Mensaje / detalles (opcional)</label>
           <textarea id="appt-message" rows={3} value={form.message} onChange={(e) => setForm({ ...form, message: e.target.value })} className={inputClass} />
         </div>
-        <button disabled={!waNumber || submitting} className="btn-turno btn-lg self-start inline-flex items-center gap-2 disabled:opacity-50">
-          {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <span aria-hidden>💬</span>}
-          {waNumber ? (submitting ? "Enviando…" : "Solicitar turno por WhatsApp") : "WhatsApp no disponible"}
+
+        {/* Honeypot: fuera de la vista y fuera del recorrido de teclado. */}
+        <div aria-hidden className="hidden">
+          <label htmlFor="appt-website">No completar</label>
+          <input id="appt-website" tabIndex={-1} autoComplete="off" value={website} onChange={(e) => setWebsite(e.target.value)} />
+        </div>
+
+        <Captcha
+          key={`captcha-${captchaKey}`}
+          onToken={setCaptchaToken}
+          onError={(message) => {
+            setCaptchaError(message);
+            if (message) setServerCaptchaError(null);
+          }}
+        />
+        {serverCaptchaError && <p role="alert" className="text-sm text-amber-700">{serverCaptchaError}</p>}
+
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            required
+            checked={consent}
+            onChange={(e) => setConsent(e.target.checked)}
+            className="mt-1"
+            aria-describedby="appt-consent-help"
+          />
+          <span id="appt-consent-help">
+            Acepto que el sanatorio use estos datos para gestionar mi solicitud de turno.{" "}
+            <Link to="/privacidad" className="text-primary underline">Política de privacidad</Link>
+          </span>
+        </label>
+
+        <button
+          disabled={!waNumber || state === "loading" || captchaPending}
+          title={captchaError ?? (captchaPending ? "Completá la verificación anti-spam" : undefined)}
+          className="btn-turno btn-lg self-start inline-flex items-center gap-2 disabled:opacity-50"
+        >
+          {state === "loading" ? <Loader2 className="w-4 h-4 animate-spin" /> : <span aria-hidden>💬</span>}
+          {waNumber ? (state === "loading" ? "Enviando…" : "Solicitar turno por WhatsApp") : "WhatsApp no disponible"}
         </button>
+
         <AnimatePresence>
+          {state === "ok" && (
+            <motion.div key="ok" initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="text-sm text-green-700">
+              <p className="inline-flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4" />
+                Registramos tu solicitud. Te llevamos a WhatsApp para coordinar.
+              </p>
+            </motion.div>
+          )}
+          {state === "error" && (
+            <motion.div key="err" initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="text-sm">
+              <p role="alert" className="text-amber-700 inline-flex items-center gap-2">
+                <AlertCircle className="w-4 h-4" />
+                {errorMsg}
+              </p>
+              {waNumber && (
+                <p className="mt-2 text-ink/70">
+                  Podés{" "}
+                  {/* Salida explícita: es un clic del usuario, así que abrir en
+                      otra pestaña acá sí es legítimo y no lo bloquea nadie. */}
+                  <a href={waHref()} target="_blank" rel="noreferrer" className="text-primary underline">
+                    continuar sólo por WhatsApp
+                  </a>
+                  . Tené en cuenta que en ese caso <strong>tu solicitud no queda registrada</strong> y
+                  se coordina únicamente por el chat.
+                </p>
+              )}
+            </motion.div>
+          )}
           {!waNumber && (
             <motion.p
               key="no-wa"
