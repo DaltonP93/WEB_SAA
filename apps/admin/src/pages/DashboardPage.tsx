@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { Mail, Stethoscope, HeartPulse, FileText, ClipboardList, type LucideIcon } from "lucide-react";
+import { Mail, Stethoscope, HeartPulse, FileText, ClipboardList, CalendarCheck, type LucideIcon } from "lucide-react";
 import { api } from "../api";
 import type { Readiness } from "./DataReadinessPage";
 
@@ -106,6 +106,13 @@ function ReadinessCard() {
 
 export default function DashboardPage() {
   const msgs = useQuery({ queryKey: ["adm-msg"], queryFn: async () => (await api.get("/admin/contact-messages")).data });
+  // Mismo `total` del servidor que usa el badge del menú: si la tarjeta lo
+  // contara sobre la lista recibida, los dos números se separarían apenas
+  // hubiera más pendientes que el tope de una página.
+  const turnos = useQuery({
+    queryKey: ["adm-appointments", { status: "pendiente", from: "", to: "" }],
+    queryFn: async () => (await api.get("/admin/appointments?status=pendiente")).data,
+  });
   const docs = useQuery({ queryKey: ["adm-doctors"], queryFn: async () => (await api.get("/admin/doctors")).data });
   const pages = useQuery({ queryKey: ["adm-pages"], queryFn: async () => (await api.get("/admin/pages")).data });
   const specs = useQuery({ queryKey: ["adm-specialties"], queryFn: async () => (await api.get("/admin/specialties")).data });
@@ -129,7 +136,15 @@ export default function DashboardPage() {
 
       <ReadinessCard />
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+        <Stat
+          to="/turnos"
+          label="Turnos pendientes"
+          value={Number((turnos.data as { total?: number } | undefined)?.total ?? 0)}
+          sub="Se coordinan por WhatsApp"
+          loading={turnos.isLoading}
+          icon={CalendarCheck}
+        />
         <Stat to="/messages" label="Mensajes nuevos" value={messagesNew} loading={msgs.isLoading} icon={Mail} />
         <Stat to="/doctors" label="Médicos" value={(docs.data ?? []).length} loading={docs.isLoading} icon={Stethoscope} />
         <Stat to="/specialties" label="Especialidades" value={(specs.data ?? []).length} loading={specs.isLoading} icon={HeartPulse} />
