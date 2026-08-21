@@ -1,4 +1,5 @@
 import type { NextFunction, Request, RequestHandler, Response, Router } from "express";
+import { lineaDeError } from "./log-seguro.js";
 
 /**
  * Utilidades HTTP: errores tipados, captura de rechazos en handlers `async` y
@@ -125,6 +126,13 @@ export function isDatabaseError(err: unknown): boolean {
 /**
  * Middleware de errores: loguea todo del lado del servidor y devuelve al
  * cliente sólo lo que es seguro mostrar.
+ *
+ * Lo que se escribe pasa por `lineaDeError`, y no por el objeto crudo. Antes
+ * se registraba `req.originalUrl` entero —con el `?q=<apellido>` que el
+ * operador acababa de tipear en la bandeja— y el error completo, que en una
+ * consulta fallida trae de mysql2 la sentencia con los valores ya sustituidos:
+ * el nombre, el teléfono, el correo y el mensaje del paciente terminaban en el
+ * log del servidor. Ver `api/src/log-seguro.ts`.
  */
 export function errorHandler(
   err: unknown,
@@ -135,7 +143,7 @@ export function errorHandler(
   if (res.headersSent) return;
 
   if (err instanceof HttpError) {
-    if (err.status >= 500) console.error(`[${req.method} ${req.originalUrl}]`, err);
+    if (err.status >= 500) console.error(lineaDeError(req, err));
     return res.status(err.status).json({
       error: err.message,
       ...(err.details !== undefined ? { details: err.details } : {}),
@@ -143,7 +151,7 @@ export function errorHandler(
   }
 
   const isDbDown = isDatabaseError(err) || (err as Error)?.name === "KnexTimeoutError";
-  console.error(`[${req.method} ${req.originalUrl}]`, err);
+  console.error(lineaDeError(req, err));
 
   if (isDbDown) {
     return res.status(503).json({ error: "servicio no disponible temporalmente" });

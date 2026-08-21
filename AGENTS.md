@@ -206,6 +206,16 @@ Para deploy ver [`docs/DEPLOY.md`](docs/DEPLOY.md).
   lo interpreta con la zona del VPS y guarda una hora plausible y equivocada.
   Tampoco un offset fijo `-03:00`: la zona IANA es la que sabe de las reglas
   que cambiaron y de las que van a cambiar.
+- **Logs**: nunca se registra un objeto de error entero ni `req.originalUrl`
+  completo. Se pasa por `api/src/log-seguro.ts`, que conserva método, ruta y los
+  **nombres** de los parámetros de query, y descarta los valores. De un error de
+  base se registran nombre, código y dónde ocurrió — nunca `message`, `sql`,
+  `sqlMessage` ni los bindings: cuando una consulta falla, mysql2 adjunta la
+  sentencia **con los valores ya sustituidos**, y ahí van el nombre, el teléfono
+  y el correo del paciente. La información personal sólo aparece dentro del
+  panel autenticado, y un log no es eso.
+- **Archivos subidos**: nada se escribe en el directorio que sirve `/uploads`
+  antes de estar validado. Ver el pipeline de Multimedia más abajo.
 
 ---
 
@@ -340,7 +350,14 @@ Los 25 puntos acordados con el cliente están implementados. Lo estructural:
 
 ✅ Estructura del monorepo, scripts de extracción, schema MySQL, seeds, API completa (público + admin + auth), frontend público con 19 bloques + páginas dinámicas + buscador de médicos, panel admin completo con page builder DnD, Tiptap, gestor de medios, usuarios.
 ✅ Documentación de deploy en [`docs/DEPLOY.md`](docs/DEPLOY.md).
-✅ **Optimización de imágenes en upload** integrada con `sharp` en `api/src/routes/admin/media.ts` (auto-rotate por EXIF, resize máx 1600px, JPG progresivo mozjpeg q85, strip de metadata).
+✅ **Pipeline de Multimedia** con contrato explícito: `api/src/imagenes.ts` decide y `api/src/routes/admin/media.ts` orquesta.
+  - **Staging primero.** El archivo aterriza en un directorio **hermano** de `UPLOAD_DIR` (`UPLOAD_STAGING_DIR`), que `/uploads` no sirve; recién se mueve al público con un `rename` atómico cuando ya se validó el contenido, se procesó, se verificó el resultado y se eligió el nombre. Staging se limpia siempre —éxito, rechazo, error de Sharp, error de base o petición cortada— y hay un barrido de huérfanos al arrancar.
+  - **El formato lo dicen los bytes**, no `originalname` ni `file.mimetype`: firma del archivo + lo que decodifica libvips, y si no coinciden se rechaza.
+  - **Cada formato sale como sí mismo.** JPEG→`.jpg`; PNG conserva alpha; WebP conserva alpha **y** animación; GIF conserva todos los cuadros; el PDF se valida por firma y **no pasa por libvips**. Bytes, extensión y MIME cambian juntos o no cambia ninguno: no puede existir un `.gif` con contenido JPEG.
+  - **Nombres `crypto.randomUUID()`**: no colisionan y no filtran cómo se llamaba el archivo en la computadora de nadie.
+  - **Límites**: peso (`MAX_UPLOAD_MB`), techo de píxeles decodificados vía `limitInputPixels`, guarda contra descompresión desproporcionada, mínimo por lado **y** por área — un logo de 400×80 se acepta, un 1×1 no. Resize sólo hacia abajo (`withoutEnlargement`), EXIF descartado.
+  - **Nada queda a medias**: si el INSERT falla se borra el archivo público; si no se puede escribir, no queda fila.
+  - **SVG sigue rechazado** hasta tener saneo específico, y el panel ya no lo recomienda.
 ✅ **SEO**: `sitemap.xml` + `robots.txt` dinámicos desde la DB (`api/src/index.ts`); meta por ruta con react-helmet-async; **prerender estático de `/estudios`** en el build (`apps/web/scripts/prerender.mjs`, parte de `pnpm --filter @sa/web build`) que inyecta la lista agrupada + meta + JSON-LD `ItemList` en `dist/estudios/index.html`, best-effort leyendo la API durante el deploy (servido por Nginx vía `try_files`, sin cambios de infra). La URL base de canonical/sitemap sale de `PUBLIC_SITE_URL` en `api/.env` (hoy apunta a la IP del VPS; cambiar al dominio real cuando esté en producción).
 ✅ **Panel admin nivelado** (deployado en prod) con componentes reutilizables:
   - `DataTable.tsx` — tabla genérica tipada: búsqueda accent-insensitive, orden por columna, paginación cliente, skeletons de carga, slot de acciones. Usada en `DoctorsListPage`.
@@ -360,8 +377,9 @@ Los 25 puntos acordados con el cliente están implementados. Lo estructural:
   - Toggle publicar/despublicar inline en `PagesListPage` y `NewsListPage`.
   - `LucideIcon.tsx` — renderiza iconos [lucide](https://lucide.dev/icons/) por nombre kebab-case (`heart-pulse`). Usa `lucide-react/dynamicIconImports` + `React.lazy` + `Suspense` (⚠️ en lucide-react 0.460 **no existe** el subpath `lucide-react/dynamic`). `isIconName()` valida antes de renderizar. El helper `IconBadge` de `EntityManager` muestra el icono si el valor es un nombre lucide válido, y si no cae al emoji tal cual — antes el nombre se imprimía como texto crudo y se superponía a los títulos.
 
-✅ **Tests automatizados**: `pnpm test` (vitest) — **1053 pruebas en 50 archivos**
-al cierre de la correctiva de Turnos. Las que necesitan base real se activan con
+✅ **Tests automatizados**: `pnpm test` (vitest) — **1128 pruebas en 53 archivos**
+al cierre de la ronda de Multimedia (baseline anterior: **1053 en 50**, cierre de
+la correctiva de Turnos). Las que necesitan base real se activan con
 `TEST_DATABASE=1` y se saltan solas si no está. CI corre la suite completa contra
 MySQL 8. El smoke testing manual del Agente 3 **complementa** la suite, no la
 reemplaza: lo que se puede afirmar con una prueba, se afirma con una prueba.

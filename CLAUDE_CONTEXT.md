@@ -5,9 +5,9 @@
 > Formato ejecutivo. Se actualiza en cada tarea terminada o preparación de
 > cambios para GitHub.
 
-**Última actualización:** correctiva de Turnos — paginación por servidor, zona
-horaria e idempotencia (§13).
-**Cubre hasta:** PR #15 fusionado. La ronda del §13 está **en Draft, sin fusionar**.
+**Última actualización:** pipeline de Multimedia — staging, formato real,
+metadatos coherentes y logs sin datos personales (§14).
+**Cubre hasta:** PR #16 fusionado. La ronda del §14 está **en Draft, sin fusionar**.
 **Estado de `main`:** `git log --oneline -1 origin/main`.
 **Estado de CI:** los tres checks se exigen en verde antes de cada merge. El
 resultado vigente es el del último run sobre `origin/main`, no un SHA anotado acá.
@@ -34,7 +34,8 @@ resultado vigente es el del último run sobre `origin/main`, no un SHA anotado a
 | A-2 (blindaje) | #13 | ✅ fusionado — rollback de la nota de guardia blindado, 403 estable, catálogo sin deriva, contrato de `data-readiness` documentado (§10) |
 | A-2 (pantalla) | #14 | ✅ fusionado — blindaje por campos mutables, catálogo de horarios de runtime, endpoint `data-readiness` y pantalla "Datos pendientes" (§11) |
 | Turnos (registro y bandeja) | #15 | ✅ fusionado — el formulario registra antes de salir a WhatsApp, migración con clave de envío única, bandeja en el panel (§12) |
-| Turnos (correctiva) | Draft | Paginación y orden por servidor, zona horaria institucional, idempotencia antes del CAPTCHA (§13) |
+| Turnos (correctiva) | #16 | ✅ fusionado — paginación y orden por servidor, zona horaria institucional, idempotencia antes del CAPTCHA (§13) |
+| Multimedia (pipeline) | Draft | Staging fuera de `/uploads`, formato detectado por bytes, transparencia y animación conservadas, metadatos en `media`, logs sin datos personales (§14) |
 
 ---
 
@@ -1498,13 +1499,176 @@ endpoint secundario. Ahora hay un type guard y la tarjeta desaparece sola.
 Baseline sobre `main` (PR #15 fusionado): **980 en 47 archivos**. CI corre la
 suite contra **MySQL 8**; el número local se obtuvo contra MariaDB.
 
-### 13.8 Qué falta
+### 13.8 Cierre
+
+PR #16 fusionado. Los tres checks cerraron en verde sobre `4560252`.
+
+---
+
+## 14. Multimedia: staging, formato real y logs sin datos personales (ronda actual, Draft)
+
+Parte de `main` = `fc69871` (merge del PR #16), verificado como HEAD real antes
+de ramificar.
+
+Dos cosas distintas en la misma ronda: cerrar los tres residuos que la revisión
+de GitHub dejó sobre el PR #16, y rehacer el pipeline de Multimedia antes de
+que el sanatorio cargue logos.
+
+### 14.1 Los logs llevaban datos de pacientes
+
+Morgan ya ocultaba los valores de query desde el PR #16, pero `http.ts` seguía
+registrando `req.originalUrl` completo y **el objeto de error entero**. La
+tercera fuga es la que no se ve: cuando una consulta falla, mysql2 adjunta al
+error la sentencia **con los bindings ya sustituidos**. Un `SELECT` fallido
+sobre la bandeja escribía en el log el `like '%<apellido>%'` que el operador
+acababa de tipear; un `INSERT` fallido sobre `appointments` escribía nombre,
+teléfono, correo y mensaje del paciente.
+
+`api/src/log-seguro.ts` es la fuente única:
+
+| Función | Qué conserva | Qué descarta |
+|---|---|---|
+| `rutaSinValores` | ruta y **nombres** de parámetros (`?q,status=…`) | todos los valores |
+| `rutaSegura` | método + lo anterior | — |
+| `errorSeguro` | `name`, `code`, `errno`, `cause.code`, `archivo:línea` | `message`, `sql`, `sqlMessage`, `sqlState`, bindings |
+| `lineaDeError` | las dos combinadas | — |
+
+Excepción única: el `message` de un `HttpError` **sí** se registra, porque son
+literales escritos en este repositorio. Lo sostiene una prueba que recorre los
+routers y falla si alguien empieza a construirlos con una plantilla. La regla es
+sobre el sitio de la llamada; una constante de módulo armada desde configuración
+(el tope de peso) no ve nunca una petición.
+
+También pasaron por `errorSeguro` los logs de `db.ts` (el mensaje crudo de
+`ER_ACCESS_DENIED_ERROR` trae usuario y host) y de `captcha.ts`.
+
+El módulo no importa nada del proyecto: lo usan `http.ts` —que define
+`HttpError`— y `app.ts`, y un import cruzado sería un ciclo. Por eso
+`HttpError` se reconoce por su `name`.
+
+**La prueba no simula el error**: renombra `specialties` de verdad, hace la
+búsqueda real con un nombre, un teléfono y un correo reconocibles, y verifica
+que ninguno aparezca. Captura `process.stdout` además de `console` — morgan
+escribe directo al stdout, y era el camino por el que el dato se escapaba una
+vez por petición en vez de una vez por error.
+
+### 14.2 Filas de la consulta anterior, accionables
+
+`placeholderData` evita que la tabla parpadee vacía al cambiar de página, y a
+cambio deja a la vista filas que **no pertenecen al filtro nuevo**. Sus botones
+seguían funcionando: confirmar "la primera de la lista" durante la transición
+actuaba sobre la solicitud vieja.
+
+`DataTable` acepta `stale`. Cuando está: `aria-busy` en la tabla y las acciones
+dentro de un `fieldset[disabled]`. El `actions` render prop recibe además
+`{ disabled }` — el `fieldset` es la garantía en el navegador, pasar el flag
+explícito es lo que hace la desactivación observable sin depender de cuánto del
+HTML implemente jsdom.
+
+### 14.3 La última página después de eliminar
+
+Con 21 solicitudes y páginas de 20, borrar la única fila de la página 2 dejaba
+un `offset` que ya no existe: la API contestaba bien (`items: []`, total 20) y
+el panel mostraba una tabla vacía sobre un contador que decía 20. No se salía
+sin recargar. Ahora un efecto sobre el `total` del servidor vuelve a la última
+página válida, con `Math.max(0, …)` porque con total 0 la cuenta da −1.
+
+### 14.4 El pipeline de Multimedia
+
+Lo que había: multer escribía directo en `UPLOAD_DIR` —lo que sirve
+`/uploads`— y se validaba después; se confiaba en `originalname` y
+`file.mimetype`; todo lo que no fuera PNG con alpha se convertía a JPEG **sin
+cambiar extensión ni MIME**; el GIF animado quedaba en su primer cuadro; los
+nombres eran `Date.now()-<nombre>`; y un INSERT fallido dejaba el archivo.
+
+`api/src/imagenes.ts` decide, `routes/admin/media.ts` orquesta:
+
+1. **Staging primero.** Directorio **hermano** de `UPLOAD_DIR`
+   (`UPLOAD_STAGING_DIR`), que `/uploads` no puede servir por ningún camino, y
+   en el mismo sistema de archivos para que el `rename` final sea atómico.
+   Se limpia en el `finally` **antes de responder** —el 201 significa que ya no
+   queda nada—, más `res.once("close")` para la petición que se corta antes de
+   llegar al handler, más un barrido de huérfanos al arrancar.
+2. **El formato lo dicen los bytes**: firma del archivo y, además, lo que
+   decodificó libvips. Si no coinciden, se rechaza.
+3. **Cada formato sale como sí mismo.** JPEG→`.jpg` sin EXIF; PNG conserva
+   alpha; WebP conserva alpha **y** animación; GIF conserva todos los cuadros;
+   el PDF se valida por firma y no pasa por libvips (abrir un PDF es ejecutar un
+   intérprete sobre un archivo que subió cualquiera).
+4. **Se relee el resultado** antes de darlo por bueno: formato y cantidad de
+   cuadros. Si una versión de libvips dejara de escribir GIF animado, el archivo
+   se rechaza en vez de guardarse aplastado con el nombre del original.
+5. **Nombres `crypto.randomUUID()`**: no colisionan y no filtran el nombre del
+   archivo en la computadora de quien sube.
+6. **Límites**: peso, `limitInputPixels` (30 MP, aplicado antes de reservar
+   memoria), guarda contra descompresión desproporcionada, y mínimo por lado
+   (16 px) **y** por área (1024 px²) — 400×80 entra, 1×1 no. La regla anterior
+   pedía 200 px en ambos ejes, que es una regla de foto de perfil aplicada a
+   logos.
+7. **Nada a medias**: INSERT fallido → se borra el archivo público.
+
+Sharp 0.35.3 con libvips 8.18.3 y cgif: reescribir con `{ animated: true }`
+conserva las páginas y el alpha por cuadro, y el redimensionado de animados
+también. **Sin cambios en la dependencia nativa**: `sharp@^0.35.0` ya estaba.
+
+### 14.5 Migración `20260824000000_media_metadatos`
+
+`media` gana `width`, `height` y `frames`, las tres anulables: un PDF no tiene
+ninguna, y las filas anteriores se subieron con el pipeline viejo — no se puede
+afirmar su tamaño sin reabrir cada archivo, y esta migración no toca archivos.
+`animated` no es columna: se deriva de `frames > 1`; guardar las dos permite que
+se contradigan. No se editó `20260516000001_init.ts`.
+
+### 14.6 Panel
+
+`accept` enumera los cinco formatos reales; se quitó la recomendación de SVG
+(la API lo rechaza y el panel lo decía al revés); los límites que muestra son
+1600 px y 10 MB, no los 2400 px que anunciaba; se puede cargar el `alt`; la
+grilla muestra formato, tamaño, dimensiones y cuadros **efectivos** del
+servidor, con `width`/`height`/`loading="lazy"` en cada `<img>`; el preview crea
+**una** URL de objeto por archivo y la revoca al cambiar o cancelar; eliminar
+pasa por `ConfirmDialog`; y no se dice "optimizado" de un PDF, que se guarda
+tal cual. Una prueba compara los números del panel con los de `imagenes.ts` y
+falla si se separan.
+
+### 14.7 Validación
+
+| Comprobación | Resultado |
+|---|---|
+| Suite completa (Node 20 + MariaDB local, `TEST_DATABASE=1`) | **1128 / 1128** en 53 archivos |
+| `pnpm typecheck` | OK |
+| Builds `@sa/api` / `@sa/web` / `@sa/admin` | OK |
+| `node scripts/ci/verify-prerender.mjs` | OK, exit 0 |
+| `pnpm audit --prod` | *No known vulnerabilities found* |
+| `node scripts/check-secrets.mjs` | sin credenciales en el árbol |
+| `gitleaks detect --no-git` (8.28.0) | *no leaks found* |
+
+Baseline sobre `main` (PR #16 fusionado): **1053 en 50 archivos**. CI corre la
+suite contra **MySQL 8**; el número local se obtuvo contra MariaDB.
+
+Cada corrección se verificó **reintroduciendo el defecto** y comprobando que la
+prueba correspondiente falla: sin `{ animated: true }` caen 3 pruebas de
+cuadros; convirtiendo WebP a JPEG caen 2; con el `originalUrl` completo en
+morgan y el error crudo en `http.ts` cae la de logs; sin `stale` caen 6 del
+panel; sin la vuelta a la última página cae la de borrado.
+
+### 14.8 Nota sobre `vitest.config.ts`
+
+Dos alias nuevos, por el mismo motivo que los que ya había: `sharp` (más
+`server.deps.external`, porque carga un `.node` compilado) y `react-hot-toast`.
+El segundo importa: sin él, un `vi.mock("react-hot-toast")` escrito en un
+archivo de la raíz **no se aplicaba** —el paquete sólo existe en
+`apps/admin/node_modules`— y la prueba corría contra el toast real sin observar
+nada. El mock que ya existía en `turnos-panel.test.tsx` estaba en esa situación.
+
+### 14.9 Qué falta
 
 | Ítem | Estado |
 |---|---|
-| Multimedia: transparencia WebP/GIF, extensión vs. contenido, GIF animado | 🔲 **desarrollo pendiente** — conviene cerrarlo antes de que carguen logos |
-| Bloque `logos`: `alt` con enlace, `width`/`height`/`lazy`, opacidad, `active` | 🔲 desarrollo pendiente |
+| Bloque `logos`: `alt` con enlace, `width`/`height`/`lazy`, opacidad, `active`, `max-w-full` | 🔲 desarrollo pendiente |
 | Reordenar ítems en el Page Builder (`kind: "items"`) | 🔲 desarrollo pendiente |
+| Selector multimedia dentro del Page Builder | 🔲 desarrollo pendiente (excluido de esta ronda por pedido) |
+| SVG: saneo específico antes de aceptarlo | 🔲 desarrollo pendiente; hoy rechazado y así lo dice el panel |
 | Confirmación escrita del alcance de Biopsias | 🔲 decisión del sanatorio + contrato por aprobar; hasta entonces el ítem queda en `review` por diseño |
 | Usuarios: `safeParse` → 400, proteger el último superadmin | 🔲 desarrollo pendiente |
 | A-3 (`PUBLIC_SITE_URL` al dominio definitivo) | 🔲 **configuración de producción**, más adelante |

@@ -1,58 +1,102 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { api } from "../api";
+import { useConfirm } from "../components/ConfirmDialog";
 
+/**
+ * Biblioteca multimedia.
+ *
+ * Lo que esta pantalla decía no era lo que el servidor hacía:
+ *
+ * - recomendaba **SVG** para logos, y la API lo rechaza (no hay saneo de SVG,
+ *   y un SVG es un documento que puede traer scripts adentro);
+ * - `accept="image/*"` ofrecía subir BMP, TIFF, AVIF o SVG, todos rechazados
+ *   después de esperar la subida entera;
+ * - anunciaba que el servidor redimensiona a 2400 px cuando redimensiona a
+ *   1600;
+ * - exigía 200 × 200 antes de subir, con lo que un logo de 400 × 80 no
+ *   llegaba nunca a la API — que ahora sí lo acepta;
+ * - decía "Subido y optimizado" también cuando el archivo se conservó tal
+ *   cual, que es lo que pasa con un PDF y con un GIF animado.
+ *
+ * Los límites de acá tienen que coincidir con `api/src/imagenes.ts`. La
+ * prueba `tests/media-panel.test.tsx` compara los dos archivos y falla si se
+ * separan.
+ */
+
+/** Espejo de `MAX_UPLOAD_MB` en la API. */
 const MAX_MB = 10;
-const RECOMMENDED_MIN = 600; // px
-const RECOMMENDED_MAX = 2400; // px
+/** Espejo de `MAX_LADO` en `api/src/imagenes.ts`. */
+const MAX_LADO = 1600;
+/** Espejo de `MIN_LADO` y `MIN_PIXELES`. */
+const MIN_LADO = 16;
+const MIN_PIXELES = 1024;
 
-interface PreflightResult {
+/** Exactamente lo que la API acepta, ni uno más. */
+const ACCEPT = ".jpg,.jpeg,.png,.webp,.gif,.pdf,image/jpeg,image/png,image/webp,image/gif,application/pdf";
+const TIPOS = ["image/jpeg", "image/png", "image/webp", "image/gif", "application/pdf"];
+
+interface Media {
+  id: number;
+  url: string;
+  mime: string;
+  size: number;
+  alt: string | null;
+  width: number | null;
+  height: number | null;
+  frames: number | null;
+}
+
+interface Revision {
   ok: boolean;
   width?: number;
   height?: number;
-  size?: number;
-  warnings: string[];
   errors: string[];
+  warnings: string[];
 }
 
-/** Lee la imagen en el browser para validar antes de subir. */
-function preflight(file: File): Promise<PreflightResult> {
+const kb = (bytes: number) => `${(bytes / 1024).toFixed(0)} KB`;
+
+/** `image/webp` → `WEBP`, `application/pdf` → `PDF`. */
+const formato = (mime: string) => (mime.split("/")[1] ?? mime).replace("jpeg", "jpg").toUpperCase();
+
+/**
+ * Revisión en el navegador, antes de gastar la subida.
+ *
+ * Es una cortesía, no la validación: la que manda es la del servidor, que mira
+ * los bytes. Acá sólo se atajan los casos obvios para no hacer esperar a nadie
+ * por un archivo que va a rebotar.
+ */
+function revisar(file: File, url: string): Promise<Revision> {
   return new Promise((resolve) => {
-    const result: PreflightResult = { ok: true, warnings: [], errors: [], size: file.size };
+    const r: Revision = { ok: true, errors: [], warnings: [] };
     if (file.size > MAX_MB * 1024 * 1024) {
-      result.errors.push(`El archivo pesa ${(file.size / 1024 / 1024).toFixed(1)} MB (máximo ${MAX_MB} MB).`);
-      result.ok = false;
+      r.errors.push(`El archivo pesa ${(file.size / 1024 / 1024).toFixed(1)} MB (máximo ${MAX_MB} MB).`);
+      r.ok = false;
     }
-    if (!file.type.startsWith("image/") && file.type !== "application/pdf") {
-      result.errors.push("Tipo de archivo no permitido. Usá JPG, PNG, WebP, GIF o PDF.");
-      result.ok = false;
+    if (file.type && !TIPOS.includes(file.type)) {
+      r.errors.push("Tipo de archivo no permitido. Usá JPG, PNG, WebP, GIF o PDF.");
+      r.ok = false;
     }
-    if (!file.type.startsWith("image/")) {
-      return resolve(result);
-    }
-    const url = URL.createObjectURL(file);
+    if (file.type === "application/pdf" || !file.type.startsWith("image/")) return resolve(r);
+
     const img = new Image();
     img.onload = () => {
-      URL.revokeObjectURL(url);
-      result.width = img.width;
-      result.height = img.height;
-      if (img.width < 200 || img.height < 200) {
-        result.errors.push(`Imagen demasiado pequeña (${img.width}×${img.height} px). Mínimo 200×200.`);
-        result.ok = false;
-      } else if (img.width < RECOMMENDED_MIN || img.height < RECOMMENDED_MIN) {
-        result.warnings.push(`Tamaño chico (${img.width}×${img.height}). Recomendado mín ${RECOMMENDED_MIN}×${RECOMMENDED_MIN}.`);
+      r.width = img.width;
+      r.height = img.height;
+      if (img.width < MIN_LADO || img.height < MIN_LADO || img.width * img.height < MIN_PIXELES) {
+        r.errors.push(`Imagen demasiado pequeña (${img.width}×${img.height} px).`);
+        r.ok = false;
+      } else if (img.width > MAX_LADO || img.height > MAX_LADO) {
+        r.warnings.push(`Se va a redimensionar a ${MAX_LADO} px de lado mayor.`);
       }
-      if (img.width > RECOMMENDED_MAX * 2 || img.height > RECOMMENDED_MAX * 2) {
-        result.warnings.push(`Imagen muy grande (${img.width}×${img.height}). Se va a redimensionar a ${RECOMMENDED_MAX} px máximo en el servidor.`);
-      }
-      resolve(result);
+      resolve(r);
     };
     img.onerror = () => {
-      URL.revokeObjectURL(url);
-      result.errors.push("No pude leer el archivo como imagen.");
-      result.ok = false;
-      resolve(result);
+      r.errors.push("No pude leer el archivo como imagen.");
+      r.ok = false;
+      resolve(r);
     };
     img.src = url;
   });
@@ -60,37 +104,90 @@ function preflight(file: File): Promise<PreflightResult> {
 
 export default function MediaPage() {
   const qc = useQueryClient();
+  const confirm = useConfirm();
   const fileRef = useRef<HTMLInputElement>(null);
-  const [pending, setPending] = useState<{ file: File; check: PreflightResult } | null>(null);
-  const list = useQuery({ queryKey: ["adm-media"], queryFn: async () => (await api.get("/admin/media")).data });
 
-  const upload = useMutation({
-    mutationFn: async (file: File) => {
+  const [pendiente, setPendiente] = useState<{ file: File; revision: Revision; url: string } | null>(null);
+  const [alt, setAlt] = useState("");
+
+  /**
+   * La URL del preview se revoca al cambiar de archivo y al desmontar.
+   *
+   * Antes se creaba con `URL.createObjectURL(pending.file)` **dentro del
+   * render**: cada re-render generaba un blob nuevo y ninguno se liberaba.
+   * Tipear en cualquier campo de la pantalla dejaba un archivo entero más en
+   * memoria, y el navegador los retiene hasta que se cierra la pestaña.
+   */
+  useEffect(() => {
+    const url = pendiente?.url;
+    return () => {
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [pendiente?.url]);
+
+  const list = useQuery({
+    queryKey: ["adm-media"],
+    queryFn: async () => (await api.get("/admin/media")).data as Media[],
+  });
+
+  const subir = useMutation({
+    mutationFn: async ({ file, alt }: { file: File; alt: string }) => {
       const fd = new FormData();
       fd.append("file", file);
-      return (await api.post("/admin/media", fd, { headers: { "Content-Type": "multipart/form-data" } })).data;
+      if (alt.trim()) fd.append("alt", alt.trim());
+      return (await api.post("/admin/media", fd, { headers: { "Content-Type": "multipart/form-data" } })).data as Media;
     },
-    onSuccess: () => {
-      toast.success("Subido y optimizado");
-      setPending(null);
+    onSuccess: (row) => {
+      // "Optimizado" sólo cuando efectivamente se recomprimió. Un PDF se
+      // valida y se guarda igual; decir que se optimizó sería inventar.
+      toast.success(row.mime === "application/pdf" ? "Archivo subido" : "Imagen subida y procesada");
+      setPendiente(null);
+      setAlt("");
+      if (fileRef.current) fileRef.current.value = "";
       qc.invalidateQueries({ queryKey: ["adm-media"] });
     },
-    onError: (e: any) => toast.error(e.response?.data?.error ?? "Error al subir"),
-  });
-  const del = useMutation({
-    mutationFn: async (id: number) => api.delete(`/admin/media/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["adm-media"] }),
+    onError: (e: any) => toast.error(e.response?.data?.error ?? "No se pudo subir el archivo"),
   });
 
-  async function handleFile(file: File) {
-    const check = await preflight(file);
-    if (!check.ok) {
-      check.errors.forEach((e) => toast.error(e));
-      setPending(null);
+  const borrar = useMutation({
+    mutationFn: async (id: number) => api.delete(`/admin/media/${id}`),
+    onSuccess: () => {
+      toast.success("Archivo eliminado");
+      qc.invalidateQueries({ queryKey: ["adm-media"] });
+    },
+    onError: () => toast.error("No se pudo eliminar el archivo"),
+  });
+
+  async function elegir(file: File) {
+    const url = URL.createObjectURL(file);
+    const revision = await revisar(file, url);
+    if (!revision.ok) {
+      URL.revokeObjectURL(url);
+      revision.errors.forEach((e) => toast.error(e));
+      setPendiente(null);
+      if (fileRef.current) fileRef.current.value = "";
       return;
     }
-    setPending({ file, check });
+    setPendiente({ file, revision, url });
   }
+
+  function cancelar() {
+    setPendiente(null);
+    setAlt("");
+    if (fileRef.current) fileRef.current.value = "";
+  }
+
+  async function eliminar(m: Media) {
+    const ok = await confirm({
+      title: "Eliminar archivo",
+      message: "Se borra de la biblioteca y del disco. Si alguna página lo usa, va a quedar rota.",
+      confirmLabel: "Eliminar",
+      danger: true,
+    });
+    if (ok) borrar.mutate(m.id);
+  }
+
+  const archivos = list.data ?? [];
 
   return (
     <div>
@@ -106,85 +203,132 @@ export default function MediaPage() {
             ref={fileRef}
             type="file"
             hidden
-            accept="image/*,application/pdf"
-            onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
+            aria-label="Archivo a subir"
+            accept={ACCEPT}
+            onChange={(e) => e.target.files?.[0] && elegir(e.target.files[0])}
           />
           <button onClick={() => fileRef.current?.click()} className="btn-primary">Subir archivo</button>
         </div>
       </div>
 
-      {/* Guía de calidad */}
       <div className="card p-4 mb-6 bg-blue-50 border-blue-200 text-sm">
-        <h2 className="font-semibold text-brand mb-2">Recomendaciones de calidad</h2>
+        <h2 className="font-semibold text-brand mb-2">Qué acepta el servidor</h2>
         <ul className="space-y-1 text-gray-700">
-          <li>• <strong>Fotos de médicos</strong>: cuadrada (1:1), mínimo {RECOMMENDED_MIN}×{RECOMMENDED_MIN} px. Encuadre rostro+hombros.</li>
-          <li>• <strong>Banners / hero</strong>: 1600×900 px o más (horizontal 16:9).</li>
-          <li>• <strong>Logos</strong>: PNG con fondo transparente o SVG si es posible.</li>
-          <li>• <strong>Formatos aceptados</strong>: JPG, PNG, WebP, GIF, PDF.</li>
-          <li>• <strong>Peso máximo</strong>: {MAX_MB} MB. El servidor optimiza a {RECOMMENDED_MAX} px máx, JPG progresivo, sin EXIF.</li>
+          <li>• <strong>Formatos</strong>: JPG, PNG, WebP, GIF y PDF. Cada uno se guarda en su propio formato.</li>
+          <li>• <strong>Transparencia y animación</strong>: se conservan. Un GIF o un WebP animado mantiene todos sus cuadros.</li>
+          <li>• <strong>Peso máximo</strong>: {MAX_MB} MB.</li>
+          <li>
+            • <strong>Tamaño</strong>: se reduce al lado mayor de {MAX_LADO} px si lo supera; nunca se agranda. Un logo
+            apaisado (por ejemplo 400×80) se acepta tal cual.
+          </li>
+          <li>• <strong>Fotos de médicos</strong>: cuadrada (1:1). Encuadre rostro y hombros.</li>
+          <li>• <strong>Banners / hero</strong>: horizontal 16:9, 1600×900 px o más.</li>
+          <li>• <strong>Logos</strong>: PNG o WebP con fondo transparente. SVG no se acepta por ahora.</li>
+          <li>• Las fotos pierden su EXIF al procesarse: no se publica dónde ni con qué se tomaron.</li>
         </ul>
       </div>
 
-      {/* Confirmación pre-upload con preview + warnings */}
-      {pending && (
+      {pendiente && (
         <div className="card p-4 mb-6 border-2 border-brand">
           <h2 className="font-semibold mb-3">Confirmar subida</h2>
           <div className="grid md:grid-cols-3 gap-4">
             <div>
-              {pending.file.type.startsWith("image/") ? (
-                <img
-                  src={URL.createObjectURL(pending.file)}
-                  alt="preview"
-                  className="aspect-square w-full object-cover rounded border"
-                />
+              {pendiente.file.type.startsWith("image/") ? (
+                <img src={pendiente.url} alt="Vista previa" className="aspect-square w-full object-cover rounded border" />
               ) : (
                 <div className="aspect-square flex items-center justify-center bg-gray-100 rounded text-4xl border">📄</div>
               )}
             </div>
             <div className="md:col-span-2 text-sm space-y-2">
-              <div><strong>Archivo:</strong> {pending.file.name}</div>
-              <div><strong>Tamaño:</strong> {(pending.file.size / 1024).toFixed(0)} KB</div>
-              {pending.check.width && (
-                <div><strong>Dimensiones:</strong> {pending.check.width}×{pending.check.height} px</div>
+              <div><strong>Archivo:</strong> {pendiente.file.name}</div>
+              <div><strong>Tamaño:</strong> {kb(pendiente.file.size)}</div>
+              {pendiente.revision.width && (
+                <div><strong>Dimensiones:</strong> {pendiente.revision.width}×{pendiente.revision.height} px</div>
               )}
-              {pending.check.warnings.length > 0 && (
+              {pendiente.revision.warnings.length > 0 && (
                 <div className="bg-yellow-50 border border-yellow-200 rounded p-2 text-xs">
-                  {pending.check.warnings.map((w, i) => <div key={i}>⚠ {w}</div>)}
+                  {pendiente.revision.warnings.map((w, i) => <div key={i}>⚠ {w}</div>)}
                 </div>
               )}
+              <div>
+                <label className="label" htmlFor="alt-nuevo">Texto alternativo</label>
+                <input
+                  id="alt-nuevo"
+                  className="input"
+                  value={alt}
+                  maxLength={255}
+                  onChange={(e) => setAlt(e.target.value)}
+                  placeholder="Qué se ve en la imagen, para quien no puede verla"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Opcional, pero sin él la imagen no existe para un lector de pantalla ni para un buscador.
+                </p>
+              </div>
               <div className="flex gap-2 mt-3">
-                <button
-                  onClick={() => upload.mutate(pending.file)}
-                  disabled={upload.isPending}
-                  className="btn-primary"
-                >
-                  {upload.isPending ? "Subiendo…" : "Confirmar y subir"}
+                <button onClick={() => subir.mutate({ file: pendiente.file, alt })} disabled={subir.isPending} className="btn-primary">
+                  {subir.isPending ? "Subiendo…" : "Confirmar y subir"}
                 </button>
-                <button onClick={() => setPending(null)} className="btn-secondary">Cancelar</button>
+                <button onClick={cancelar} disabled={subir.isPending} className="btn-secondary">Cancelar</button>
               </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* Grid de archivos */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-        {(list.data ?? []).map((m: any) => (
-          <div key={m.id} className="card p-2">
-            {m.mime.startsWith("image/") ? (
-              <img src={m.url} alt={m.alt ?? ""} loading="lazy" decoding="async" className="aspect-square w-full object-cover rounded" />
-            ) : (
-              <div className="aspect-square flex items-center justify-center bg-gray-100 rounded text-3xl">📄</div>
-            )}
-            <div className="text-xs text-gray-600 mt-1 break-all">{m.url}</div>
-            <div className="text-xs text-gray-400">{(m.size / 1024).toFixed(0)} KB</div>
-            <div className="flex justify-between mt-1">
-              <button onClick={() => navigator.clipboard.writeText(m.url)} className="text-xs text-brand">Copiar URL</button>
-              <button onClick={() => confirm("¿Eliminar?") && del.mutate(m.id)} className="text-xs text-red-600">Eliminar</button>
+      {list.isLoading ? (
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3" aria-busy="true">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="card p-2">
+              <div className="aspect-square w-full rounded bg-gray-200 animate-pulse" />
+              <div className="h-3 mt-2 bg-gray-200 rounded animate-pulse" />
             </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      ) : list.isError ? (
+        <div className="card p-5 border-red-200 bg-red-50">
+          <p className="text-sm text-red-800 font-medium">No se pudo cargar la biblioteca.</p>
+          <button onClick={() => list.refetch()} className="btn-secondary mt-3">Reintentar</button>
+        </div>
+      ) : archivos.length === 0 ? (
+        <div className="card p-10 text-center text-sm text-gray-500">Todavía no hay archivos en la biblioteca.</div>
+      ) : (
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+          {archivos.map((m) => (
+            <div key={m.id} className="card p-2">
+              {m.mime.startsWith("image/") ? (
+                <img
+                  src={m.url}
+                  alt={m.alt ?? ""}
+                  loading="lazy"
+                  decoding="async"
+                  width={m.width ?? undefined}
+                  height={m.height ?? undefined}
+                  className="aspect-square w-full object-cover rounded"
+                />
+              ) : (
+                <div className="aspect-square flex items-center justify-center bg-gray-100 rounded text-3xl">📄</div>
+              )}
+              <div className="text-xs text-gray-600 mt-1 break-all">{m.url}</div>
+              <div className="text-xs text-gray-400">
+                {/* Lo que informa el servidor sobre el archivo que quedó, no
+                    sobre el que se eligió: son distintos cuando se recomprime. */}
+                {formato(m.mime)} · {kb(m.size)}
+                {m.width && m.height ? ` · ${m.width}×${m.height} px` : ""}
+                {m.frames && m.frames > 1 ? ` · ${m.frames} cuadros` : ""}
+              </div>
+              {m.alt ? (
+                <div className="text-xs text-gray-500 truncate" title={m.alt}>{m.alt}</div>
+              ) : (
+                <div className="text-xs text-amber-700">Sin texto alternativo</div>
+              )}
+              <div className="flex justify-between mt-1">
+                <button onClick={() => navigator.clipboard.writeText(m.url)} className="text-xs text-brand">Copiar URL</button>
+                <button onClick={() => eliminar(m)} disabled={borrar.isPending} className="text-xs text-red-600">Eliminar</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

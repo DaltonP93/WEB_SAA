@@ -19,10 +19,18 @@ export default defineConfig({
       knex: path.resolve(__dirname, "api/node_modules/knex/knex.js"),
       mysql2: path.resolve(__dirname, "api/node_modules/mysql2/index.js"),
       bcryptjs: path.resolve(__dirname, "api/node_modules/bcryptjs/index.js"),
+      // sharp también es de api/. Se apunta al build ESM: es un módulo nativo
+      // y Vite no puede transformarlo, así que además va en `server.deps.external`.
+      sharp: path.resolve(__dirname, "api/node_modules/sharp/dist/index.mjs"),
       // Dependencias de apps/web que las pruebas de componente importan
       // directamente (los componentes las resuelven solos, un archivo de
       // prueba en la raíz no).
       "react-router-dom": path.resolve(__dirname, "apps/web/node_modules/react-router-dom"),
+      // react-hot-toast sólo existe en apps/admin. Sin este alias, un
+      // `vi.mock("react-hot-toast")` escrito en un archivo de la raíz no
+      // resuelve al mismo módulo que importa la pantalla y **no se aplica**:
+      // la prueba corre contra el toast real y no observa nada.
+      "react-hot-toast": path.resolve(__dirname, "apps/admin/node_modules/react-hot-toast"),
       // lucide-react es dependencia de apps/web, no de la raíz. La subruta va
       // antes que el paquete: el matcher es por prefijo y gana la primera.
       "lucide-react/dynamicIconImports": path.resolve(
@@ -39,5 +47,12 @@ export default defineConfig({
     environment: "node",
     // La suite de base de datos sólo corre si hay MySQL/MariaDB accesible.
     testTimeout: 30_000,
+    server: {
+      deps: {
+        // sharp carga un `.node` compilado: si Vite intenta transformarlo, el
+        // binding nativo no se resuelve. Se deja que lo cargue Node.
+        external: [/sharp/],
+      },
+    },
   },
 });
