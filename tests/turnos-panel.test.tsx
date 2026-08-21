@@ -56,8 +56,15 @@ const turno = (over: Partial<Turno> = {}): Turno => ({
   ...over,
 });
 
-/** Lo que devuelve la API según la query string con la que se la llamó. */
-let respuesta: (qs: string) => { items: Turno[]; total: number } = () => ({ items: [], total: 0 });
+/**
+ * Lo que devuelve la API según la query string con la que se la llamó.
+ *
+ * Puede devolver una promesa: así una prueba deja una respuesta colgada y
+ * observa qué se ve **durante** la transición, que es cuando la tabla muestra
+ * filas de la consulta anterior.
+ */
+type Pagina = { items: Turno[]; total: number };
+let respuesta: (qs: string) => Pagina | Promise<Pagina> = () => ({ items: [], total: 0 });
 let urlsPedidas: string[] = [];
 let escrituras: { method: string; url: string; body?: any }[] = [];
 let fallarLista = false;
@@ -77,7 +84,7 @@ vi.mock("../apps/admin/src/api", () => ({
       }
       if (url.startsWith("/admin/appointments")) {
         if (fallarLista) throw new Error("500");
-        return { data: respuesta(url.split("?")[1] ?? "") };
+        return { data: await respuesta(url.split("?")[1] ?? "") };
       }
       // El Dashboard monta además la tarjeta de Datos pendientes, que espera
       // la forma real de su endpoint. Devolverle un array la haría fallar por
@@ -555,5 +562,172 @@ describe("paginación por servidor", () => {
     await waitFor(() => expect(urlsPedidas.some((u) => u.includes("sort=name&dir=asc"))).toBe(true));
     fireEvent.click(screen.getByText("Paciente"));
     await waitFor(() => expect(urlsPedidas.some((u) => u.includes("sort=name&dir=desc"))).toBe(true));
+  });
+});
+
+/**
+ * Lo que se ve durante la transición entre dos consultas.
+ *
+ * `placeholderData` mantiene las filas de la respuesta anterior para que la
+ * tabla no parpadee vacía al cambiar de página. El costo, que no se veía, es
+ * que durante ese instante hay filas a la vista que **no pertenecen al filtro
+ * nuevo** y sus botones seguían funcionando: confirmar "la primera de la
+ * lista" mientras llega la respuesta actuaba sobre la solicitud vieja.
+ */
+describe("las filas de la consulta anterior no se pueden accionar", () => {
+  /** Deja la próxima respuesta colgada hasta que la prueba la suelte. */
+  let soltar: (() => void) | null = null;
+
+  const conDemora = (fn: (qs: string) => Pagina | Promise<Pagina>) => {
+    respuesta = fn;
+  };
+
+  beforeEach(() => {
+    soltar = null;
+  });
+
+  it("mientras llega la página nueva, la fila vieja queda desactivada", async () => {
+    respuesta = () => ({ items: [turno({ id: 7, name: "Vieja Prueba" })], total: 40 });
+    montar(soloBandeja(), "/admin/turnos");
+    const fila = (await screen.findByText("Vieja Prueba")).closest("tr")!;
+    // Con la consulta ya resuelta, la fila sí se puede accionar.
+    await waitFor(() => expect(within(fila).getByText("Confirmar").hasAttribute("disabled")).toBe(false));
+
+    // La siguiente respuesta queda pendiente: es la transición.
+    const espera = new Promise<void>((r) => {
+      soltar = r;
+    });
+    conDemora(async (qs: string) => {
+      await espera;
+      return { items: [turno({ id: 99, name: "Nueva Prueba" })], total: 40 };
+    });
+
+    fireEvent.click(screen.getByText("Siguiente"));
+
+    // La fila vieja sigue a la vista —eso es lo que evita el parpadeo— pero
+    // ya no responde.
+    const durante = (await screen.findByText("Vieja Prueba")).closest("tr")!;
+    await waitFor(() => expect(within(durante).getByText("Confirmar").hasAttribute("disabled")).toBe(true));
+    expect(document.querySelector("table")?.getAttribute("aria-busy")).toBe("true");
+
+    const antes = escrituras.length;
+    fireEvent.click(within(durante).getByText("Confirmar"));
+    fireEvent.click(within(durante).getByText("Eliminar"));
+    expect(escrituras.length, "se accionó una fila que ya no pertenece al filtro").toBe(antes);
+
+    soltar!();
+    expect(await screen.findByText("Nueva Prueba")).toBeTruthy();
+  });
+
+  it.each([
+    ["la búsqueda", () => fireEvent.change(screen.getByPlaceholderText(/Buscar por nombre/i), { target: { value: "z" } })],
+    ["el estado", () => fireEvent.change(screen.getByLabelText("Estado"), { target: { value: "confirmado" } })],
+    ["la fecha desde", () => fireEvent.change(screen.getByLabelText("Desde"), { target: { value: "2026-01-01" } })],
+    ["el orden", () => fireEvent.click(screen.getByText("Paciente"))],
+  ])("cambiar %s también desactiva las acciones", async (_q, cambiar) => {
+    respuesta = () => ({ items: [turno({ id: 7, name: "Vieja Prueba" })], total: 40 });
+    montar(soloBandeja(), "/admin/turnos");
+    const fila = (await screen.findByText("Vieja Prueba")).closest("tr")!;
+    await waitFor(() => expect(within(fila).getByText("Confirmar").hasAttribute("disabled")).toBe(false));
+
+    const espera = new Promise<void>((r) => {
+      soltar = r;
+    });
+    conDemora(async () => {
+      await espera;
+      return { items: [turno({ id: 7, name: "Vieja Prueba" })], total: 40 };
+    });
+
+    cambiar();
+
+    await waitFor(
+      () => {
+        const actual = screen.getByText("Vieja Prueba").closest("tr")!;
+        expect(within(actual).getByText("Confirmar").hasAttribute("disabled")).toBe(true);
+      },
+      { timeout: 3000 },
+    );
+    soltar!();
+  });
+});
+
+/**
+ * La última página después de eliminar.
+ *
+ * Con 21 solicitudes y páginas de 20, la página 2 tiene exactamente una fila.
+ * Al eliminarla ese `offset` deja de existir: la API contesta bien —`items`
+ * vacío y el total ya en 20— y el panel se quedaba mostrando una tabla vacía
+ * sobre un contador que decía que había 20 resultados. No se salía sin
+ * recargar a mano.
+ */
+describe("eliminar la única fila de la última página", () => {
+  const VEINTIUNO = 21;
+
+  it("vuelve sola a la última página que sí existe", async () => {
+    let total = VEINTIUNO;
+    respuesta = (qs) => {
+      const params = new URLSearchParams(qs);
+      const offset = Number(params.get("offset") ?? 0);
+      const limit = Number(params.get("limit") ?? 20);
+      const items = Array.from({ length: Math.max(0, Math.min(limit, total - offset)) }, (_, i) =>
+        turno({ id: offset + i + 1, name: `Paciente ${offset + i} Prueba` }),
+      );
+      return { items, total };
+    };
+
+    montar(soloBandeja(), "/admin/turnos");
+    await screen.findByText("Paciente 0 Prueba");
+    expect(screen.getByText("21 solicitudes")).toBeTruthy();
+
+    // Página 2: una sola fila, la número 21.
+    fireEvent.click(screen.getByText("Siguiente"));
+    expect(await screen.findByText("Paciente 20 Prueba")).toBeTruthy();
+    expect(screen.queryByText("Paciente 0 Prueba")).toBeNull();
+
+    // Se elimina esa única fila. La API la borra de verdad del conjunto.
+    const fila = screen.getByText("Paciente 20 Prueba").closest("tr")!;
+    await waitFor(() => expect(within(fila).getByText("Eliminar").hasAttribute("disabled")).toBe(false));
+    fireEvent.click(within(fila).getByText("Eliminar"));
+    const dialogo = await abrirDialogo();
+    total = VEINTIUNO - 1;
+    fireEvent.click(within(dialogo).getByText("Eliminar"));
+
+    await waitFor(() => expect(escrituras.some((e) => e.method === "delete")).toBe(true));
+
+    // Termina mostrando las primeras 20, no una tabla vacía.
+    //
+    // Volver a la página 0 son dos pasos —el refetch trae el total nuevo y
+    // recién ahí cambia la página—, así que la fila y el contador aparecen en
+    // renders distintos: los dos se esperan.
+    expect(await screen.findByText("Paciente 0 Prueba")).toBeTruthy();
+    expect(await screen.findByText("20 solicitudes")).toBeTruthy();
+    expect(screen.queryByText(/No hay solicitudes de turno con esos filtros/i)).toBeNull();
+    await waitFor(() => expect(urlsPedidas.at(-1)).toContain("offset=0"));
+  });
+
+  it("si se borran todas, vuelve a la primera página y avisa que no hay nada", async () => {
+    let total = VEINTIUNO;
+    respuesta = (qs) => {
+      const offset = Number(new URLSearchParams(qs).get("offset") ?? 0);
+      const items = Array.from({ length: Math.max(0, Math.min(20, total - offset)) }, (_, i) =>
+        turno({ id: offset + i + 1, name: `Paciente ${offset + i} Prueba` }),
+      );
+      return { items, total };
+    };
+    montar(soloBandeja(), "/admin/turnos");
+    await screen.findByText("Paciente 0 Prueba");
+    fireEvent.click(screen.getByText("Siguiente"));
+    await screen.findByText("Paciente 20 Prueba");
+
+    total = 0;
+    const fila = screen.getByText("Paciente 20 Prueba").closest("tr")!;
+    await waitFor(() => expect(within(fila).getByText("Eliminar").hasAttribute("disabled")).toBe(false));
+    fireEvent.click(within(fila).getByText("Eliminar"));
+    fireEvent.click(within(await abrirDialogo()).getByText("Eliminar"));
+
+    expect(await screen.findByText(/No hay solicitudes de turno con esos filtros/i)).toBeTruthy();
+    expect(await screen.findByText("0 solicitudes")).toBeTruthy();
+    // Una página negativa pediría un offset inválido.
+    await waitFor(() => expect(urlsPedidas.at(-1)).not.toMatch(/offset=-/));
   });
 });

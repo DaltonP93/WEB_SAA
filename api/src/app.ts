@@ -9,6 +9,7 @@ import { authRouter } from "./routes/auth.js";
 import { adminRouter } from "./routes/admin/index.js";
 import { db, checkDatabase } from "./db.js";
 import { asyncHandler, errorHandler, withTimeout, wrapRouterAsync } from "./http.js";
+import { rutaSinValores } from "./log-seguro.js";
 import { legacyRedirects } from "./legacy-redirects.js";
 import { warnIfCaptchaMisconfigured } from "./captcha.js";
 
@@ -65,14 +66,14 @@ export function createApp() {
    * un paciente terminan en los logs del servidor sin que nadie lo haya
    * decidido. Se conservan los nombres de los parámetros —sirven para
    * entender qué se pidió— y se descartan los valores.
+   *
+   * La regla vive en `log-seguro.ts` y no acá: el middleware de errores
+   * necesitaba exactamente la misma, y dos copias se separan en cuanto alguien
+   * corrige una sola.
    */
-  morgan.token("ruta-sin-valores", (req) => {
-    const url = (req as { originalUrl?: string; url?: string }).originalUrl ?? (req as { url?: string }).url ?? "";
-    const [ruta, query] = url.split("?");
-    if (!query) return ruta;
-    const claves = [...new Set(query.split("&").map((p) => p.split("=")[0]).filter(Boolean))];
-    return claves.length ? `${ruta}?${claves.join(",")}=…` : ruta;
-  });
+  morgan.token("ruta-sin-valores", (req) =>
+    rutaSinValores((req as { originalUrl?: string; url?: string }).originalUrl ?? (req as { url?: string }).url),
+  );
   app.use(morgan(":method :ruta-sin-valores :status :response-time ms - :res[content-length]"));
 
   app.use("/uploads", express.static(UPLOAD_DIR, {

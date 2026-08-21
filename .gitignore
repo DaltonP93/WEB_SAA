@@ -22,6 +22,9 @@ id_ed25519
 .DS_Store
 api/uploads/*
 !api/uploads/.gitkeep
+# Staging de subidas: hermano de UPLOAD_DIR y nunca servido por /uploads.
+.uploads-staging/
+api/.uploads-staging/
 assets-extracted/images/*
 !assets-extracted/images/.gitkeep
 .turbo

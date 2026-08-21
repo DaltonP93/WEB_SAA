@@ -1,6 +1,7 @@
 import "dotenv/config";
 import knex from "knex";
 import config from "../knexfile.js";
+import { errorSeguro } from "./log-seguro.js";
 
 export const db = knex(config[process.env.NODE_ENV === "production" ? "production" : "development"]);
 
@@ -30,7 +31,9 @@ export async function checkDatabase(): Promise<DatabaseStatus> {
   } catch (err) {
     const message = (err as Error)?.message ?? "";
     const reason = /timeout/i.test(message) ? "timeout" : "unreachable";
-    console.error("[health] base de datos no disponible:", message);
+    // Sin el mensaje crudo: `ER_ACCESS_DENIED_ERROR` lo trae con el usuario y
+    // el host de la conexión adentro.
+    console.error(`[health] base de datos no disponible: ${errorSeguro(err)}`);
     return { ok: false, latencyMs: Date.now() - started, error: reason };
   }
 }

@@ -39,12 +39,32 @@ interface Props<T> {
   searchPlaceholder?: string;
   /** Which column keys feed the search box. Defaults to all columns with an accessor. */
   searchKeys?: string[];
-  actions?: (row: T) => ReactNode;
+  /**
+   * Los botones de la fila. El segundo argumento avisa cuándo la fila es de
+   * una consulta que ya no vale: quien dibuje botones tiene que pasarles ese
+   * `disabled`. El `fieldset` de abajo los desactiva igual —es la garantía en
+   * el navegador—, pero pasarlo explícito es lo que hace que la desactivación
+   * sea observable en una prueba y no dependa de cuánto del HTML implemente
+   * jsdom.
+   */
+  actions?: (row: T, estado: { disabled: boolean }) => ReactNode;
   pageSize?: number;
   loading?: boolean;
   emptyMessage?: string;
   /** Cuando viene, el componente no filtra ni ordena ni pagina por su cuenta. */
   server?: DataTableServer;
+  /**
+   * Las filas visibles son de una consulta anterior y la actual todavía no
+   * llegó: se muestran, pero no se pueden accionar.
+   *
+   * Con `placeholderData` la tabla no parpadea vacía al cambiar de página o de
+   * filtro, y ese es el punto. El costo es que durante la transición se ven
+   * filas que **no pertenecen al filtro nuevo**, y sus botones seguían
+   * funcionando: quien confirmaba una solicitud creyendo que estaba mirando
+   * "pendientes de hoy" podía estar confirmando la de otro día que todavía no
+   * se había ido de la pantalla.
+   */
+  stale?: boolean;
 }
 
 function norm(v: unknown): string {
@@ -67,6 +87,7 @@ export default function DataTable<T>({
   loading,
   emptyMessage = "No hay resultados.",
   server,
+  stale = false,
 }: Props<T>) {
   const [queryLocal, setQueryLocal] = useState("");
   const [sortKeyLocal, setSortKeyLocal] = useState<string | null>(null);
@@ -152,7 +173,10 @@ export default function DataTable<T>({
       </div>
 
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+        <table
+          className={`w-full text-sm ${stale ? "opacity-60 transition-opacity" : ""}`}
+          aria-busy={stale || !!loading}
+        >
           <thead className="bg-gray-50 text-xs text-gray-500 border-b border-gray-200">
             <tr>
               {columns.map((c) => (
@@ -198,7 +222,16 @@ export default function DataTable<T>({
                       {c.render ? c.render(row) : String(cellValue(c, row) ?? "")}
                     </td>
                   ))}
-                  {actions && <td className="px-4 py-3 text-right whitespace-nowrap">{actions(row)}</td>}
+                  {actions && (
+                    <td className="px-4 py-3 text-right whitespace-nowrap">
+                      {/* `fieldset[disabled]` desactiva de verdad todo control
+                          que tenga adentro, sin que cada pantalla tenga que
+                          acordarse de pasarle `disabled` a cada botón. */}
+                      <fieldset disabled={stale} className="contents">
+                        {actions(row, { disabled: stale })}
+                      </fieldset>
+                    </td>
+                  )}
                 </tr>
               ))
             )}

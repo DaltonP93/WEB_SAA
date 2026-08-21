@@ -128,6 +128,39 @@ export default function AppointmentsPage() {
   const rows = useMemo(() => list.data?.items ?? [], [list.data]);
   const total = list.data?.total ?? 0;
 
+  /**
+   * Las filas de la pantalla son de la consulta anterior.
+   *
+   * `placeholderData` evita el parpadeo en blanco al cambiar de página, pero
+   * deja a la vista filas que ya no pertenecen a lo que se está pidiendo. Con
+   * los botones activos, confirmar "la primera de la lista" durante ese
+   * instante actúa sobre la solicitud vieja, no sobre la que se ve un segundo
+   * después. Mientras dure la transición la tabla se marca ocupada y las
+   * acciones quedan desactivadas.
+   */
+  const enTransicion = list.isFetching || list.isPlaceholderData;
+
+  /**
+   * Volver a la última página que todavía existe.
+   *
+   * Al eliminar la única solicitud de la última página, ese `offset` deja de
+   * tener filas: la API responde correctamente con `items: []` y el total ya
+   * corregido, y el panel se quedaba mostrando una tabla vacía sobre un
+   * contador que decía que había resultados. Sin recargar a mano no se salía.
+   *
+   * Se calcula sobre el `total` del servidor —no sobre las filas recibidas—
+   * así que también cubre que otra persona borre desde otra sesión.
+   */
+  useEffect(() => {
+    // Sólo con la respuesta de esta consulta: el total que sobrevive de la
+    // anterior mandaría a una página que tampoco existe.
+    if (list.isPlaceholderData || page === 0) return;
+    // `Math.max(0, …)` cubre que se hayan borrado todas: con `total = 0` la
+    // cuenta da −1, y una página negativa pide un `offset` inválido.
+    const ultima = Math.max(0, Math.ceil(total / POR_PAGINA) - 1);
+    if (page > ultima) setPage(ultima);
+  }, [total, page, list.isPlaceholderData]);
+
   const invalidar = () => qc.invalidateQueries({ queryKey: [APPOINTMENTS_KEY] });
 
   const cambiar = useMutation({
@@ -304,6 +337,7 @@ export default function AppointmentsPage() {
           getRowId={(t) => t.id}
           pageSize={POR_PAGINA}
           loading={list.isLoading}
+          stale={enTransicion}
           searchPlaceholder="Buscar por nombre, teléfono, email, médico o especialidad…"
           emptyMessage="No hay solicitudes de turno con esos filtros."
           server={{
@@ -319,24 +353,42 @@ export default function AppointmentsPage() {
               setDir(direccion);
             },
           }}
-          actions={(t) => (
+          actions={(t, { disabled }) => (
             <div className="flex items-center justify-end gap-2">
               {t.status !== "confirmado" && (
-                <button onClick={() => cambiar.mutate({ id: t.id, status: "confirmado" })} className="text-emerald-700 text-xs">
+                <button
+                  onClick={() => cambiar.mutate({ id: t.id, status: "confirmado" })}
+                  disabled={disabled}
+                  className="text-emerald-700 text-xs disabled:text-gray-400 disabled:cursor-not-allowed"
+                >
                   Confirmar
                 </button>
               )}
               {t.status !== "cancelado" && (
-                <button onClick={() => cambiar.mutate({ id: t.id, status: "cancelado" })} className="text-amber-700 text-xs">
+                <button
+                  onClick={() => cambiar.mutate({ id: t.id, status: "cancelado" })}
+                  disabled={disabled}
+                  className="text-amber-700 text-xs disabled:text-gray-400 disabled:cursor-not-allowed"
+                >
                   Cancelar
                 </button>
               )}
               {t.status !== "pendiente" && (
-                <button onClick={() => cambiar.mutate({ id: t.id, status: "pendiente" })} className="text-brand text-xs">
+                <button
+                  onClick={() => cambiar.mutate({ id: t.id, status: "pendiente" })}
+                  disabled={disabled}
+                  className="text-brand text-xs disabled:text-gray-400 disabled:cursor-not-allowed"
+                >
                   Volver a pendiente
                 </button>
               )}
-              <button onClick={() => eliminar(t)} className="text-red-600 text-xs">Eliminar</button>
+              <button
+                onClick={() => eliminar(t)}
+                disabled={disabled}
+                className="text-red-600 text-xs disabled:text-gray-400 disabled:cursor-not-allowed"
+              >
+                Eliminar
+              </button>
             </div>
           )}
         />

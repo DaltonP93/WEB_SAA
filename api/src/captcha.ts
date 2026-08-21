@@ -7,6 +7,8 @@
  * propietario cargue las claves, la verificación se activa sola.
  */
 
+import { errorSeguro } from "./log-seguro.js";
+
 const VERIFY_URL: Record<string, string> = {
   turnstile: "https://challenges.cloudflare.com/turnstile/v0/siteverify",
   recaptcha: "https://www.google.com/recaptcha/api/siteverify",
@@ -101,7 +103,7 @@ export async function verifyCaptcha(token: string | undefined, ip?: string): Pro
     const data = (await res.json()) as { success?: boolean };
     return data.success === true;
   } catch (err) {
-    console.error("[captcha] verificación fallida:", (err as Error).message);
+    console.error(`[captcha] verificación fallida: ${errorSeguro(err)}`);
     return false;
   }
 }
