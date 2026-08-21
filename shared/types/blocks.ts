@@ -227,10 +227,40 @@ export interface StatsProps {
   items: { value: string; label: string; icon?: string }[];
 }
 
+/**
+ * Un logo de convenio o aliado.
+ *
+ * Todo lo que se agregó después de `imageUrl`, `alt` y `href` es **opcional**:
+ * los bloques que ya existen en la base se guardaron con esas tres claves y
+ * tienen que seguir funcionando sin que nadie los edite. Lo que falta se
+ * resuelve con un default que reproduce lo que se veía antes.
+ */
+export interface LogoItem {
+  imageUrl: string;
+  alt?: string;
+  href?: string;
+  /** Sin cargar, el logo se muestra: los bloques anteriores no traen el campo. */
+  active?: boolean;
+  /** Dimensiones reales del archivo, para que el sitio no salte al cargar. */
+  width?: number;
+  height?: number;
+}
+
 export interface LogosProps {
   heading?: string;
-  logos: { imageUrl: string; alt?: string; href?: string }[];
+  logos: LogoItem[];
+  /**
+   * Opacidad de la fila, de 0 a 100.
+   *
+   * El bloque tenía `opacity-80` fijo en la clase. Ahora es configurable, y
+   * cuando falta —todos los bloques anteriores— vale 80: un bloque existente
+   * se sigue viendo exactamente igual hasta que alguien decida cambiarlo.
+   */
+  opacity?: number;
 }
+
+/** Lo que valía el `opacity-80` fijo de la versión anterior del bloque. */
+export const LOGOS_OPACIDAD_POR_DEFECTO = 80;
 
 export interface SpacerProps {
   height: number;

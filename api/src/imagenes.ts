@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import sharp from "sharp";
 import type { Metadata, Sharp } from "sharp";
+import { PDFDocument } from "pdf-lib";
 
 /**
  * Qué se acepta subir, qué se le hace y qué se garantiza al guardarlo.
@@ -118,6 +119,10 @@ export interface ArchivoProcesado {
   /** Cuadros: 1 en una imagen fija, `null` en un PDF. */
   frames: number | null;
   animated: boolean;
+  /** Milisegundos de cada cuadro. `null` si no es animado. */
+  delay: number[] | null;
+  /** Repeticiones: 0 = infinitas. `null` si no es animado. */
+  loop: number | null;
 }
 
 export type Resultado = { ok: true; archivo: ArchivoProcesado } | { ok: false; error: string };
@@ -155,18 +160,47 @@ export async function procesarSubida(ruta: string): Promise<Resultado> {
 }
 
 /**
- * El PDF no pasa por libvips.
+ * El PDF se valida **estructuralmente**, no por sus cinco primeros bytes.
  *
- * libvips puede abrir PDFs si se compiló con poppler, y abrir un PDF es
- * ejecutar un intérprete sobre un archivo que subió cualquiera. No hay nada
- * que optimizar en un PDF institucional, así que se valida la firma y se
- * guarda tal cual.
+ * Antes alcanzaba con que el archivo empezara con `%PDF-`. Cualquier cosa
+ * —un ejecutable, un `.zip`, un texto— con esos cinco bytes delante entraba a
+ * la biblioteca institucional, se guardaba con `mime: application/pdf` y se
+ * publicaba en una URL. Un lector de PDF del otro lado abriría lo que fuera
+ * que hubiera adentro.
+ *
+ * Ahora se parsea con `pdf-lib` y se exige que el documento tenga un catálogo
+ * legible y al menos una página. `throwOnInvalidObject` hace dos cosas:
+ * endurece el parseo y lo **silencia** — sin esa opción pdf-lib escribe por
+ * consola avisos con posiciones y fragmentos del archivo, que es justo lo que
+ * los logs no pueden llevar.
+ *
+ * Lo que esto **no** es: un saneo. El PDF se guarda con los bytes que llegaron.
+ * No se le quitan JavaScript embebido, acciones de apertura, adjuntos ni
+ * formularios. Validar es comprobar que es un PDF; sanear sería otra cosa y no
+ * está hecha. Por eso el archivo se sirve como descarga y no se le da al
+ * navegador ninguna razón para ejecutarlo, y por eso los PDFs no aparecen en
+ * los selectores de imágenes.
+ *
+ * Tampoco pasa por libvips: libvips abre PDFs si se compiló con poppler, y eso
+ * sería ejecutar un intérprete más sobre un archivo que subió cualquiera.
  */
 async function procesarPdf(ruta: string): Promise<Resultado> {
   const bytes = await fs.promises.readFile(ruta);
-  // Relectura sobre el archivo entero: la firma ya se miró, pero acá se
-  // confirma sobre los mismos bytes que se van a guardar.
-  if (bytes.subarray(0, 5).toString("latin1") !== "%PDF-") return rechazo("pdf invalido");
+
+  try {
+    const documento = await PDFDocument.load(bytes, {
+      throwOnInvalidObject: true,
+      updateMetadata: false,
+    });
+    // Un archivo que parsea pero no tiene ni una página no es un documento:
+    // es un encabezado con algo detrás.
+    if (documento.getPageCount() < 1) return rechazo("el PDF no tiene ninguna página");
+  } catch {
+    // El error de pdf-lib trae línea, columna y desplazamiento del archivo.
+    // Nada de eso vuelve al cliente ni al log: sólo que no es un PDF válido.
+    return rechazo("el archivo no es un PDF válido");
+  }
+
   return {
     ok: true,
     archivo: {
@@ -178,6 +212,8 @@ async function procesarPdf(ruta: string): Promise<Resultado> {
       height: null,
       frames: null,
       animated: false,
+      delay: null,
+      loop: null,
     },
   };
 }
@@ -212,6 +248,19 @@ async function procesarImagen(ruta: string, firma: Formato, tamano: number): Pro
   const ancho = meta.width;
   const animada = frames > 1;
 
+  /**
+   * Duración de cada cuadro y repeticiones del original.
+   *
+   * Una animación no es sólo "estos cuadros": es estos cuadros **a esta
+   * velocidad** y repitiéndose **esta cantidad de veces**. Un logo animado que
+   * conserva los tres cuadros pero los pasa al doble de velocidad, o que da
+   * vueltas para siempre cuando estaba pensado para tres pasadas, es un archivo
+   * distinto del que subieron.
+   */
+  const ritmo: Ritmo | null = animada
+    ? { delay: meta.delay ?? null, loop: typeof meta.loop === "number" ? meta.loop : null }
+    : null;
+
   if (ancho < MIN_LADO || alto < MIN_LADO || ancho * alto < MIN_PIXELES) {
     return rechazo(`imagen demasiado pequeña (${ancho}×${alto} px)`);
   }
@@ -240,12 +289,18 @@ async function procesarImagen(ruta: string, firma: Formato, tamano: number): Pro
         withoutEnlargement: true,
       });
     }
-    bytes = await codificar(tuberia, firma).toBuffer();
+    bytes = await codificar(tuberia, firma, ritmo).toBuffer();
   } catch {
     return rechazo("no se pudo procesar la imagen");
   }
 
-  return verificar(bytes, firma, frames, animada);
+  return verificar(bytes, firma, frames, animada, ritmo);
+}
+
+/** Duración por cuadro y repeticiones de una animación. */
+interface Ritmo {
+  delay: number[] | null;
+  loop: number | null;
 }
 
 /**
@@ -256,8 +311,30 @@ async function procesarImagen(ruta: string, firma: Formato, tamano: number): Pro
  * cambiar de formato para nada. Un WebP recomprimido sigue siendo un WebP.
  * Ninguno de estos llamados conserva metadatos —sharp los descarta salvo que
  * se le pida lo contrario—, así que el EXIF de una foto no llega al sitio.
+ *
+ * ## Por qué `delay` y `loop` se pasan explícitos
+ *
+ * Medido sobre sharp 0.35.3 / libvips 8.18.3: al leer con `{ animated: true }`
+ * los dos viajan solos hasta la salida, incluso a través de un `resize`. O sea
+ * que pasarlos no cambia el resultado **hoy**.
+ *
+ * Se pasan igual porque esa conservación no está en el contrato público de
+ * sharp: es cómo se comporta la versión que tenemos. Una actualización que
+ * dejara de arrastrarlos no rompería ninguna promesa de sharp, y acá se
+ * traduciría en logos animados que cambian de velocidad sin que nadie tocara
+ * nada. Escribirlo explícito cuesta una línea y saca la garantía del terreno
+ * de lo no documentado. `tests/media-animacion.test.ts` comprueba el resultado
+ * sobre el archivo guardado, así que si alguna vez dejaran de conservarse por
+ * cualquier vía, falla.
  */
-function codificar(tuberia: Sharp, formato: Formato): Sharp {
+function codificar(tuberia: Sharp, formato: Formato, ritmo: Ritmo | null): Sharp {
+  const animacion = ritmo
+    ? {
+        ...(ritmo.delay ? { delay: ritmo.delay } : {}),
+        ...(ritmo.loop !== null ? { loop: ritmo.loop } : {}),
+      }
+    : {};
+
   switch (formato) {
     case "jpeg":
       return tuberia.jpeg({ quality: 85, progressive: true, mozjpeg: true });
@@ -266,9 +343,9 @@ function codificar(tuberia: Sharp, formato: Formato): Sharp {
       // cambia la imagen, y en un logo con degradado se nota.
       return tuberia.png({ compressionLevel: 9 });
     case "webp":
-      return tuberia.webp({ quality: 85 });
+      return tuberia.webp({ quality: 85, ...animacion });
     case "gif":
-      return tuberia.gif();
+      return tuberia.gif({ ...animacion });
     default:
       return tuberia;
   }
@@ -287,6 +364,7 @@ async function verificar(
   esperado: Formato,
   framesOriginales: number,
   animada: boolean,
+  ritmo: Ritmo | null,
 ): Promise<Resultado> {
   let meta: Metadata;
   try {
@@ -305,6 +383,21 @@ async function verificar(
     return rechazo("no se pudieron conservar todos los cuadros de la animación");
   }
 
+  const delay = meta.delay ?? null;
+  const loop = typeof meta.loop === "number" ? meta.loop : null;
+
+  if (animada && ritmo) {
+    // La misma lógica que con los cuadros, aplicada al tiempo: una animación
+    // que sale con otra velocidad o con otra cantidad de repeticiones no es la
+    // que subieron, y guardarla igual sería afirmar que sí.
+    if (ritmo.delay && !mismoRitmo(ritmo.delay, delay)) {
+      return rechazo("no se pudo conservar la duración de los cuadros de la animación");
+    }
+    if (ritmo.loop !== null && loop !== ritmo.loop) {
+      return rechazo("no se pudo conservar la cantidad de repeticiones de la animación");
+    }
+  }
+
   return {
     ok: true,
     archivo: {
@@ -316,6 +409,21 @@ async function verificar(
       height: meta.pageHeight ?? meta.height,
       frames,
       animated: frames > 1,
+      delay: frames > 1 ? delay : null,
+      loop: frames > 1 ? loop : null,
     },
   };
+}
+
+/**
+ * ¿Los cuadros duran lo mismo?
+ *
+ * Los codificadores redondean: un GIF guarda centésimas de segundo, así que
+ * 125 ms vuelve como 120. Comparar exacto haría fallar archivos correctos, y
+ * comparar de más dejaría pasar una animación al doble de velocidad. 10 ms de
+ * tolerancia es la resolución del propio formato.
+ */
+function mismoRitmo(esperado: number[], obtenido: number[] | null): boolean {
+  if (!obtenido || obtenido.length !== esperado.length) return false;
+  return esperado.every((ms, i) => Math.abs(ms - obtenido[i]) <= 10);
 }

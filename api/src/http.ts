@@ -28,8 +28,16 @@ export class HttpError extends Error {
 export const badRequest = (message = "payload invalido", details?: unknown) =>
   new HttpError(400, message, details);
 export const notFound = (message = "no encontrado") => new HttpError(404, message);
-/** La petición choca con el estado actual: mismo identificador, otro contenido. */
-export const conflict = (message = "conflicto con el estado actual") => new HttpError(409, message);
+/**
+ * La petición choca con el estado actual: mismo identificador, otro contenido,
+ * o un recurso que otra cosa está usando.
+ *
+ * `details` viaja al cliente, así que sólo puede llevar lo que el cliente puede
+ * ver: cantidades, etiquetas funcionales y rutas del panel. Nunca contenido
+ * institucional ni datos personales.
+ */
+export const conflict = (message = "conflicto con el estado actual", details?: unknown) =>
+  new HttpError(409, message, details);
 export const tooManyRequests = (message = "demasiadas solicitudes") => new HttpError(429, message);
 
 /** Envuelve un handler async para que sus rechazos lleguen a `next(err)`. */
