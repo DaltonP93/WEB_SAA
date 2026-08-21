@@ -205,7 +205,11 @@ describeDb("cadena de Turnos", () => {
       const primera = await solicitar(valida({ submissionKey: key }));
       const id = (await primera.json()).id;
 
-      const reintento = await solicitar(valida({ submissionKey: key, message: "reintento" }));
+      // El reintento manda **lo mismo**: el formulario no cambió, sólo se
+      // perdió la respuesta. Si el contenido fuera distinto ya no sería el
+      // mismo pedido y la API responde 409 — eso se prueba en
+      // `tests/turnos-idempotencia.test.ts`.
+      const reintento = await solicitar(valida({ submissionKey: key }));
 
       expect(reintento.status).toBe(200);
       expect((await reintento.json()).id).toBe(id);

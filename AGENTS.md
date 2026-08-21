@@ -199,6 +199,13 @@ Para deploy ver [`docs/DEPLOY.md`](docs/DEPLOY.md).
 - **Datos sensibles**: nunca hardcodear credenciales. `SEED_ADMIN_PASSWORD` es obligatoria con `NODE_ENV=production`; el deploy genera contraseñas al azar y las deja en un archivo sólo-root. `pnpm check:secrets` corre en CI sobre el árbol.
 - **Datos del cliente**: no inventar teléfonos, correos, horarios ni prestaciones. Los canales de contacto viven en `contact_channels` y los horarios en `schedules`; sin valor cargado la UI muestra "A confirmar" / "Horarios en proceso de confirmación".
 - **Migraciones**: nuevas tablas o columnas → archivo nuevo en `api/migrations/` con timestamp creciente. NO editar migrations ya aplicadas.
+- **Zona horaria**: toda fecha que el sanatorio elige o filtra es hora de
+  **`America/Asuncion`**, no la zona del proceso. La fuente única está en
+  `api/src/timezone.ts` (y su par de presentación en
+  `apps/admin/src/lib/fecha.ts`). Nunca `new Date(valorDeUnDatetimeLocal)`: eso
+  lo interpreta con la zona del VPS y guarda una hora plausible y equivocada.
+  Tampoco un offset fijo `-03:00`: la zona IANA es la que sabe de las reglas
+  que cambiaron y de las que van a cambiar.
 
 ---
 
@@ -341,13 +348,20 @@ Los 25 puntos acordados con el cliente están implementados. Lo estructural:
   - `ConfirmDialog.tsx` + hook `useConfirm()` — modal de confirmación; reemplazó todos los `confirm()` nativos.
   - `useUnsavedGuard.ts` — aviso de cambios sin guardar (React Router `useBlocker` + `beforeunload`); en `DoctorEditPage`, `PageBuilderPage`, `SettingsPage`. Requirió migrar el router del admin a **data router** (`createBrowserRouter` + `RouterProvider`).
   - `lib/csv.ts` — `downloadCsv()` con escaping RFC4180 + BOM UTF-8 para Excel. Usado en Turnos y Mensajes.
-  - Turnos / Mensajes: filtros por estado + rango de fecha, "marcar leído", export CSV. Badges de pendientes/no leídos en el sidebar.
+  - **Turnos** (`AppointmentsPage`): bandeja de las solicitudes que llegan del
+    sitio. Búsqueda, orden, filtros de estado y fecha y paginación los resuelve
+    **el servidor** (`GET /api/admin/appointments`), no el navegador: la tabla
+    crece sin techo y recortar sobre la página recibida hacía que una solicitud
+    más allá de la fila 200 no apareciera al buscarla. La exportación pide su
+    propio archivo completo a `/export`. Badge de pendientes en el sidebar y
+    tarjeta en el Dashboard, los dos leyendo el `total` del servidor.
+  - Mensajes: filtros por estado + rango de fecha, "marcar leído", export CSV. Badge de no leídos en el sidebar.
   - Sidebar agrupado (Inicio / Contenido / Operación / Sistema) y Dashboard con stats, actividad reciente y accesos rápidos.
   - Toggle publicar/despublicar inline en `PagesListPage` y `NewsListPage`.
   - `LucideIcon.tsx` — renderiza iconos [lucide](https://lucide.dev/icons/) por nombre kebab-case (`heart-pulse`). Usa `lucide-react/dynamicIconImports` + `React.lazy` + `Suspense` (⚠️ en lucide-react 0.460 **no existe** el subpath `lucide-react/dynamic`). `isIconName()` valida antes de renderizar. El helper `IconBadge` de `EntityManager` muestra el icono si el valor es un nombre lucide válido, y si no cae al emoji tal cual — antes el nombre se imprimía como texto crudo y se superponía a los títulos.
 
-✅ **Tests automatizados**: `pnpm test` (vitest) — **731 pruebas en 38 archivos**
-al cierre de la ronda 8. Las que necesitan base real se activan con
+✅ **Tests automatizados**: `pnpm test` (vitest) — **1053 pruebas en 50 archivos**
+al cierre de la correctiva de Turnos. Las que necesitan base real se activan con
 `TEST_DATABASE=1` y se saltan solas si no está. CI corre la suite completa contra
 MySQL 8. El smoke testing manual del Agente 3 **complementa** la suite, no la
 reemplaza: lo que se puede afirmar con una prueba, se afirma con una prueba.

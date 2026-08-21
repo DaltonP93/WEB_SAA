@@ -53,6 +53,27 @@ const ESTADO: Record<Readiness["overall"], { texto: string; chip: string }> = {
 };
 
 /**
+ * ¿La respuesta tiene la forma que esta tarjeta necesita?
+ *
+ * Sin esta comprobación, `q.data.summary.resolved` sobre una respuesta
+ * malformada lanza durante el render y React desmonta el árbol entero: se cae
+ * **todo** el Dashboard —stats, actividad reciente, accesos rápidos— por un
+ * endpoint secundario. Una tarjeta que no puede dibujarse tiene que
+ * desaparecer sola, no llevarse la pantalla.
+ */
+function esReadiness(valor: unknown): valor is Readiness {
+  if (!valor || typeof valor !== "object" || Array.isArray(valor)) return false;
+  const r = valor as Record<string, unknown>;
+  if (!["complete", "pending", "review"].includes(r.overall as string)) return false;
+  const s = r.summary;
+  if (!s || typeof s !== "object" || Array.isArray(s)) return false;
+  const resumen = s as Record<string, unknown>;
+  return (["resolved", "pending", "review", "total"] as const).every(
+    (k) => typeof resumen[k] === "number" && Number.isFinite(resumen[k] as number),
+  );
+}
+
+/**
  * Estado de carga de los datos institucionales, en la primera pantalla.
  *
  * Los números salen tal cual de `summary`: el servidor ya decidió qué cuenta
@@ -66,9 +87,12 @@ function ReadinessCard() {
     queryFn: async () => (await api.get("/admin/data-readiness")).data,
   });
 
-  if (q.isError) return null;
+  // Un error de red y una respuesta con forma inesperada terminan igual: la
+  // tarjeta no se dibuja y el resto del Dashboard sigue en pie.
+  const datos = esReadiness(q.data) ? q.data : null;
+  if (q.isError || (!q.isLoading && q.data !== undefined && !datos)) return null;
 
-  const estado = q.data ? ESTADO[q.data.overall] : null;
+  const estado = datos ? ESTADO[datos.overall] : null;
 
   return (
     <Link
@@ -88,15 +112,15 @@ function ReadinessCard() {
         <span className="ml-auto text-xs text-brand">Ver detalle →</span>
       </div>
 
-      {q.isLoading || !q.data ? (
+      {!datos ? (
         <div className="h-9 w-40 mt-3 bg-gray-200 rounded animate-pulse" />
       ) : (
         <>
           <div className="text-3xl font-bold text-brand tabular-nums mt-2">
-            {q.data.summary.resolved} / {q.data.summary.total}
+            {datos.summary.resolved} / {datos.summary.total}
           </div>
           <div className="text-xs text-gray-500 mt-1">
-            {q.data.summary.pending} sin cargar · {q.data.summary.review} para revisar
+            {datos.summary.pending} sin cargar · {datos.summary.review} para revisar
           </div>
         </>
       )}

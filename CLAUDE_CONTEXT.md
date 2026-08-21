@@ -5,8 +5,9 @@
 > Formato ejecutivo. Se actualiza en cada tarea terminada o preparación de
 > cambios para GitHub.
 
-**Última actualización:** implementación de la pantalla A-2 "Datos pendientes" (§11).
-**Cubre hasta:** PR #13 fusionado. La ronda del §11 está **en Draft, sin fusionar**.
+**Última actualización:** correctiva de Turnos — paginación por servidor, zona
+horaria e idempotencia (§13).
+**Cubre hasta:** PR #15 fusionado. La ronda del §13 está **en Draft, sin fusionar**.
 **Estado de `main`:** `git log --oneline -1 origin/main`.
 **Estado de CI:** los tres checks se exigen en verde antes de cada merge. El
 resultado vigente es el del último run sobre `origin/main`, no un SHA anotado acá.
@@ -31,7 +32,9 @@ resultado vigente es el del último run sobre `origin/main`, no un SHA anotado a
 | A-1 | #11 | Guía operativa de carga de datos (§8) |
 | A-2 (prerrequisitos) | #12 | ✅ fusionado — campos retirados con 410, canales protegidos, defaults de creación (§9) |
 | A-2 (blindaje) | #13 | ✅ fusionado — rollback de la nota de guardia blindado, 403 estable, catálogo sin deriva, contrato de `data-readiness` documentado (§10) |
-| A-2 (pantalla) | Draft | Blindaje por campos mutables, catálogo de horarios de runtime, endpoint `data-readiness` y pantalla "Datos pendientes" (§11) |
+| A-2 (pantalla) | #14 | ✅ fusionado — blindaje por campos mutables, catálogo de horarios de runtime, endpoint `data-readiness` y pantalla "Datos pendientes" (§11) |
+| Turnos (registro y bandeja) | #15 | ✅ fusionado — el formulario registra antes de salir a WhatsApp, migración con clave de envío única, bandeja en el panel (§12) |
+| Turnos (correctiva) | Draft | Paginación y orden por servidor, zona horaria institucional, idempotencia antes del CAPTCHA (§13) |
 
 ---
 
@@ -46,7 +49,7 @@ Monorepo **pnpm 9** (`pnpm-workspace.yaml`: `apps/*`, `api`, `shared`).
 | `apps/admin` | React 18 · Vite | Panel de administración (`/admin`) |
 | `shared/types` | TypeScript | Tipos y constantes compartidas |
 
-**Pruebas:** 44 archivos en `tests/`, **899 pruebas**, `vitest`. Las que tocan
+**Pruebas:** 50 archivos en `tests/`, **1053 pruebas**, `vitest`. Las que tocan
 base real se activan con `TEST_DATABASE=1` (si no, se saltan con `describe.skip`).
 
 **CI** (`.github/workflows/ci.yml`), tres jobs, todos bloqueantes:
@@ -307,7 +310,7 @@ conexión sana).
 
 | Comprobación | Resultado |
 |---|---|
-| Pruebas (Node 20 + MySQL/MariaDB, `TEST_DATABASE=1`) | **899 / 899** en 44 archivos |
+| Pruebas (Node 20 + MySQL/MariaDB, `TEST_DATABASE=1`) | **1053 / 1053** en 50 archivos |
 | `pnpm typecheck` | OK |
 | Builds `@sa/api` / `@sa/web` / `@sa/admin` | OK |
 | Prerender real (`scripts/ci/verify-prerender.mjs`) | OK, exit 0 |
@@ -316,17 +319,11 @@ conexión sana).
 | `gitleaks detect --no-git` (árbol) | *no leaks found* |
 | **CI: 3 / 3 checks** | se exigen en verde antes de cada merge; el resultado vigente es el del último run |
 
-> Los 899 salen de **804 + 95** de la ronda del §11, medido con
-> `vitest run --reporter=json` sobre el árbol limpio y sobre el árbol nuevo:
-> `rollback-guardia-campos` +22, `data-readiness` +34, `data-readiness-panel`
-> +17 y `horarios-catalogo` +7 (archivos nuevos), más
-> `docs-datos-pendientes-contrato` 17 → 32. **No se quitó ni se relajó ninguna
-> prueba existente**; los ajustes se explican en el §11.6.
->
-> El baseline de la ronda anterior es **804**, no 803: el cuerpo de PR #13 anotó
-> un número que difiere en uno del que devuelve el reporter sobre `main`.
+> Los 1053 salen del baseline de **980 en 47 archivos** (PR #15 fusionado) más
+> lo de la ronda del §13, medido con `vitest run --reporter=json`. **No se quitó
+> ni se relajó ninguna prueba existente**; los ajustes se explican en el §13.6.
 
-**Los PR #8 a #13 están fusionados a `main`**, todos por instrucción explícita
+**Los PR #8 a #15 están fusionados a `main`**, todos por instrucción explícita
 del propietario y con los tres checks en verde. Ninguno tiene nada pendiente: se
 desarrollaron bajo la consigna "sin merge, sin deploy, sin Ready for review" y el
 propietario levantó esa restricción caso por caso una vez verdes los checks.
@@ -348,8 +345,8 @@ deploy ni paso de ssh, rsync o scp. El despliegue se dispara a mano con
    mantiene mientras esa decisión no se tome.**
 2. **Logos y centro de campañas.** Explícitamente fuera de alcance desde la ronda 4
    y hasta nueva orden. **No trabajar en esto sin autorización separada.**
-3. **Merge, deploy y Ready for review** de la ronda del §11, que está en Draft:
-   los decide el propietario. Los PR #8 a #13 ya están fusionados y no tienen
+3. **Merge, deploy y Ready for review** de la ronda del §13, que está en Draft:
+   los decide el propietario. Los PR #8 a #15 ya están fusionados y no tienen
    nada pendiente.
 4. **Confirmación escrita del alcance de Biopsias.** Mientras no exista, la
    pantalla A-2 lo reporta como `review` por diseño y `overall` nunca llega a
@@ -1168,10 +1165,10 @@ Se implementó en la ronda siguiente (§11), que además corrigió tres defectos
 
 ---
 
-## 11. Ola A-2 — Pantalla "Datos pendientes"
+## 11. Ola A-2 — Pantalla "Datos pendientes" — ✅ PR #14 fusionado
 
-> **Estado: Draft, sin fusionar.** Sin merge, sin deploy y sin *Ready for
-> review* por instrucción explícita del propietario.
+> **Estado: fusionado a `main`.** Se entregó en Draft y el propietario lo marcó
+> *Ready for review* y lo fusionó él mismo.
 
 Parte de `main` con PR #13 ya fusionado. Antes de implementar la pantalla se
 cierran tres defectos que la revisión de PR #13 encontró en la ronda anterior.
@@ -1331,11 +1328,185 @@ son: `rollback-guardia-campos` 22, `data-readiness` 34,
 
 CI corre la suite contra **MySQL 8**; el número local se obtuvo contra MariaDB.
 
-### 11.8 Qué falta
+### 11.8 Qué quedó pendiente al cerrar esta ronda
+
+Se cerró en las rondas siguientes (§12 y §13). Lo que sigue abierto está en
+§13.8.
+
+---
+
+## 12. Turnos — registro y bandeja — ✅ PR #15 fusionado
+
+Salió de una auditoría de finalización funcional, que encontró la cadena de
+Turnos **rota en las dos puntas**: `AppointmentForm.tsx` abría `wa.me` y nunca
+llamaba a la API, mientras `POST /api/public/appointments` guardaba nombre,
+teléfono, correo y mensaje en una tabla que `GET /api/admin/appointments`
+exponía y que **ningún archivo del panel leía**. Una superficie pública que
+aceptaba datos personales de pacientes y que nadie podía ver.
+
+WhatsApp sigue siendo el canal con el que se coordina. Lo que se agregó es el
+registro:
+
+- el formulario pide nombre, teléfono, correo y **aceptación explícita** del
+  uso de los datos, con honeypot y el mismo CAPTCHA que `ContactForm`;
+- primero el `201`, después la salida a WhatsApp — y la salida es una
+  navegación en la misma pestaña, porque después de un `await` el navegador
+  bloquea `window.open()` como popup;
+- si el registro falla, el formulario **no pierde nada** y ofrece "Continuar
+  sólo por WhatsApp" aclarando que así no queda registrado;
+- `20260823000000_turnos_registro.ts` agregó `submission_key` con índice único,
+  `consent_at` y `updated_at`;
+- `AppointmentsPage` con `DataTable`, `ConfirmDialog` y CSV; ruta `/turnos`,
+  entrada en *Operación* con contador y tarjeta en el Dashboard.
+
+**La revisión de GitHub llegó después del merge y encontró tres defectos**, que
+cierra la ronda del §13.
+
+---
+
+## 13. Turnos — correctiva de paginación, zona horaria e idempotencia
+
+> **Estado: Draft, sin fusionar.** Sin merge, sin deploy y sin *Ready for
+> review* por instrucción explícita del propietario.
+
+Parte de `main` con PR #15 ya fusionado. **Alcance exclusivo de estos tres
+defectos** más el blindaje de `ReadinessCard` y el aislamiento de las pruebas de
+deploy: no toca multimedia, logos, Page Builder, Biopsias ni usuarios.
+
+### 13.1 La bandeja buscaba dentro de 200 filas, no dentro de las solicitudes
+
+La API aceptaba `q`, `limit` y `offset` y `AppointmentsPage` **nunca los
+mandaba**: pedía las primeras 200 filas y hacía todo lo demás en el navegador.
+Con 250 solicitudes, buscar a quien estuviera más abajo devolvía "sin
+resultados" —y el operador no tenía cómo saber que el dato existía—, el
+contador decía cuántas había recibido en vez de cuántas hay, y a esa fila no se
+llegaba desde ninguna página: no se la podía confirmar ni eliminar.
+
+`DataTable` acepta ahora un `server` **opcional**: cuando viene, no filtra, no
+ordena y no pagina por su cuenta. Los CRUD que cargan la tabla entera —Médicos,
+Especialidades, Servicios— siguen exactamente igual.
+
+- `q` con debounce de 300 ms: sin él cada tecla dispara una consulta y las
+  respuestas pueden llegar desordenadas —la de "Bru" después de la de "Bruno"—.
+- Cambiar búsqueda o filtros **vuelve a la página 0**: la página 7 de otro
+  conjunto no existe, y quedarse ahí muestra una tabla vacía sobre un total que
+  dice que hay resultados.
+- El orden usa una **allowlist** (`ORDENABLES`): el valor entra en el `ORDER
+  BY`, así que aceptar cualquier string sería dejar decidir al cliente qué se
+  ejecuta. Hay desempate por `id` para que el orden sea estable entre páginas.
+- El contador y los badges leen el `total` del servidor, no `rows.length`.
+
+### 13.2 El CSV exportaba la página, no el resultado
+
+Se agregó `GET /api/admin/appointments/export`, autenticado, que devuelve
+**todo** lo que coincide con los filtros. Se arma en el servidor porque es el
+único lado con el resultado entero sin recorrer páginas, y porque el archivo
+tiene que salir con `Cache-Control: no-store`: lleva nombres, teléfonos y
+correos.
+
+Las celdas se neutralizan (`celdaCsv`): Excel y LibreOffice evalúan como
+fórmula lo que empieza con `=`, `+`, `-`, `@` o un control, y ese contenido lo
+escribe cualquiera que complete el formulario público.
+
+**Y morgan dejó de loguear la query string.** `morgan("dev")` registraba la URL
+completa, así que lo que el operador escribe para buscar —el apellido, el
+teléfono o el correo de un paciente— terminaba en los logs del servidor sin que
+nadie lo hubiera decidido. Se conservan los nombres de los parámetros y se
+descartan los valores.
+
+### 13.3 La hora dependía de cómo estuviera configurado el VPS
+
+`<input type="datetime-local">` manda una hora de pared sin offset, y
+`new Date(valor)` la resolvía con la zona del proceso: un servidor en UTC
+guardaba las 10:30 UTC —las 07:30 de Asunción— para quien eligió las 10:30 de
+la mañana. La fila quedaba con una hora plausible y equivocada, y lo mismo
+pasaba con los límites de los filtros por fecha.
+
+`api/src/timezone.ts` es la fuente única, con `America/Asuncion`. **Zona IANA y
+no un offset fijo**: un `-03:00` escrito a mano es una afirmación sobre el
+pasado y el futuro, y Paraguay tuvo horario de verano hasta 2024.
+
+- El `to` de los filtros es "**menor que el inicio del día siguiente**" y no
+  `23:59:59.999`: así no hay que razonar sobre la precisión de la columna.
+- El día siguiente se calcula sumando **al calendario**, no 24 h al instante:
+  en un cambio de horario el día dura 23 o 25 horas.
+- `correspondeA()` rechaza fechas que no existen: `Date.UTC` normaliza en
+  silencio y `"2020-13-40"` devolvía un límite perfectamente válido para una
+  fecha inventada.
+- El panel formatea con la misma zona (`apps/admin/src/lib/fecha.ts`), y el
+  texto de WhatsApp reformatea la cadena elegida sin pasar por `Date`.
+
+`tests/turnos-zona-horaria.test.ts` **ejecuta las conversiones en procesos con
+`TZ=UTC` y `TZ=America/New_York`** —no simula la diferencia, la provoca— y
+comprueba que el instante guardado, lo que se muestra y los límites diarios
+sean idénticos.
+
+### 13.4 El CAPTCHA se verificaba antes de la idempotencia
+
+El token es de un solo uso. Verificarlo antes de mirar la clave de envío rompía
+justo el caso para el que la clave existe: la fila se escribe, la respuesta se
+pierde, y el reintento llega con un token consumido → **400 sobre una solicitud
+ya guardada**. La persona veía un error, reintentaba, y veía el mismo error.
+
+El handler quedó en este orden, que es el contrato: honeypot → forma del
+payload → normalización de la fecha → búsqueda de la clave → devolver si el
+contenido coincide → **409** si la misma clave trae otro contenido →
+referencias y CAPTCHA sólo para una clave nueva → insertar → volver a comparar
+en la carrera del índice único.
+
+Mover la verificación no relaja nada: una clave que no existe sigue exigiendo
+CAPTCHA válido. Lo que sí había que impedir es lo contrario —que reutilizar una
+clave con otros datos devolviera éxito sobre una solicitud ajena—, y de ahí el
+409. La comparación cubre nombre, teléfono, correo, especialidad, médico, fecha
+normalizada y mensaje; **no** el CAPTCHA, el honeypot ni las marcas de tiempo,
+que cambian entre intentos legítimos.
+
+### 13.5 `ReadinessCard` rompía todo el Dashboard
+
+`q.data.summary.resolved` sobre una respuesta malformada lanza durante el
+render, y React desmonta el árbol entero: se caía el Dashboard completo por un
+endpoint secundario. Ahora hay un type guard y la tarjeta desaparece sola.
+
+### 13.6 Ajustes a pruebas existentes (ninguna aserción se relajó)
+
+- **`tests/deploy-update-reexec.test.ts` y `deploy-update-no-rollback.test.ts`**:
+  los dos ejecutan `update-vps.sh`, que hace `mktemp` en `$TMPDIR` con el
+  prefijo `update-vps-`; y los escenarios del segundo se creaban **con ese
+  mismo prefijo**. En paralelo, cada uno veía los temporales del otro y la
+  comprobación "la copia no puede quedar colgada" fallaba sin que nada
+  estuviera mal. Ahora cada archivo tiene su propio `TMPDIR` y lo limpia. **No
+  se tocó `update-vps.sh`.**
+- **`tests/turnos-api.test.ts`**: la prueba del reintento tras un timeout
+  mandaba un `message` distinto con la misma clave. Bajo el contrato nuevo eso
+  es un 409, que es lo correcto; el reintento real manda lo mismo. Se corrigió
+  el escenario, no la aserción.
+- **`tests/turnos-panel.test.tsx`**: la búsqueda y la exportación pasaron a
+  comprobar que viajan al servidor, porque ya no ocurren en el navegador.
+
+### 13.7 Validación
+
+| Comprobación | Resultado |
+|---|---|
+| Suite completa (Node 20 + MariaDB local, `TEST_DATABASE=1`) | **1053 / 1053** en 50 archivos |
+| `pnpm typecheck` | OK |
+| Builds `@sa/api` / `@sa/web` / `@sa/admin` | OK |
+| `node scripts/ci/verify-prerender.mjs` | OK, exit 0 |
+| `pnpm audit --prod` | *No known vulnerabilities found* |
+| `node scripts/check-secrets.mjs` | sin credenciales en el árbol |
+| `gitleaks detect --no-git` (8.28.0) | *no leaks found* |
+
+Baseline sobre `main` (PR #15 fusionado): **980 en 47 archivos**. CI corre la
+suite contra **MySQL 8**; el número local se obtuvo contra MariaDB.
+
+### 13.8 Qué falta
 
 | Ítem | Estado |
 |---|---|
-| A-3 (`PUBLIC_SITE_URL` al dominio definitivo) | 🔲 **bloqueado** por dominio, DNS y HTTPS |
+| Multimedia: transparencia WebP/GIF, extensión vs. contenido, GIF animado | 🔲 **desarrollo pendiente** — conviene cerrarlo antes de que carguen logos |
+| Bloque `logos`: `alt` con enlace, `width`/`height`/`lazy`, opacidad, `active` | 🔲 desarrollo pendiente |
+| Reordenar ítems en el Page Builder (`kind: "items"`) | 🔲 desarrollo pendiente |
+| Confirmación escrita del alcance de Biopsias | 🔲 decisión del sanatorio + contrato por aprobar; hasta entonces el ítem queda en `review` por diseño |
+| Usuarios: `safeParse` → 400, proteger el último superadmin | 🔲 desarrollo pendiente |
+| A-3 (`PUBLIC_SITE_URL` al dominio definitivo) | 🔲 **configuración de producción**, más adelante |
 | Purga del secreto histórico (`9ced09d`) | 🔲 **decisión del propietario** — NO-GO de producción vigente; sólo se informa |
-| Confirmación escrita del alcance de Biopsias | 🔲 decisión del sanatorio; hasta entonces el ítem queda en `review` por diseño |
-| Logos y campañas | 🔲 fuera de alcance hasta autorización separada |
+| Campañas Meta / Google / Instagram | 🔲 otra fase completa; hoy no existe nada |

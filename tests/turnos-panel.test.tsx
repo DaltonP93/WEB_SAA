@@ -61,13 +61,20 @@ let respuesta: (qs: string) => { items: Turno[]; total: number } = () => ({ item
 let urlsPedidas: string[] = [];
 let escrituras: { method: string; url: string; body?: any }[] = [];
 let fallarLista = false;
-/** Blobs que `downloadCsv` mandó a `URL.createObjectURL`. */
+/** Lo que devuelve el endpoint de exportación. */
+let csvDelServidor = "\ufeffNombre,Teléfono\r\nAna Prueba,+595 981 000 111";
+/** Blobs que la descarga mandó a `URL.createObjectURL`. */
 let blobs: Blob[] = [];
 
 vi.mock("../apps/admin/src/api", () => ({
   api: {
-    get: async (url: string) => {
+    get: async (url: string, _config?: unknown) => {
       urlsPedidas.push(url);
+      if (url.startsWith("/admin/appointments/export")) {
+        // El CSV lo arma la API con **todo** el resultado; el panel sólo lo
+        // descarga. Devolverlo como texto es lo que hace el endpoint real.
+        return { data: csvDelServidor };
+      }
       if (url.startsWith("/admin/appointments")) {
         if (fallarLista) throw new Error("500");
         return { data: respuesta(url.split("?")[1] ?? "") };
@@ -149,6 +156,7 @@ beforeEach(async () => {
   escrituras = [];
   blobs = [];
   fallarLista = false;
+  csvDelServidor = "\ufeffNombre,Teléfono\r\nAna Prueba,+595 981 000 111";
   respuesta = () => ({ items: [turno()], total: 1 });
 
   // jsdom no implementa las URL de objeto; se capturan los blobs para poder
@@ -235,18 +243,40 @@ describe("filtros", () => {
     );
   });
 
-  it("la búsqueda libre filtra la tabla", async () => {
-    respuesta = () => ({
-      items: [turno(), turno({ id: 2, name: "Bruno Prueba", email: "bruno@ejemplo.test" })],
-      total: 2,
-    });
+  it("la búsqueda viaja al servidor, no recorta la página en el navegador", async () => {
+    // Recortar en el cliente buscaba dentro de lo recibido: con más
+    // solicitudes que el tope de una página, un apellido que estuviera más
+    // abajo daba "sin resultados" aunque existiera.
+    respuesta = (qs) =>
+      qs.includes("q=Bruno")
+        ? { items: [turno({ id: 2, name: "Bruno Prueba", email: "bruno@ejemplo.test" })], total: 1 }
+        : { items: [turno()], total: 1 };
     montar(soloBandeja(), "/admin/turnos");
-    await screen.findByText("Bruno Prueba");
+    await screen.findByText("Ana Prueba");
 
     fireEvent.change(screen.getByPlaceholderText(/Buscar por nombre/i), { target: { value: "Bruno" } });
 
-    await waitFor(() => expect(screen.queryByText("Ana Prueba")).toBeNull());
-    expect(screen.getByText("Bruno Prueba")).toBeTruthy();
+    await waitFor(() => expect(urlsPedidas.some((u) => u.includes("q=Bruno"))).toBe(true));
+    expect(await screen.findByText("Bruno Prueba")).toBeTruthy();
+    expect(screen.queryByText("Ana Prueba")).toBeNull();
+  });
+
+  it("espera a que se deje de tipear antes de consultar", async () => {
+    montar(soloBandeja(), "/admin/turnos");
+    await screen.findByText("Ana Prueba");
+    const antes = urlsPedidas.length;
+
+    const caja = screen.getByPlaceholderText(/Buscar por nombre/i);
+    for (const texto of ["B", "Br", "Bru", "Brun", "Bruno"]) {
+      fireEvent.change(caja, { target: { value: texto } });
+    }
+
+    // Sin debounce cada tecla dispara una consulta y las respuestas pueden
+    // llegar desordenadas: la de "Bru" después de la de "Bruno".
+    expect(urlsPedidas.length).toBe(antes);
+    await waitFor(() => expect(urlsPedidas.some((u) => u.includes("q=Bruno"))).toBe(true));
+    const consultas = urlsPedidas.slice(antes).filter((u) => u.includes("q="));
+    expect(consultas.length, "se consultó por cada tecla").toBeLessThanOrEqual(2);
   });
 });
 
@@ -305,18 +335,37 @@ describe("eliminación", () => {
 });
 
 describe("exportación CSV", () => {
-  it("exporta lo que hay en pantalla, con encabezados en español", async () => {
+  it("descarga el archivo que arma el servidor, no la página visible", async () => {
     montar(soloBandeja(), "/admin/turnos");
     await screen.findByText("Ana Prueba");
 
     fireEvent.click(screen.getByRole("button", { name: /Exportar CSV/i }));
 
     await waitFor(() => expect(blobs).toHaveLength(1));
+    expect(
+      urlsPedidas.some((u) => u.startsWith("/admin/appointments/export")),
+      "el CSV tiene que pedirse al endpoint que ve el resultado entero",
+    ).toBe(true);
+    // `readAsText` consume la marca de orden de bytes, como cualquier
+    // navegador: se compara el contenido, no el BOM.
     const texto = await leerBlob(blobs[0]);
-    expect(texto).toContain("Nombre");
-    expect(texto).toContain("Teléfono");
-    expect(texto).toContain("Ana Prueba");
-    expect(texto).toContain("+595 981 000 111");
+    expect(texto).toBe(csvDelServidor.replace(/^\ufeff/, ""));
+  });
+
+  it("la exportación se lleva los filtros puestos, sin límite ni desplazamiento", async () => {
+    montar(soloBandeja(), "/admin/turnos");
+    await screen.findByText("Ana Prueba");
+    fireEvent.change(screen.getByLabelText("Estado"), { target: { value: "confirmado" } });
+    await waitFor(() => expect(urlsPedidas.some((u) => u.includes("status=confirmado"))).toBe(true));
+
+    fireEvent.click(screen.getByRole("button", { name: /Exportar CSV/i }));
+
+    await waitFor(() => expect(blobs).toHaveLength(1));
+    const pedido = urlsPedidas.filter((u) => u.startsWith("/admin/appointments/export")).at(-1)!;
+    expect(pedido).toContain("status=confirmado");
+    // Con `limit`/`offset` el archivo saldría truncado a una página.
+    expect(pedido).not.toContain("limit=");
+    expect(pedido).not.toContain("offset=");
   });
 
   it("con la tabla vacía el botón está deshabilitado", async () => {
@@ -384,5 +433,127 @@ describe("menú y Dashboard", () => {
     // El subtítulo aparece recién con el dato cargado: mientras carga hay un
     // esqueleto, y buscarlo antes fallaría por una carrera, no por el texto.
     await waitFor(() => expect(within(tarjeta).getByText(/Se coordinan por WhatsApp/i)).toBeTruthy());
+  });
+});
+
+describe("paginación por servidor", () => {
+  /** 250 solicitudes en la base, 20 por página: 13 páginas, la última con 10. */
+  const MUCHAS = 250;
+  const POR_PAGINA = 20;
+  const PAGINAS = Math.ceil(MUCHAS / POR_PAGINA);
+  const OFFSET_ULTIMA = (PAGINAS - 1) * POR_PAGINA;
+
+  const paginado = (qs: string) => {
+    const params = new URLSearchParams(qs);
+    const offset = Number(params.get("offset") ?? 0);
+    const limit = Number(params.get("limit") ?? POR_PAGINA);
+    const q = params.get("q") ?? "";
+    const total = q ? 1 : MUCHAS;
+    const items = Array.from({ length: Math.max(0, Math.min(limit, total - offset)) }, (_, i) =>
+      turno({ id: offset + i + 1, name: q ? "Zulema Prueba" : `Paciente ${offset + i} Prueba` }),
+    );
+    return { items, total };
+  };
+
+  beforeEach(() => {
+    respuesta = paginado;
+  });
+
+  it("el contador muestra el total del servidor, no las filas recibidas", async () => {
+    montar(soloBandeja(), "/admin/turnos");
+    await screen.findByText("Paciente 0 Prueba");
+
+    // Con `rows.length` diría 20 y el operador creería que no hay más.
+    expect(screen.getByText(`${MUCHAS} solicitudes`)).toBeTruthy();
+  });
+
+  it("se puede llegar a la última página y ahí hay filas de verdad", async () => {
+    montar(soloBandeja(), "/admin/turnos");
+    await screen.findByText("Paciente 0 Prueba");
+
+    fireEvent.click(screen.getByRole("button", { name: String(PAGINAS) }));
+
+    await waitFor(() => expect(urlsPedidas.some((u) => u.includes(`offset=${OFFSET_ULTIMA}`))).toBe(true));
+    expect(await screen.findByText(`Paciente ${OFFSET_ULTIMA} Prueba`)).toBeTruthy();
+    // La última página trae el resto, no una página entera.
+    expect(screen.queryByText(`Paciente ${MUCHAS} Prueba`)).toBeNull();
+  });
+
+  it("una fila de la última página se puede confirmar y eliminar", async () => {
+    // Con el recorte en el navegador, esta fila no existía en ninguna página y
+    // no había forma de tocarla.
+    montar(soloBandeja(), "/admin/turnos");
+    await screen.findByText("Paciente 0 Prueba");
+    fireEvent.click(screen.getByRole("button", { name: String(PAGINAS) }));
+    const ultima = await screen.findByText(`Paciente ${OFFSET_ULTIMA} Prueba`);
+
+    const fila = ultima.closest("tr")!;
+    fireEvent.click(within(fila).getByRole("button", { name: "Confirmar" }));
+    await waitFor(() => expect(escrituras).toHaveLength(1));
+    expect(escrituras[0]).toMatchObject({
+      method: "put",
+      url: `/admin/appointments/${OFFSET_ULTIMA + 1}`,
+    });
+
+    fireEvent.click(within(fila).getByRole("button", { name: "Eliminar" }));
+    const dialogo = await abrirDialogo();
+    fireEvent.click(within(dialogo).getByRole("button", { name: "Eliminar" }));
+    await waitFor(() => expect(escrituras).toHaveLength(2));
+    expect(escrituras[1].method).toBe("delete");
+  });
+
+  it("cambiar un filtro vuelve a la primera página", async () => {
+    montar(soloBandeja(), "/admin/turnos");
+    await screen.findByText("Paciente 0 Prueba");
+    fireEvent.click(screen.getByRole("button", { name: "5" }));
+    await waitFor(() => expect(urlsPedidas.some((u) => u.includes("offset=80"))).toBe(true));
+
+    fireEvent.change(screen.getByLabelText("Estado"), { target: { value: "confirmado" } });
+
+    // Quedarse en la página 5 de otro conjunto muestra una tabla vacía sobre
+    // un total que dice que hay resultados.
+    await waitFor(() => {
+      const ultima = urlsPedidas.filter((u) => u.includes("status=confirmado")).at(-1);
+      expect(ultima).toContain("offset=0");
+    });
+  });
+
+  it("buscar también vuelve a la primera página", async () => {
+    montar(soloBandeja(), "/admin/turnos");
+    await screen.findByText("Paciente 0 Prueba");
+    fireEvent.click(screen.getByRole("button", { name: "5" }));
+    await waitFor(() => expect(urlsPedidas.some((u) => u.includes("offset=80"))).toBe(true));
+
+    fireEvent.change(screen.getByPlaceholderText(/Buscar por nombre/i), { target: { value: "Zulema" } });
+
+    await waitFor(() => {
+      const ultima = urlsPedidas.filter((u) => u.includes("q=Zulema")).at(-1);
+      expect(ultima).toContain("offset=0");
+    });
+    expect(await screen.findByText("Zulema Prueba")).toBeTruthy();
+  });
+
+  it("una búsqueda sin coincidencias no deja las filas anteriores", async () => {
+    respuesta = (qs) => (qs.includes("q=") ? { items: [], total: 0 } : paginado(qs));
+    montar(soloBandeja(), "/admin/turnos");
+    await screen.findByText("Paciente 0 Prueba");
+
+    fireEvent.change(screen.getByPlaceholderText(/Buscar por nombre/i), { target: { value: "no-existe" } });
+
+    expect(await screen.findByText(/No hay solicitudes de turno con esos filtros/i)).toBeTruthy();
+    expect(screen.queryByText("Paciente 0 Prueba")).toBeNull();
+    expect(screen.getByText("0 solicitudes")).toBeTruthy();
+  });
+
+  it("ordenar por una columna se lo pide al servidor", async () => {
+    montar(soloBandeja(), "/admin/turnos");
+    await screen.findByText("Paciente 0 Prueba");
+
+    fireEvent.click(screen.getByText("Paciente"));
+
+    // Ordenar en el navegador sólo reacomodaría las 20 filas visibles.
+    await waitFor(() => expect(urlsPedidas.some((u) => u.includes("sort=name&dir=asc"))).toBe(true));
+    fireEvent.click(screen.getByText("Paciente"));
+    await waitFor(() => expect(urlsPedidas.some((u) => u.includes("sort=name&dir=desc"))).toBe(true));
   });
 });

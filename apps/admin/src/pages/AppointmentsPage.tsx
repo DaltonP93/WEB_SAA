@@ -1,10 +1,10 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { api } from "../api";
 import DataTable, { type DataTableColumn } from "../components/DataTable";
 import { useConfirm } from "../components/ConfirmDialog";
-import { downloadCsv } from "../lib/csv";
+import { formatearEnZona } from "../lib/fecha";
 
 /**
  * Bandeja de solicitudes de turno.
@@ -13,6 +13,15 @@ import { downloadCsv } from "../lib/csv";
  * pantalla resuelve es que la solicitud exista para el sanatorio aunque el
  * paciente no llegue a escribir, escriba desde otro número o su mensaje se
  * pierda entre cientos.
+ *
+ * ## Todo lo que recorta la lista lo hace el servidor
+ *
+ * La versión anterior pedía las primeras 200 filas y buscaba, ordenaba y
+ * paginaba sobre eso. Con más de 200 solicitudes, buscar un apellido que
+ * estuviera más abajo devolvía "sin resultados", el contador decía cuántas
+ * había recibido en vez de cuántas hay, y las páginas que faltaban
+ * sencillamente no existían. Ahora la búsqueda, el orden y la ventana viajan a
+ * la base, y la exportación pide su propio archivo completo.
  *
  * Los datos personales que se ven acá **sólo se ven acá**: el endpoint público
  * nunca los devuelve y esta pantalla cuelga de `requireAuth`.
@@ -35,7 +44,17 @@ interface Turno {
   specialty_name: string | null;
 }
 
+interface Pagina {
+  items: Turno[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 export const APPOINTMENTS_KEY = "adm-appointments";
+const POR_PAGINA = 20;
+/** Lo que se espera a que la persona deje de tipear antes de consultar. */
+export const DEBOUNCE_MS = 300;
 
 const ESTADOS: { value: Estado; label: string; clase: string }[] = [
   { value: "pendiente", label: "Pendiente", clase: "bg-amber-100 text-amber-900 border-amber-200" },
@@ -45,7 +64,31 @@ const ESTADOS: { value: Estado; label: string; clase: string }[] = [
 
 const etiqueta = (estado: string) => ESTADOS.find((e) => e.value === estado) ?? ESTADOS[0];
 
-const fecha = (valor: string | null) => (valor ? new Date(valor).toLocaleString() : "—");
+const fecha = (valor: string | null) => formatearEnZona(valor) || "—";
+
+/** Los filtros que entiende la API, en un solo lugar. */
+function comoQuery(f: {
+  status: string;
+  from: string;
+  to: string;
+  q: string;
+  sort: string | null;
+  dir: "asc" | "desc";
+  page: number;
+}): string {
+  const params = new URLSearchParams();
+  if (f.status) params.set("status", f.status);
+  if (f.from) params.set("from", f.from);
+  if (f.to) params.set("to", f.to);
+  if (f.q) params.set("q", f.q);
+  if (f.sort) {
+    params.set("sort", f.sort);
+    params.set("dir", f.dir);
+  }
+  params.set("limit", String(POR_PAGINA));
+  params.set("offset", String(f.page * POR_PAGINA));
+  return params.toString();
+}
 
 export default function AppointmentsPage() {
   const qc = useQueryClient();
@@ -54,27 +97,36 @@ export default function AppointmentsPage() {
   const [status, setStatus] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  /** Lo que se está tipeando. */
+  const [busqueda, setBusqueda] = useState("");
+  /** Lo que ya se consultó: se actualiza cuando la persona deja de tipear. */
+  const [q, setQ] = useState("");
+  const [sort, setSort] = useState<string | null>(null);
+  const [dir, setDir] = useState<"asc" | "desc">("asc");
+  const [page, setPage] = useState(0);
 
-  // Los filtros van en la clave: cambiar uno pide de nuevo al servidor en vez
-  // de recortar en el navegador una lista que puede venir truncada por el
-  // límite. La búsqueda libre sí la resuelve `DataTable` sobre lo que llegó.
-  const filtros = { status, from, to };
+  useEffect(() => {
+    // Sin esto cada tecla dispara una consulta, y las respuestas pueden llegar
+    // desordenadas: la de "Bru" después de la de "Bruno".
+    const t = setTimeout(() => setQ(busqueda.trim()), DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [busqueda]);
+
+  // Cambiar qué se busca invalida en qué página estabas: la página 7 de otro
+  // conjunto no existe, y quedarse ahí muestra una tabla vacía sobre un total
+  // que dice que hay resultados.
+  useEffect(() => setPage(0), [q, status, from, to, sort, dir]);
+
+  const filtros = { status, from, to, q, sort, dir, page };
   const list = useQuery({
     queryKey: [APPOINTMENTS_KEY, filtros],
-    queryFn: async () => {
-      const params = new URLSearchParams();
-      if (status) params.set("status", status);
-      if (from) params.set("from", from);
-      if (to) params.set("to", to);
-      const qs = params.toString();
-      return (await api.get(`/admin/appointments${qs ? `?${qs}` : ""}`)).data as {
-        items: Turno[];
-        total: number;
-      };
-    },
+    queryFn: async () => (await api.get(`/admin/appointments?${comoQuery(filtros)}`)).data as Pagina,
+    // Sin esto, al pasar de página la tabla parpadea vacía entre respuestas.
+    placeholderData: (previa) => previa,
   });
 
   const rows = useMemo(() => list.data?.items ?? [], [list.data]);
+  const total = list.data?.total ?? 0;
 
   const invalidar = () => qc.invalidateQueries({ queryKey: [APPOINTMENTS_KEY] });
 
@@ -107,32 +159,41 @@ export default function AppointmentsPage() {
     if (ok) borrar.mutate(t.id);
   }
 
-  function exportar() {
-    downloadCsv(
-      "turnos.csv",
-      rows.map((t) => ({
-        created_at: fecha(t.created_at),
-        name: t.name,
-        phone: t.phone,
-        email: t.email,
-        specialty: t.specialty_name ?? "",
-        doctor: t.doctor_name ?? "",
-        preferred_at: fecha(t.preferred_at),
-        status: etiqueta(t.status).label,
-        message: t.message ?? "",
-      })),
-      [
-        { key: "created_at", header: "Solicitado" },
-        { key: "name", header: "Nombre" },
-        { key: "phone", header: "Teléfono" },
-        { key: "email", header: "Email" },
-        { key: "specialty", header: "Especialidad" },
-        { key: "doctor", header: "Médico" },
-        { key: "preferred_at", header: "Preferencia" },
-        { key: "status", header: "Estado" },
-        { key: "message", header: "Mensaje" },
-      ],
-    );
+  const [exportando, setExportando] = useState(false);
+
+  /**
+   * Descarga **todo** lo que coincide con los filtros, no la página visible.
+   *
+   * El archivo lo arma la API: es la única que tiene el resultado entero sin
+   * recorrer páginas, y así sale con `Cache-Control: no-store` y con las
+   * celdas neutralizadas para que una planilla no ejecute lo que alguien
+   * escribió en el formulario público.
+   */
+  async function exportar() {
+    setExportando(true);
+    try {
+      const sinPagina = comoQuery({ status, from, to, q, sort, dir, page: 0 })
+        .split("&")
+        .filter((p) => !p.startsWith("limit=") && !p.startsWith("offset="))
+        .join("&");
+      const res = await api.get(`/admin/appointments/export${sinPagina ? `?${sinPagina}` : ""}`, {
+        responseType: "text",
+        transformResponse: [(d) => d],
+      });
+      const blob = new Blob([res.data as string], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "turnos.csv";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error("No se pudo exportar");
+    } finally {
+      setExportando(false);
+    }
   }
 
   const columnas: DataTableColumn<Turno>[] = [
@@ -173,6 +234,7 @@ export default function AppointmentsPage() {
     {
       key: "preferred_at",
       header: "Preferencia",
+      sortable: true,
       accessor: (t) => t.preferred_at ?? "",
       render: (t) => <span className="text-xs whitespace-nowrap">{fecha(t.preferred_at)}</span>,
     },
@@ -190,18 +252,16 @@ export default function AppointmentsPage() {
       key: "message",
       header: "Mensaje",
       accessor: (t) => t.message ?? "",
-      render: (t) => <span className="text-xs text-gray-600 line-clamp-2">{t.message ?? "—"}</span>,
+      render: (t) => <span className="text-xs text-gray-600">{t.message ?? "—"}</span>,
     },
   ];
-
-  const pendientes = rows.filter((t) => t.status === "pendiente").length;
 
   return (
     <div>
       <h1 className="text-2xl font-bold mb-1">Turnos</h1>
       <p className="text-sm text-gray-500 mb-6">
         Solicitudes recibidas desde el sitio. La coordinación sigue siendo por WhatsApp; acá queda el
-        registro para que ninguna se pierda.
+        registro para que ninguna se pierda. Los horarios están en hora de Asunción.
       </p>
 
       <div className="flex flex-wrap items-end gap-3 mb-4">
@@ -222,11 +282,13 @@ export default function AppointmentsPage() {
           <label className="label" htmlFor="f-hasta">Hasta</label>
           <input id="f-hasta" type="date" value={to} onChange={(e) => setTo(e.target.value)} className="input" />
         </div>
-        <button onClick={exportar} className="btn-secondary" disabled={rows.length === 0}>
-          Exportar CSV
+        <button onClick={exportar} className="btn-secondary" disabled={total === 0 || exportando}>
+          {exportando ? "Exportando…" : "Exportar CSV"}
         </button>
         <span className="text-sm text-gray-500 ml-auto">
-          {rows.length} solicitudes · {pendientes} pendientes
+          {/* El total es el del servidor: contar `rows` diría cuántas se
+              recibieron en esta página, no cuántas coinciden. */}
+          {total} {total === 1 ? "solicitud" : "solicitudes"}
         </span>
       </div>
 
@@ -240,9 +302,23 @@ export default function AppointmentsPage() {
           columns={columnas}
           rows={rows}
           getRowId={(t) => t.id}
+          pageSize={POR_PAGINA}
           loading={list.isLoading}
           searchPlaceholder="Buscar por nombre, teléfono, email, médico o especialidad…"
           emptyMessage="No hay solicitudes de turno con esos filtros."
+          server={{
+            query: busqueda,
+            onQueryChange: setBusqueda,
+            page,
+            onPageChange: setPage,
+            total,
+            sortKey: sort,
+            sortDir: dir,
+            onSortChange: (key, direccion) => {
+              setSort(key);
+              setDir(direccion);
+            },
+          }}
           actions={(t) => (
             <div className="flex items-center justify-end gap-2">
               {t.status !== "confirmado" && (
