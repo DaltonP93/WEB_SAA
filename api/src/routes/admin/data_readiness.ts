@@ -3,6 +3,8 @@ import { db } from "../../db.js";
 import { isValidChannelValue, type ContactChannelKind } from "../../contact-values.js";
 import { RESERVED_CHANNELS } from "./contact_channels.js";
 import { RESERVED_SCHEDULES } from "../../institutional-schedules.js";
+import { confirmacionDe } from "./data_confirmations.js";
+import { formatearEnZona } from "../../timezone.js";
 
 /**
  * `GET /api/admin/data-readiness` — qué falta para que el sitio deje de decir
@@ -144,25 +146,40 @@ dataReadinessRouter.get("/", async (_req, res) => {
 
   // ------------------------------------------------------------ biopsias
   //
-  // Siempre `review` mientras no exista una confirmación explícita. No se
-  // deduce del contenido: que el texto sea largo, o que ya no traiga la nota de
-  // "a confirmar", no significa que el sanatorio haya confirmado el alcance,
-  // los requisitos y los plazos. Una heurística sobre el texto convertiría
-  // "alguien editó la página" en "el alcance está confirmado", que es
-  // exactamente la afirmación que no se puede hacer sin autorización.
+  // El estado **no se deduce del contenido**: que el texto sea largo, o que ya
+  // no traiga la nota de "a confirmar", no significa que el sanatorio haya
+  // confirmado el alcance, los requisitos y los plazos. Una heurística sobre el
+  // texto convertiría "alguien editó la página" en "el alcance está
+  // confirmado", que es exactamente la afirmación que no se puede hacer sin
+  // autorización.
+  //
+  // Lo que sí cambia el estado es una **confirmación escrita y registrada**:
+  // una persona con rol de superadmin declaró el alcance, con su nombre y la
+  // fecha. Eso es una afirmación institucional, no una inferencia. Ver
+  // `data_confirmations.ts`.
+  //
+  // Si la página no existe, ninguna confirmación alcanza: no hay contenido que
+  // confirmar, y decir "confirmado" sobre una página inexistente sería peor que
+  // el `review` de antes.
   const paginaBiopsias = await db("pages").where({ slug: PAGINA_BIOPSIAS }).select("id").first();
+  const confirmacionBiopsias = paginaBiopsias ? await confirmacionDe("biopsias") : null;
 
   const seccionBiopsias = {
     id: "biopsias",
     label: "Alcance de Biopsias",
-    status: "review" as const,
+    status: (confirmacionBiopsias ? "complete" : "review") as EstadoSeccion,
     // Al Page Builder de la página cuando existe; si no, al listado, donde se
     // ve que falta. Mandar a `/pages/undefined` sería una pantalla rota.
     route: paginaBiopsias ? `${RUTA_PAGINAS}/${paginaBiopsias.id}` : RUTA_PAGINAS,
     pageSlug: PAGINA_BIOPSIAS,
-    reason: paginaBiopsias
-      ? "Requiere confirmación escrita del sanatorio sobre alcance, requisitos y plazos."
-      : "No existe la página de Biopsias en el sitio. Revisá el listado de Páginas.",
+    reason: !paginaBiopsias
+      ? "No existe la página de Biopsias en el sitio. Revisá el listado de Páginas."
+      : confirmacionBiopsias
+        ? `Alcance confirmado por ${confirmacionBiopsias.confirmedBy.name ?? "el sanatorio"} el ${formatearEnZona(confirmacionBiopsias.confirmedAt)}.`
+        : "Requiere confirmación escrita del sanatorio sobre alcance, requisitos y plazos.",
+    // El alcance confirmado, para que la pantalla pueda mostrarlo y para que
+    // quien revise sepa **qué** se confirmó, no sólo que algo se confirmó.
+    confirmation: confirmacionBiopsias,
   };
 
   // ------------------------------------------------------------- avisos

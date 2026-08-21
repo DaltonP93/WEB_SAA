@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import sharp from "sharp";
 import type { Metadata, Sharp } from "sharp";
-import { PDFDocument } from "pdf-lib";
+import { sanearPdf } from "./pdf.js";
+import { sanearSvg } from "./svg.js";
 
 /**
  * Qué se acepta subir, qué se le hace y qué se garantiza al guardarlo.
@@ -31,7 +32,7 @@ import { PDFDocument } from "pdf-lib";
  *    Verificado sobre el archivo resultante, no sobre la intención.
  */
 
-export type Formato = "jpeg" | "png" | "webp" | "gif" | "pdf";
+export type Formato = "jpeg" | "png" | "webp" | "gif" | "pdf" | "svg";
 
 interface Perfil {
   mime: string;
@@ -44,6 +45,7 @@ export const FORMATOS: Record<Formato, Perfil> = {
   webp: { mime: "image/webp", ext: ".webp" },
   gif: { mime: "image/gif", ext: ".gif" },
   pdf: { mime: "application/pdf", ext: ".pdf" },
+  svg: { mime: "image/svg+xml", ext: ".svg" },
 };
 
 /** Lado mayor al que se reduce. No se agranda nunca lo que ya es más chico. */
@@ -89,7 +91,13 @@ const FIRMA_PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
  * El formato según los primeros bytes del archivo.
  *
  * Es la primera de las dos comprobaciones: descarta lo que ni siquiera dice
- * ser una imagen y separa el PDF, que no puede pasar por libvips.
+ * ser una imagen y separa los dos formatos que no pasan por libvips —el PDF y
+ * el SVG—, cada uno con su propio saneo.
+ *
+ * El SVG es el único que no tiene una firma binaria: es texto, y puede empezar
+ * con la declaración XML, con un comentario o con la etiqueta directamente.
+ * Por eso se lo busca por contenido dentro de los primeros bytes, y no por una
+ * secuencia en el offset 0.
  */
 export function formatoPorFirma(cabecera: Buffer): Formato | null {
   if (cabecera.length >= 3 && cabecera[0] === 0xff && cabecera[1] === 0xd8 && cabecera[2] === 0xff) return "jpeg";
@@ -103,7 +111,33 @@ export function formatoPorFirma(cabecera: Buffer): Formato | null {
     return "webp";
   }
   if (cabecera.subarray(0, 5).toString("latin1") === "%PDF-") return "pdf";
+  if (pareceSvg(cabecera)) return "svg";
   return null;
+}
+
+/** Cuántos bytes del principio se miran para decidir si un texto es un SVG. */
+export const CABECERA_BYTES = 1024;
+
+/**
+ * ¿El principio del archivo parece un SVG?
+ *
+ * Se exige que **antes** de la etiqueta `<svg` no haya nada que no sea espacio,
+ * una declaración XML, un comentario o una declaración de tipo. Aceptar un
+ * `<svg` en cualquier posición convertiría en "SVG" a cualquier archivo que lo
+ * mencionara — y ese archivo iría al saneador de SVG en vez de rechazarse.
+ *
+ * Lo que sí se acepta acá se vuelve a comprobar en `sanearSvg`, que además
+ * rechaza el DOCTYPE.
+ */
+function pareceSvg(cabecera: Buffer): boolean {
+  const texto = cabecera.toString("utf8");
+  const sinPreludio = texto
+    .replace(/^﻿/, "")
+    .replace(/<\?xml[^>]*\?>/gi, "")
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/<!DOCTYPE[^>]*>/gi, "")
+    .trimStart();
+  return /^<svg[\s>]/i.test(sinPreludio);
 }
 
 export interface ArchivoProcesado {
@@ -142,9 +176,11 @@ export async function procesarSubida(ruta: string): Promise<Resultado> {
   try {
     const fd = await fs.promises.open(ruta, "r");
     try {
-      const buffer = Buffer.alloc(16);
-      await fd.read(buffer, 0, 16, 0);
-      cabecera = buffer;
+      // Más que los 16 bytes de una firma binaria: el SVG es texto y su
+      // etiqueta puede venir detrás de una declaración XML o un comentario.
+      const buffer = Buffer.alloc(CABECERA_BYTES);
+      const { bytesRead } = await fd.read(buffer, 0, CABECERA_BYTES, 0);
+      cabecera = buffer.subarray(0, bytesRead);
       tamano = (await fd.stat()).size;
     } finally {
       await fd.close();
@@ -154,57 +190,91 @@ export async function procesarSubida(ruta: string): Promise<Resultado> {
   }
 
   const firma = formatoPorFirma(cabecera);
-  if (!firma) return rechazo("formato no permitido: usá JPG, PNG, WebP, GIF o PDF");
+  if (!firma) return rechazo("formato no permitido: usá JPG, PNG, WebP, GIF, SVG o PDF");
   if (firma === "pdf") return procesarPdf(ruta);
+  if (firma === "svg") return procesarSvg(ruta, tamano);
   return procesarImagen(ruta, firma, tamano);
 }
 
 /**
- * El PDF se valida **estructuralmente**, no por sus cinco primeros bytes.
+ * Cuánto puede pesar un SVG.
  *
- * Antes alcanzaba con que el archivo empezara con `%PDF-`. Cualquier cosa
- * —un ejecutable, un `.zip`, un texto— con esos cinco bytes delante entraba a
- * la biblioteca institucional, se guardaba con `mime: application/pdf` y se
- * publicaba en una URL. Un lector de PDF del otro lado abriría lo que fuera
- * que hubiera adentro.
- *
- * Ahora se parsea con `pdf-lib` y se exige que el documento tenga un catálogo
- * legible y al menos una página. `throwOnInvalidObject` hace dos cosas:
- * endurece el parseo y lo **silencia** — sin esa opción pdf-lib escribe por
- * consola avisos con posiciones y fragmentos del archivo, que es justo lo que
- * los logs no pueden llevar.
- *
- * Lo que esto **no** es: un saneo. El PDF se guarda con los bytes que llegaron.
- * No se le quitan JavaScript embebido, acciones de apertura, adjuntos ni
- * formularios. Validar es comprobar que es un PDF; sanear sería otra cosa y no
- * está hecha. Por eso el archivo se sirve como descarga y no se le da al
- * navegador ninguna razón para ejecutarlo, y por eso los PDFs no aparecen en
- * los selectores de imágenes.
- *
- * Tampoco pasa por libvips: libvips abre PDFs si se compiló con poppler, y eso
- * sería ejecutar un intérprete más sobre un archivo que subió cualquiera.
+ * Es texto, así que el límite general de peso lo deja pasar casi entero. Un
+ * logo institucional pesa unos pocos KB; medio megabyte de XML es una bomba de
+ * parseo o un archivo que no debería estar acá.
  */
-async function procesarPdf(ruta: string): Promise<Resultado> {
-  const bytes = await fs.promises.readFile(ruta);
+const MAX_SVG_BYTES = 512 * 1024;
 
-  try {
-    const documento = await PDFDocument.load(bytes, {
-      throwOnInvalidObject: true,
-      updateMetadata: false,
-    });
-    // Un archivo que parsea pero no tiene ni una página no es un documento:
-    // es un encabezado con algo detrás.
-    if (documento.getPageCount() < 1) return rechazo("el PDF no tiene ninguna página");
-  } catch {
-    // El error de pdf-lib trae línea, columna y desplazamiento del archivo.
-    // Nada de eso vuelve al cliente ni al log: sólo que no es un PDF válido.
-    return rechazo("el archivo no es un PDF válido");
-  }
+/**
+ * El SVG se **sanea**, no se valida.
+ *
+ * Un SVG no es una imagen: es un documento XML que el navegador ejecuta. Puede
+ * traer `<script>`, manejadores `onload`, `<foreignObject>` con HTML adentro,
+ * animaciones que reescriben atributos en runtime y referencias a servidores
+ * ajenos. Por eso estuvo rechazado hasta ahora — sin saneo, la única postura
+ * honesta era no aceptarlo.
+ *
+ * Lo que se guarda son los **bytes saneados**. Guardar el original y confiar en
+ * que el saneo lo revisó dejaría el archivo peligroso en el disco esperando a
+ * que alguien lo sirva por otra vía. Ver `api/src/svg.ts` para el detalle de
+ * qué se descarta.
+ */
+async function procesarSvg(ruta: string, tamano: number): Promise<Resultado> {
+  if (tamano > MAX_SVG_BYTES) return rechazo("el SVG es demasiado grande");
+
+  const texto = await fs.promises.readFile(ruta, "utf8");
+  const saneado = sanearSvg(texto);
+  if (!saneado.ok) return rechazo(saneado.error);
 
   return {
     ok: true,
     archivo: {
-      bytes,
+      bytes: Buffer.from(saneado.svg, "utf8"),
+      formato: "svg",
+      mime: FORMATOS.svg.mime,
+      ext: FORMATOS.svg.ext,
+      // Un SVG escala: las dimensiones son su tamaño nominal, útil para
+      // reservar espacio, no un límite. Pueden faltar si el archivo sólo
+      // declara porcentajes.
+      width: saneado.width,
+      height: saneado.height,
+      frames: 1,
+      animated: false,
+      delay: null,
+      loop: null,
+    },
+  };
+}
+
+/**
+ * El PDF se valida estructuralmente **y se sanea**.
+ *
+ * La validación llegó en la ronda anterior: antes alcanzaba con que el archivo
+ * empezara con `%PDF-`, así que cualquier cosa con esos cinco bytes delante
+ * entraba a la biblioteca y quedaba publicada en una URL.
+ *
+ * Lo que faltaba era el saneo, y quedó documentado como faltante: los bytes se
+ * guardaban como llegaban. Un PDF válido puede traer `/OpenAction` —que se
+ * ejecuta **al abrir**, sin que nadie haga clic—, JavaScript a nivel
+ * documento, archivos adjuntos y anotaciones que lanzan programas. Ahora se le
+ * quitan; ver `api/src/pdf.ts` para el detalle y para los límites de lo que
+ * esa limpieza puede afirmar.
+ *
+ * Lo que se guarda es el documento reescrito, no el original.
+ *
+ * Sigue sin pasar por libvips: libvips abre PDFs si se compiló con poppler, y
+ * eso sería ejecutar un intérprete más sobre un archivo que subió cualquiera.
+ */
+async function procesarPdf(ruta: string): Promise<Resultado> {
+  const bytes = await fs.promises.readFile(ruta);
+
+  const saneado = await sanearPdf(bytes);
+  if (!saneado.ok) return rechazo(saneado.error);
+
+  return {
+    ok: true,
+    archivo: {
+      bytes: saneado.pdf.bytes,
       formato: "pdf",
       mime: FORMATOS.pdf.mime,
       ext: FORMATOS.pdf.ext,

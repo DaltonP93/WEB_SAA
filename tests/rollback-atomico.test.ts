@@ -67,10 +67,25 @@ interface Escenario {
   raiz: string;
 }
 
-const git = (dir: string, ...args: string[]) =>
-  execFileSync("git", ["-C", dir, "-c", "user.email=t@t.test", "-c", "user.name=Test", ...args], {
-    encoding: "utf8",
-  }).trim();
+/**
+ * `git` del escenario, con el stderr adentro del error.
+ *
+ * Antes esto era `execFileSync`, que al fallar lanza `Command failed: git -C
+ * /tmp/… commit -qm …` y **descarta el stderr**. Una corrida completa de la
+ * suite dio exactamente ese mensaje y no había forma de saber por qué: si el
+ * repo estaba mal, si faltaba disco, o si el contenedor no pudo crear otro
+ * proceso. Diagnosticar un fallo que sólo aparece bajo carga con el motivo
+ * borrado es imposible, y "es intermitente" no es un diagnóstico.
+ */
+const git = (dir: string, ...args: string[]) => {
+  const todos = ["-C", dir, "-c", "user.email=t@t.test", "-c", "user.name=Test", ...args];
+  const r = spawnSync("git", todos, { encoding: "utf8" });
+  if (r.error) throw new Error(`git ${args.join(" ")} no se pudo ejecutar: ${r.error.message}`);
+  if (r.status !== 0) {
+    throw new Error(`git ${args.join(" ")} salió ${r.status}\nstderr: ${r.stderr}\nstdout: ${r.stdout}`);
+  }
+  return r.stdout.trim();
+};
 
 function ejecutable(path: string, contenido: string) {
   writeFileSync(path, contenido);

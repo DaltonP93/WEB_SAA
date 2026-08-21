@@ -160,7 +160,7 @@ describeDb("contrato de multimedia: PDF real y animación completa", () => {
     fs.promises.readFile(path.join(UPLOAD_DIR, path.basename(url)));
 
   describe("un PDF se valida estructuralmente, no por sus cinco primeros bytes", () => {
-    it("un PDF real generado por una biblioteca se acepta y se guarda intacto", async () => {
+    it("un PDF real generado por una biblioteca se acepta y conserva sus páginas", async () => {
       const pdf = await pdfReal(3);
       // Control: lo que se sube es un PDF que otra biblioteca puede abrir.
       expect((await PDFDocument.load(pdf)).getPageCount()).toBe(3);
@@ -172,7 +172,13 @@ describeDb("contrato de multimedia: PDF real y animación completa", () => {
       expect(fila.mime).toBe("application/pdf");
       expect(fila.url.endsWith(".pdf")).toBe(true);
       expect([fila.width, fila.height, fila.frames]).toEqual([null, null, null]);
-      expect((await delDisco(fila.url)).equals(pdf), "el PDF se modificó al guardarlo").toBe(true);
+      // Los bytes cambian a propósito: el PDF se sanea antes de publicarse. Lo
+      // que tiene que sobrevivir es el documento —que abra y tenga sus tres
+      // páginas—, no la secuencia de bytes.
+      expect(
+        (await PDFDocument.load(await delDisco(fila.url))).getPageCount(),
+        "el saneo rompió el documento o perdió páginas",
+      ).toBe(3);
     });
 
     const invalidos: [string, () => Promise<Buffer> | Buffer][] = [
@@ -216,14 +222,17 @@ describeDb("contrato de multimedia: PDF real y animación completa", () => {
       expect(texto).not.toMatch(/offset|line:\d|col:\d/i);
     });
 
-    it("un PDF no se procesa como imagen: conserva sus bytes exactos", async () => {
+    it("un PDF no se procesa como imagen: sigue siendo un PDF abrible", async () => {
       const pdf = await pdfReal(1);
       const fila = await cuerpo(await subir(pdf, "x.pdf", "application/pdf"));
       const guardado = await delDisco(fila.url);
 
-      expect(guardado.equals(pdf)).toBe(true);
-      // Si hubiera pasado por Sharp, no seguiría siendo un PDF abrible.
+      // Si hubiera pasado por Sharp, no seguiría siendo un PDF abrible: Sharp
+      // ni siquiera lee PDFs, así que la salida sería otra cosa o no habría
+      // salida. Que `PDFDocument.load` lo abra y encuentre la página es lo que
+      // distingue "se saneó" de "se convirtió".
       expect((await PDFDocument.load(guardado)).getPageCount()).toBe(1);
+      expect(guardado.subarray(0, 5).toString("latin1")).toBe("%PDF-");
     });
   });
 

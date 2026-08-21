@@ -221,17 +221,63 @@ sitio no lo muestra.
 No es un campo: es el cuerpo de una página (`pages.slug = "estudios-biopsias"`,
 bloque `richText`).
 
-Su estado es **siempre `review` mientras no exista una confirmación explícita**.
-No se deduce del contenido: que el texto sea largo, o que ya no contenga la nota
-en cursiva de "a confirmar", no significa que el sanatorio haya confirmado el
-alcance, los requisitos, la preparación y los plazos. Una heurística sobre el
-texto convertiría "alguien editó la página" en "el alcance está confirmado", que
-es precisamente la afirmación que no se puede hacer sin autorización.
+Su estado es `review` **mientras no exista una confirmación explícita**, y
+`complete` en cuanto existe. Nunca se deduce del contenido: que el texto sea
+largo, o que ya no contenga la nota en cursiva de "a confirmar", no significa
+que el sanatorio haya confirmado el alcance, los requisitos, la preparación y
+los plazos. Una heurística sobre el texto convertiría "alguien editó la página"
+en "el alcance está confirmado", que es precisamente la afirmación que no se
+puede hacer sin autorización.
 
-Cuando exista un mecanismo de confirmación explícita —una marca que el
-propietario active a conciencia—, este ítem pasa a leerlo. Hasta entonces
-devuelve `review` con el motivo, y la pantalla lo muestra como una decisión
-pendiente del sanatorio, no como una tarea del administrador.
+Ese mecanismo ya existe: `PUT /api/admin/data-confirmations/biopsias`, descrito
+en §4.3.1. La sección lo lee y no mira el cuerpo de la página para nada.
+
+#### 4.3.1 · El mecanismo de confirmación
+
+| | |
+|---|---|
+| `GET /api/admin/data-confirmations/:item` | cualquier administrador autenticado |
+| `PUT /api/admin/data-confirmations/:item` | **`superadmin`** |
+| `DELETE /api/admin/data-confirmations/:item` | **`superadmin`** |
+
+`:item` sólo admite los valores del catálogo `CONFIRMABLES` (hoy `biopsias`);
+cualquier otro da **404** y no crea nada.
+
+El cuerpo del `PUT` es `{ scope, note? }`:
+
+- **`scope` es obligatorio** (10–2000 caracteres): qué se está confirmando —qué
+  estudios, con qué requisitos, en qué plazos—, escrito por quien confirma. Sin
+  él la confirmación diría "está bien" sin decir qué está bien, que no sirve de
+  constancia ni para el sanatorio ni para quien la revise después. Un cuerpo sin
+  `scope` da **400** y no guarda nada.
+- **`confirmedAt` y `confirmedBy` los pone el servidor.** Si los mandara el
+  cliente, quien confirma podría fechar su propia confirmación en cualquier
+  momento y atribuirla a cualquiera. Los valores que vengan en el cuerpo se
+  ignoran.
+
+Se guarda en `settings`, con una clave por ítem (`confirmacion_<item>`) que **no
+está en `ADMIN_SETTING_KEYS`**: el editor genérico de Configuración no la
+alcanza, así que se cambia por este endpoint o no se cambia.
+
+**Por qué `superadmin`.** Confirmar pasa un ítem de "no se puede afirmar" a "el
+sanatorio lo afirma". Un editor puede escribir el texto de la página; declarar
+que ese texto está confirmado es otra cosa. Leer, en cambio, no afirma nada, y
+lo puede hacer cualquier administrador.
+
+**Se puede retirar** (`DELETE`, 204). Una confirmación puede dejar de ser
+cierta: cambian los plazos, se deja de hacer un estudio. Sin forma de retirarla,
+la única salida sería editar la base a mano y el ítem seguiría diciendo
+"confirmado" sobre algo que ya no lo está.
+
+**Una fila ilegible no es una confirmación.** Si el JSON guardado no se puede
+leer o le falta `confirmedAt` o `scope`, la sección vuelve a `review`. Darla por
+buena sería justamente el error que este mecanismo existe para no cometer.
+
+La sección devuelve además `confirmation` con lo confirmado —alcance, quién y
+cuándo—, para que quien revise sepa **qué** se confirmó y no sólo que algo se
+confirmó. Es el único caso en que la respuesta lleva texto cargado por el
+sanatorio, y es deliberado: sin el alcance, la constancia no sirve de
+constancia. No es contenido de la página.
 
 **El enlace va directo al Page Builder** cuando la página existe:
 `route: "/pages/<id>"`. Mandar al listado obliga a buscarla entre todas, que es
@@ -321,10 +367,11 @@ Ilustrativa: fija los nombres y los tipos, no los valores.
     {
       "id": "biopsias",
       "label": "Alcance de Biopsias",
-      "status": "review",
+      "status": "review",               // "complete" si hay confirmación
       "route": "/pages/12",             // "/pages" si la página no existe
       "pageSlug": "estudios-biopsias",
-      "reason": "Requiere confirmación escrita del sanatorio…"
+      "reason": "Requiere confirmación escrita del sanatorio…",
+      "confirmation": null              // el objeto confirmado, o null (§4.3.1)
     }
   ],
   "warnings": [
@@ -373,8 +420,8 @@ Notas sobre el resto de la forma:
   `code` son estables y en inglés, para que el front pueda ramificar sin
   depender del texto.
 - `overall` es el peor estado de las secciones, con `review` peor que `pending`.
-  Mientras Biopsias siga sin confirmación explícita, `overall` es `review` por
-  definición: siempre hay algo que una persona tiene que decidir.
+  Mientras Biopsias siga sin confirmación registrada, `overall` es `review` por
+  definición: hay algo que una persona tiene que decidir.
 
 ---
 
@@ -422,7 +469,12 @@ equivoca. Están en `tests/data-readiness.test.ts`,
 10. Un horario **borrado** da `missing`, que el catálogo de runtime es lo único
     que puede detectar.
 11. Biopsias da `review` aunque su página tenga texto largo y sin la nota en
-    cursiva, y su `route` apunta al Page Builder de esa página.
+    cursiva, y su `route` apunta al Page Builder de esa página. Pasa a
+    `complete` **sólo** con una confirmación registrada, y vuelve a `review` al
+    retirarla o si la fila guardada quedó ilegible.
+11b. Confirmar y retirar exigen `superadmin`; leer, no. La fecha la pone el
+    servidor aunque el cliente mande la suya. `confirmacion_biopsias` no se
+    puede escribir por `/api/admin/settings`.
 12. Con el snapshot de Emergencias en `motivo: "editada"`, el aviso aparece y el
     JSON **no** contiene la nota legacy.
 13. Los catálogos usados son los de la API: si se agrega una clave a
