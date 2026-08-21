@@ -22,6 +22,8 @@ export default defineConfig({
       // sharp también es de api/. Se apunta al build ESM: es un módulo nativo
       // y Vite no puede transformarlo, así que además va en `server.deps.external`.
       sharp: path.resolve(__dirname, "api/node_modules/sharp/dist/index.mjs"),
+      // pdf-lib también es de api/: las pruebas generan PDFs reales con ella.
+      "pdf-lib": path.resolve(__dirname, "api/node_modules/pdf-lib"),
       // Dependencias de apps/web que las pruebas de componente importan
       // directamente (los componentes las resuelven solos, un archivo de
       // prueba en la raíz no).

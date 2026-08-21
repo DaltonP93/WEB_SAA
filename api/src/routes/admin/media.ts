@@ -5,9 +5,11 @@ import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { db } from "../../db.js";
-import { badRequest } from "../../http.js";
+import { badRequest, conflict, notFound } from "../../http.js";
 import { errorSeguro } from "../../log-seguro.js";
 import { MAX_LADO, procesarSubida } from "../../imagenes.js";
+import { borrarTemporal, prepararDirectorios } from "../../staging.js";
+import { referenciasDe } from "../../media-referencias.js";
 
 /**
  * Biblioteca multimedia.
@@ -40,22 +42,24 @@ import { MAX_LADO, procesarSubida } from "../../imagenes.js";
 
 export const mediaRouter = Router();
 
-const UPLOAD_DIR = path.resolve(process.env.UPLOAD_DIR ?? "./uploads");
-
 /**
- * Staging: hermano de `UPLOAD_DIR`, no hijo.
+ * Staging: hermano de `UPLOAD_DIR`, no hijo, y en el mismo sistema de archivos.
  *
- * Hermano y no dentro, para que `express.static(UPLOAD_DIR)` no pueda
- * servirlo por ningún camino. En el mismo sistema de archivos, para que el
- * `rename` final sea atómico: entre volúmenes distintos `rename` falla con
- * `EXDEV` y habría que copiar, que ya no es atómico.
+ * Hermano y no dentro, para que `express.static(UPLOAD_DIR)` no pueda servirlo
+ * por ningún camino. Mismo filesystem, para que el `rename` final sea atómico.
+ *
+ * Las dos condiciones **se comprueban al arrancar** en `prepararDirectorios`:
+ * dependen de dos variables de entorno que se configuran en el VPS, y un valor
+ * equivocado no rompe nada visible —la API arranca, las subidas funcionan— pero
+ * deja el contrato sin cumplir. Ver `api/src/staging.ts`.
  */
-const STAGING_DIR = path.resolve(
-  process.env.UPLOAD_STAGING_DIR ?? path.join(path.dirname(UPLOAD_DIR), ".uploads-staging"),
+const { uploads: UPLOAD_DIR, staging: STAGING_DIR } = prepararDirectorios(
+  path.resolve(process.env.UPLOAD_DIR ?? "./uploads"),
+  path.resolve(
+    process.env.UPLOAD_STAGING_DIR ??
+      path.join(path.dirname(path.resolve(process.env.UPLOAD_DIR ?? "./uploads")), ".uploads-staging"),
+  ),
 );
-
-fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-fs.mkdirSync(STAGING_DIR, { recursive: true });
 
 const maxMB = Number(process.env.MAX_UPLOAD_MB ?? 10);
 
@@ -72,7 +76,16 @@ const VIDA_STAGING_MS = 60 * 60 * 1000;
  */
 const EXCEDE_PESO = `el archivo supera el máximo de ${maxMB} MB`;
 
-const olvidar = (ruta: string) => fs.promises.rm(ruta, { force: true }).catch(() => {});
+/**
+ * Borra un temporal y avisa si no pudo.
+ *
+ * Antes era un `.catch(() => {})`: un staging que dejaba de poder borrarse
+ * —permisos, disco lleno, montaje de sólo lectura— se llenaba en silencio, y
+ * cuando las subidas empezaban a fallar el log no tenía una línea sobre la
+ * causa. Ver `borrarTemporal` en `api/src/staging.ts` para qué se registra y
+ * qué no.
+ */
+const olvidar = borrarTemporal;
 
 /**
  * Barrido de huérfanos al arrancar.
@@ -91,14 +104,17 @@ export async function limpiarStagingViejo(ahora = Date.now()): Promise<number> {
   }
   for (const nombre of entradas) {
     const ruta = path.join(STAGING_DIR, nombre);
+    let vencido = false;
     try {
       const stat = await fs.promises.stat(ruta);
-      if (ahora - stat.mtimeMs < VIDA_STAGING_MS) continue;
-      await fs.promises.rm(ruta, { force: true, recursive: true });
-      borrados++;
+      vencido = ahora - stat.mtimeMs >= VIDA_STAGING_MS;
     } catch {
       // Otro proceso lo borró en el medio: no hay nada que hacer.
+      continue;
     }
+    if (!vencido) continue;
+    // `borrarTemporal` registra el fallo; no se cuenta como borrado.
+    if (await olvidar(ruta)) borrados++;
   }
   return borrados;
 }
@@ -227,15 +243,56 @@ mediaRouter.use((
   next(err);
 });
 
+/**
+ * Editar sólo el texto alternativo.
+ *
+ * Es lo único de un archivo que tiene sentido corregir después de subirlo: el
+ * resto —URL, MIME, tamaño, dimensiones— lo determinó el pipeline a partir de
+ * los bytes y cambiarlo sería volver a la situación en que la fila y el archivo
+ * se contradicen. Por eso este endpoint acepta `alt` y nada más.
+ */
+mediaRouter.patch("/:id", async (req, res) => {
+  const parsed = z.object({ alt: z.string().trim().max(255) }).safeParse(req.body);
+  if (!parsed.success) throw badRequest("payload invalido", parsed.error.flatten().fieldErrors);
+
+  const actual = await db("media").where({ id: req.params.id }).first("id");
+  if (!actual) throw notFound("archivo no encontrado");
+
+  await db("media")
+    .where({ id: req.params.id })
+    // Vacío es "sin texto alternativo", que es `NULL` y no la cadena vacía:
+    // así la biblioteca puede señalar los archivos que todavía no lo tienen.
+    .update({ alt: parsed.data.alt.length > 0 ? parsed.data.alt : null });
+
+  res.json(await db("media").where({ id: req.params.id }).first());
+});
+
+/**
+ * Borrar, salvo que algo lo esté usando.
+ *
+ * Borrar un archivo referenciado no falla en el momento: rompe la página que
+ * lo usa, y se nota recién cuando alguien la visita. La fila desaparece de la
+ * biblioteca, el archivo desaparece del disco, y el bloque queda apuntando a
+ * una URL que ahora da 404 — sin que nadie relacione las dos cosas.
+ *
+ * Lo que se devuelve es **dónde** y **cuántas veces**, nunca el contenido de
+ * esos bloques: quien borra necesita saber a qué ir a cambiar, no leer la
+ * página desde un mensaje de error.
+ */
 mediaRouter.delete("/:id", async (req, res) => {
   const row = await db("media").where({ id: req.params.id }).first();
-  if (row) {
-    // `basename` y no la URL entera: un `url` con `../` apuntaría fuera de
-    // `UPLOAD_DIR`.
-    const fp = path.join(UPLOAD_DIR, path.basename(row.url));
-    await olvidar(fp);
-    await db("media").where({ id: row.id }).del();
+  if (!row) return res.status(204).end();
+
+  const referencias = await referenciasDe(db, row.url);
+  if (referencias.length > 0) {
+    throw conflict("el archivo está en uso y no se puede eliminar", { referencias });
   }
+
+  // `basename` y no la URL entera: un `url` con `../` apuntaría fuera de
+  // `UPLOAD_DIR`.
+  const fp = path.join(UPLOAD_DIR, path.basename(row.url));
+  await olvidar(fp);
+  await db("media").where({ id: row.id }).del();
   res.status(204).end();
 });
 

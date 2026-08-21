@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Knex } from "knex";
 import sharp from "sharp";
+import { PDFDocument } from "pdf-lib";
 import {
   DB_TESTS_ENABLED,
   TEST_ADMIN_PASSWORD,
@@ -86,6 +87,20 @@ async function delDisco(url: string) {
 async function alphaEnPagina(bytes: Buffer, pagina: number, ancho: number, alto: number): Promise<number> {
   const crudo = await sharp(bytes, { animated: true }).ensureAlpha().raw().toBuffer();
   return crudo[pagina * ancho * alto * 4 + 3];
+}
+
+/**
+ * Un PDF **estructuralmente real**, generado por pdf-lib.
+ *
+ * El fixture anterior era `"%PDF-1.4\\n1 0 obj..."` escrito a mano: pasaba la
+ * validación de entonces —que miraba cinco bytes— y no es un PDF. Una prueba
+ * que afirma "un PDF de verdad se acepta" usando un archivo que ningún lector
+ * podría abrir no prueba nada; peor, hace creer que sí.
+ */
+async function pdfReal(paginas = 1): Promise<Buffer> {
+  const doc = await PDFDocument.create();
+  for (let i = 0; i < paginas; i++) doc.addPage([200, 200]).drawText(`Página ${i + 1}`);
+  return Buffer.from(await doc.save());
 }
 
 const enStaging = () => fs.readdirSync(STAGING_DIR);
@@ -357,7 +372,7 @@ describeDb("pipeline de multimedia", () => {
     });
 
     it("un PDF de verdad se guarda sin pasar por Sharp y con dimensiones nulas", async () => {
-      const pdf = Buffer.from("%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n", "latin1");
+      const pdf = await pdfReal(2);
       const res = await subir(pdf, "protocolo.pdf", "application/pdf");
       expect(res.status, await res.clone().text()).toBe(201);
       const fila = await cuerpo(res);

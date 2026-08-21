@@ -219,7 +219,16 @@ export const blockPropsSchemas = {
       imageUrl: z.string().trim().min(1).max(500),
       alt: z.string().max(180).optional().or(z.literal("")),
       href: urlLike,
+      // Los tres campos nuevos son opcionales porque los bloques que ya están
+      // guardados no los traen. Exigirlos convertiría cada logo existente en
+      // un payload inválido la próxima vez que alguien guarde la página.
+      active: z.boolean().optional(),
+      width: z.number().int().positive().max(10000).optional(),
+      height: z.number().int().positive().max(10000).optional(),
     }).strip()).max(30),
+    // Acotada: por debajo de 20 el logo es ilegible y por encima de 100 no
+    // significa nada. Sin valor, el bloque usa el 80 que tenía fijo.
+    opacity: z.number().int().min(20).max(100).optional(),
   }).strip(),
   spacer: z.object({
     height: z.number().int().min(0).max(240),

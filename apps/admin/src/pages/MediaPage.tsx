@@ -155,8 +155,36 @@ export default function MediaPage() {
       toast.success("Archivo eliminado");
       qc.invalidateQueries({ queryKey: ["adm-media"] });
     },
-    onError: () => toast.error("No se pudo eliminar el archivo"),
+    onError: (e: any) => {
+      // El 409 trae **dónde** se está usando el archivo. Decir sólo "no se
+      // pudo eliminar" dejaría a quien borra sin saber qué desvincular, que es
+      // lo único que puede hacer al respecto.
+      const refs = e?.response?.data?.details?.referencias as { lugar: string; cantidad: number }[] | undefined;
+      if (e?.response?.status === 409 && refs?.length) {
+        setEnUso(refs);
+        toast.error("El archivo está en uso");
+        return;
+      }
+      toast.error(e?.response?.data?.error ?? "No se pudo eliminar el archivo");
+    },
   });
+
+  /** Referencias que impidieron el último borrado, para explicarlas. */
+  const [enUso, setEnUso] = useState<{ lugar: string; cantidad: number }[] | null>(null);
+
+  const guardarAlt = useMutation({
+    mutationFn: async ({ id, alt }: { id: number; alt: string }) =>
+      (await api.patch(`/admin/media/${id}`, { alt })).data as Media,
+    onSuccess: () => {
+      toast.success("Texto alternativo guardado");
+      setEditandoAlt(null);
+      qc.invalidateQueries({ queryKey: ["adm-media"] });
+    },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? "No se pudo guardar el texto alternativo"),
+  });
+
+  /** Id del archivo cuyo alt se está editando, y el borrador. */
+  const [editandoAlt, setEditandoAlt] = useState<{ id: number; texto: string } | null>(null);
 
   async function elegir(file: File) {
     const url = URL.createObjectURL(file);
@@ -227,6 +255,24 @@ export default function MediaPage() {
           <li>• Las fotos pierden su EXIF al procesarse: no se publica dónde ni con qué se tomaron.</li>
         </ul>
       </div>
+
+      {enUso && (
+        <div className="card p-4 mb-6 border-amber-300 bg-amber-50" role="alert">
+          <h2 className="font-semibold text-amber-900 mb-1">El archivo está en uso y no se eliminó</h2>
+          <p className="text-sm text-amber-900 mb-2">
+            Borrarlo dejaría un hueco donde hoy se ve la imagen. Desvinculalo primero de:
+          </p>
+          <ul className="text-sm text-amber-900 list-disc pl-5 space-y-0.5">
+            {enUso.map((r, i) => (
+              <li key={i}>
+                {r.lugar}
+                {r.cantidad > 1 ? ` (${r.cantidad} veces)` : ""}
+              </li>
+            ))}
+          </ul>
+          <button onClick={() => setEnUso(null)} className="btn-secondary text-xs mt-3">Entendido</button>
+        </div>
+      )}
 
       {pendiente && (
         <div className="card p-4 mb-6 border-2 border-brand">
@@ -316,10 +362,41 @@ export default function MediaPage() {
                 {m.width && m.height ? ` · ${m.width}×${m.height} px` : ""}
                 {m.frames && m.frames > 1 ? ` · ${m.frames} cuadros` : ""}
               </div>
-              {m.alt ? (
-                <div className="text-xs text-gray-500 truncate" title={m.alt}>{m.alt}</div>
+              {editandoAlt?.id === m.id ? (
+                <div className="mt-1">
+                  <label className="sr-only" htmlFor={`alt-${m.id}`}>Texto alternativo</label>
+                  <input
+                    id={`alt-${m.id}`}
+                    className="input text-xs"
+                    autoFocus
+                    maxLength={255}
+                    value={editandoAlt.texto}
+                    onChange={(e) => setEditandoAlt({ id: m.id, texto: e.target.value })}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") guardarAlt.mutate({ id: m.id, alt: editandoAlt.texto });
+                      if (e.key === "Escape") setEditandoAlt(null);
+                    }}
+                  />
+                  <div className="flex gap-2 mt-1">
+                    <button
+                      onClick={() => guardarAlt.mutate({ id: m.id, alt: editandoAlt.texto })}
+                      disabled={guardarAlt.isPending}
+                      className="text-xs text-brand"
+                    >
+                      {guardarAlt.isPending ? "Guardando…" : "Guardar"}
+                    </button>
+                    <button onClick={() => setEditandoAlt(null)} className="text-xs text-gray-500">Cancelar</button>
+                  </div>
+                </div>
               ) : (
-                <div className="text-xs text-amber-700">Sin texto alternativo</div>
+                <button
+                  onClick={() => setEditandoAlt({ id: m.id, texto: m.alt ?? "" })}
+                  className={`block w-full text-left text-xs truncate ${m.alt ? "text-gray-500" : "text-amber-700"}`}
+                  title={m.alt ?? undefined}
+                  aria-label={m.alt ? `Editar texto alternativo: ${m.alt}` : "Agregar texto alternativo"}
+                >
+                  {m.alt || "Sin texto alternativo"}
+                </button>
               )}
               <div className="flex justify-between mt-1">
                 <button onClick={() => navigator.clipboard.writeText(m.url)} className="text-xs text-brand">Copiar URL</button>

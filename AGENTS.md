@@ -358,6 +358,10 @@ Los 25 puntos acordados con el cliente están implementados. Lo estructural:
   - **Límites**: peso (`MAX_UPLOAD_MB`), techo de píxeles decodificados vía `limitInputPixels`, guarda contra descompresión desproporcionada, mínimo por lado **y** por área — un logo de 400×80 se acepta, un 1×1 no. Resize sólo hacia abajo (`withoutEnlargement`), EXIF descartado.
   - **Nada queda a medias**: si el INSERT falla se borra el archivo público; si no se puede escribir, no queda fila.
   - **SVG sigue rechazado** hasta tener saneo específico, y el panel ya no lo recomienda.
+  - **PDF validado estructuralmente** con `pdf-lib`: se exige un catálogo legible y al menos una página, no los cinco bytes de `%PDF-`. **Validado no es saneado**: los bytes se guardan como llegaron, sin quitar JavaScript embebido, acciones de apertura ni adjuntos. Por eso los PDFs no aparecen en los selectores de imágenes.
+  - **La animación se conserva entera**: cuadros, transparencia, `delay` por cuadro y `loop`. Sharp 0.35.3 los arrastra solo, pero se pasan explícitos porque esa conservación no está en su contrato público.
+  - **La configuración de staging se comprueba al arrancar** (`api/src/staging.ts`): staging no puede ser `UPLOAD_DIR`, estar dentro de él ni en otro sistema de archivos. Una configuración insegura no deja arrancar, en vez de dejar el contrato sin cumplir en silencio.
+  - **No se borra un archivo referenciado**: se responde 409 diciendo dónde está usado y cuántas veces —bloques (`blocks.props`), `settings.brand.logoUrl`, `settings.seo.ogImage`, `doctors.photo_url`— sin publicar el contenido institucional.
 ✅ **SEO**: `sitemap.xml` + `robots.txt` dinámicos desde la DB (`api/src/index.ts`); meta por ruta con react-helmet-async; **prerender estático de `/estudios`** en el build (`apps/web/scripts/prerender.mjs`, parte de `pnpm --filter @sa/web build`) que inyecta la lista agrupada + meta + JSON-LD `ItemList` en `dist/estudios/index.html`, best-effort leyendo la API durante el deploy (servido por Nginx vía `try_files`, sin cambios de infra). La URL base de canonical/sitemap sale de `PUBLIC_SITE_URL` en `api/.env` (hoy apunta a la IP del VPS; cambiar al dominio real cuando esté en producción).
 ✅ **Panel admin nivelado** (deployado en prod) con componentes reutilizables:
   - `DataTable.tsx` — tabla genérica tipada: búsqueda accent-insensitive, orden por columna, paginación cliente, skeletons de carga, slot de acciones. Usada en `DoctorsListPage`.
@@ -377,9 +381,9 @@ Los 25 puntos acordados con el cliente están implementados. Lo estructural:
   - Toggle publicar/despublicar inline en `PagesListPage` y `NewsListPage`.
   - `LucideIcon.tsx` — renderiza iconos [lucide](https://lucide.dev/icons/) por nombre kebab-case (`heart-pulse`). Usa `lucide-react/dynamicIconImports` + `React.lazy` + `Suspense` (⚠️ en lucide-react 0.460 **no existe** el subpath `lucide-react/dynamic`). `isIconName()` valida antes de renderizar. El helper `IconBadge` de `EntityManager` muestra el icono si el valor es un nombre lucide válido, y si no cae al emoji tal cual — antes el nombre se imprimía como texto crudo y se superponía a los títulos.
 
-✅ **Tests automatizados**: `pnpm test` (vitest) — **1128 pruebas en 53 archivos**
-al cierre de la ronda de Multimedia (baseline anterior: **1053 en 50**, cierre de
-la correctiva de Turnos). Las que necesitan base real se activan con
+✅ **Tests automatizados**: `pnpm test` (vitest) — **1232 pruebas en 58 archivos**
+al cierre de la ronda de Logos y Page Builder (baseline anterior: **1128 en 53**,
+cierre de la ronda de Multimedia). Las que necesitan base real se activan con
 `TEST_DATABASE=1` y se saltan solas si no está. CI corre la suite completa contra
 MySQL 8. El smoke testing manual del Agente 3 **complementa** la suite, no la
 reemplaza: lo que se puede afirmar con una prueba, se afirma con una prueba.

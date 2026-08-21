@@ -5,9 +5,9 @@
 > Formato ejecutivo. Se actualiza en cada tarea terminada o preparación de
 > cambios para GitHub.
 
-**Última actualización:** pipeline de Multimedia — staging, formato real,
-metadatos coherentes y logs sin datos personales (§14).
-**Cubre hasta:** PR #16 fusionado. La ronda del §14 está **en Draft, sin fusionar**.
+**Última actualización:** Logos, selector multimedia y reordenamiento genérico
+del Page Builder (§15).
+**Cubre hasta:** PR #17 fusionado. La ronda del §15 está **en Draft, sin fusionar**.
 **Estado de `main`:** `git log --oneline -1 origin/main`.
 **Estado de CI:** los tres checks se exigen en verde antes de cada merge. El
 resultado vigente es el del último run sobre `origin/main`, no un SHA anotado acá.
@@ -35,7 +35,8 @@ resultado vigente es el del último run sobre `origin/main`, no un SHA anotado a
 | A-2 (pantalla) | #14 | ✅ fusionado — blindaje por campos mutables, catálogo de horarios de runtime, endpoint `data-readiness` y pantalla "Datos pendientes" (§11) |
 | Turnos (registro y bandeja) | #15 | ✅ fusionado — el formulario registra antes de salir a WhatsApp, migración con clave de envío única, bandeja en el panel (§12) |
 | Turnos (correctiva) | #16 | ✅ fusionado — paginación y orden por servidor, zona horaria institucional, idempotencia antes del CAPTCHA (§13) |
-| Multimedia (pipeline) | Draft | Staging fuera de `/uploads`, formato detectado por bytes, transparencia y animación conservadas, metadatos en `media`, logs sin datos personales (§14) |
+| Multimedia (pipeline) | #17 | ✅ fusionado — staging fuera de `/uploads`, formato detectado por bytes, transparencia y animación conservadas, metadatos en `media`, logs sin datos personales (§14) |
+| Logos y Page Builder | Draft | PDF validado de verdad, animación completa, staging blindado al arrancar, selector multimedia, bloque `Logos` y reordenamiento genérico (§15) |
 
 ---
 
@@ -1660,17 +1661,196 @@ El segundo importa: sin él, un `vi.mock("react-hot-toast")` escrito en un
 archivo de la raíz **no se aplicaba** —el paquete sólo existe en
 `apps/admin/node_modules`— y la prueba corría contra el toast real sin observar
 nada. El mock que ya existía en `turnos-panel.test.tsx` estaba en esa situación.
+### 14.9 Cierre
 
-### 14.9 Qué falta
+PR #17 fusionado. Los tres checks cerraron en verde sobre `a5404ca`.
+
+---
+
+## 15. Logos, selector multimedia y reordenamiento genérico (ronda actual, Draft)
+
+Parte de `main` = `7a91e1f` (merge del PR #17), verificado como HEAD real antes
+de ramificar.
+
+Cierra lo que quedaba del contrato de Multimedia y agrega las tres piezas de
+edición que faltaban para que el sanatorio pueda cargar logos sin ayuda.
+
+### 15.1 El PDF se validaba por cinco bytes
+
+Un archivo se aceptaba como PDF sólo porque empezaba con `%PDF-`. Cualquier
+cosa con esos cinco bytes delante entraba a la biblioteca, se guardaba con
+`mime: application/pdf` y quedaba publicada en una URL. Y la prueba que decía
+cubrirlo usaba un fixture escrito a mano —`"%PDF-1.4\n1 0 obj..."`— que ningún
+lector de PDF puede abrir: afirmaba "un PDF de verdad se acepta" sobre algo que
+no era un PDF.
+
+Se comprobó primero que **ningún contrato vigente use PDF**: ningún tipo de
+bloque lo acepta, ninguna página lo enlaza. Las dos salidas que dejaba el
+encargo eran validar de verdad o retirar el soporte. Se eligió validar, porque
+la biblioteca es de uso general y un sanatorio publica protocolos y formularios;
+retirarlo habría hecho que esta ronda *quitara* una capacidad.
+
+`pdf-lib` (nueva dependencia de `api/`, `pnpm audit --prod` limpio) parsea el
+documento y se exige un catálogo legible con al menos una página.
+`throwOnInvalidObject: true` endurece el parseo **y lo silencia**: sin esa
+opción pdf-lib escribe por consola avisos con posiciones y fragmentos del
+archivo, que es justo lo que los logs no pueden llevar.
+
+**Validado no es saneado**, y la documentación lo dice así. Los bytes se
+guardan como llegaron; no se les quita JavaScript embebido, acciones de
+apertura, adjuntos ni formularios. Por eso los PDFs **no aparecen en los
+selectores de imágenes** y no pasan por libvips.
+
+### 15.2 La animación conservaba cuadros pero no tiempo
+
+El pipeline comprobaba cuadros y transparencia. Una animación no es sólo
+"estos cuadros": es estos cuadros **a esta velocidad** y repitiéndose **esta
+cantidad de veces**. Un logo que conserva sus tres cuadros pero los pasa al
+doble de velocidad, o que da vueltas para siempre cuando estaba pensado para
+tres pasadas, es un archivo distinto del que subieron.
+
+Medido sobre sharp 0.35.3 / libvips 8.18.3: `delay` y `loop` viajan solos hasta
+la salida al leer con `{ animated: true }`, incluso a través de un `resize`. Se
+pasan **explícitos igual**, porque esa conservación no está en el contrato
+público de sharp — una actualización que dejara de arrastrarlos no rompería
+ninguna promesa suya y acá se traduciría en logos que cambian de velocidad sin
+que nadie tocara nada. Además `verificar()` los relee del archivo final y
+rechaza si no coinciden, con 10 ms de tolerancia (la resolución del propio
+formato GIF).
+
+Las fixtures tienen cuadros de **duraciones distintas entre sí**: con
+duraciones iguales, un codificador que las normalizara a un único valor pasaría
+igual.
+
+### 15.3 El staging se comprueba al arrancar
+
+Todo el contrato de subidas descansa sobre dos supuestos de configuración: que
+staging no esté debajo de `UPLOAD_DIR` —o `express.static` lo serviría y lo
+subido quedaría publicado antes de validarse— y que compartan sistema de
+archivos —o el `rename` falla con `EXDEV` y habría que copiar, que no es
+atómico.
+
+Los dos dependen de variables de entorno del VPS. Un `.env` equivocado no rompe
+nada visible: la API arranca, las subidas funcionan, y la garantía no existe.
+`api/src/staging.ts` resuelve las rutas con `realpath` —un enlace simbólico
+pasaría las comprobaciones mirando rutas que no son las que el sistema usa— y
+lanza `ConfiguracionInsegura` al arrancar.
+
+`borrarTemporal` dejó de ser `.catch(() => {})`: un staging que deja de poder
+borrarse se llenaba en silencio. Ahora registra el fallo con el logger seguro —
+el nombre del temporal, que es un UUID nuestro, y el código del error; nunca la
+ruta absoluta ni el nombre original del archivo.
+
+### 15.4 Selector multimedia reutilizable
+
+Los campos de imagen del Page Builder eran una caja de texto: había que ir a
+Multimedia, copiar la URL a mano y pegarla. De ahí salen dos cosas que no se
+ven hasta que el sitio está publicado — una URL con un carácter de más, y un
+`<img>` sin `width`/`height` que hace saltar la página, porque quien pega una
+URL no copia también las dimensiones.
+
+`MediaPicker` devuelve las cuatro juntas: URL, alt, ancho y alto, de lo que el
+pipeline midió sobre el archivo real. Filtra por el `mime` **efectivo** del
+servidor, así que no ofrece PDFs. La URL manual sigue existiendo: hay imágenes
+institucionales alojadas fuera y quitarla rompería bloques que ya la usan.
+
+`PATCH /api/admin/media/:id` edita **sólo** el `alt` — lo único que tiene
+sentido corregir después de subir; el resto lo determinó el pipeline a partir
+de los bytes y editarlo sería volver a que la fila y el archivo se contradigan.
+
+### 15.5 El bloque `Logos`
+
+| Antes | Ahora |
+|---|---|
+| `opacity-80` fijo en la clase | configurable 20–100, con default 80 |
+| sin `width`/`height` → la fila salta al cargar | dimensiones del archivo, validadas |
+| sin activo/inactivo → para sacar un convenio había que borrarlo | `active`, con default "se muestra" |
+| `rel="noreferrer"` | `rel="noopener noreferrer"` |
+| un logo enlazado sin `alt` era un enlace anónimo | sin `alt` no se publica el enlace |
+| sin `max-w-full` ni `object-contain` | los dos |
+
+**Compatibilidad**: los bloques guardados traen `imageUrl`, `alt` y `href`.
+Todo lo agregado es opcional y los defaults reproducen exactamente lo anterior.
+Un bloque viejo no cambia hasta que alguien lo edite. Las pruebas de "legacy"
+usan sólo esas tres claves a propósito.
+
+El caso del enlace sin `alt` es el único donde se pierde algo: un `<a>` con una
+imagen sin texto se anuncia como "enlace" y nada más, y en una fila de doce
+logos son doce enlaces indistinguibles. Se prefiere perder el destino
+—recuperable editando— antes que publicar navegación que nadie puede usar.
+
+### 15.6 Reordenamiento genérico
+
+El orden de un array `kind: "items"` es el orden en que se publica, y la única
+forma de cambiarlo era borrar los ítems de abajo y volver a escribirlos. Afecta
+por igual a **cards, accordion, slider, gallery, steps, stats y logos**: siete
+bloques con el mismo problema y ninguna razón para resolverlo siete veces.
+
+Vive en `BlockPropsEditor`, así que un bloque futuro que declare ese tipo de
+campo lo recibe sin código propio — hay una prueba parametrizada sobre los
+siete que lo comprueba, y falla si aparece un octavo sin cobertura.
+
+Subir/Bajar y no arrastrar: dos botones funcionan con teclado, con lector de
+pantalla y en un teléfono, sin necesitar una alternativa aparte. `mover()`
+devuelve un array nuevo y **mueve las mismas referencias**, así que un ítem
+conserva todo lo que tenga adentro, incluidas claves que el editor no declara.
+
+### 15.7 Borrar no rompe contenido
+
+Borrar un archivo referenciado no falla: rompe la página que lo usa y se nota
+recién cuando alguien la visita. Se consulta el **esquema efectivo** —los
+bloques viven en su propia tabla `blocks` con `props` JSON, no en una columna
+de `pages`— y se responde 409 diciendo dónde y cuántas veces, con la ruta del
+panel a la que ir. Nunca el contenido institucional de esos bloques.
+
+Ubicaciones cubiertas: `blocks.props`, `settings["brand"].logoUrl`,
+`settings["seo"].ogImage` y `doctors.photo_url`. No hay más columnas de imagen
+en el esquema. El recorrido es sobre el árbol entero de `props` y no sobre
+claves conocidas: una clave nueva en un bloque futuro quedaría fuera y el
+borrado volvería a romper contenido sin avisar.
+
+### 15.8 Validación
+
+| Comprobación | Resultado |
+|---|---|
+| Suite completa (Node 20 + MariaDB local, `TEST_DATABASE=1`) | **1232 / 1232** en 58 archivos |
+| `pnpm typecheck` | OK |
+| Builds `@sa/api` / `@sa/web` / `@sa/admin` | OK |
+| `node scripts/ci/verify-prerender.mjs` | OK, exit 0 |
+| `pnpm audit --prod` | *No known vulnerabilities found* |
+| `node scripts/check-secrets.mjs` | sin credenciales en el árbol |
+| `gitleaks detect --no-git` (8.28.0) | *no leaks found* |
+
+Baseline sobre `main` (PR #17 fusionado): **1128 en 53 archivos**.
+
+Dos pruebas existentes cambiaron de valor esperado, ninguna se relajó:
+
+- `block-urls`: `rel` pasó de `noreferrer` a `noopener noreferrer` — se afirma
+  más, no menos.
+- `media-pipeline`: el fixture de PDF pasó a generarse con `pdf-lib`. El
+  anterior no era un PDF, que es el defecto que esta ronda corrige.
+
+Cada corrección se verificó **reintroduciendo el defecto**: la detección por
+cinco bytes hace caer 5 pruebas de PDF; normalizar `delay`/`loop` hace caer 4
+de animación; la opacidad fija y el enlace anónimo hacen caer 6 de `Logos`;
+mostrar los inactivos, 3; y que `mover` mute el array, 5 del Page Builder.
+
+### 15.9 Qué falta
 
 | Ítem | Estado |
 |---|---|
-| Bloque `logos`: `alt` con enlace, `width`/`height`/`lazy`, opacidad, `active`, `max-w-full` | 🔲 desarrollo pendiente |
-| Reordenar ítems en el Page Builder (`kind: "items"`) | 🔲 desarrollo pendiente |
-| Selector multimedia dentro del Page Builder | 🔲 desarrollo pendiente (excluido de esta ronda por pedido) |
 | SVG: saneo específico antes de aceptarlo | 🔲 desarrollo pendiente; hoy rechazado y así lo dice el panel |
-| Confirmación escrita del alcance de Biopsias | 🔲 decisión del sanatorio + contrato por aprobar; hasta entonces el ítem queda en `review` por diseño |
+| Saneo de PDF (no sólo validación) | 🔲 desarrollo pendiente; hoy se valida y se documenta que no se sanea |
+| Confirmación escrita del alcance de Biopsias | 🔲 decisión del sanatorio + contrato por aprobar |
 | Usuarios: `safeParse` → 400, proteger el último superadmin | 🔲 desarrollo pendiente |
 | A-3 (`PUBLIC_SITE_URL` al dominio definitivo) | 🔲 **configuración de producción**, más adelante |
 | Purga del secreto histórico (`9ced09d`) | 🔲 **decisión del propietario** — NO-GO de producción vigente; sólo se informa |
 | Campañas Meta / Google / Instagram | 🔲 otra fase completa; hoy no existe nada |
+
+### 15.10 Sobre la revisión
+
+Los PR #16 y #17 se fusionaron **sin ninguna review registrada en GitHub**.
+Cero hilos abiertos no es lo mismo que revisado: significa que nadie miró. Este
+PR queda en Draft y se reporta como listo para revisión; antes de fusionarlo
+corresponde solicitar una revisión real y esperar que aparezca registrada,
+además de los tres checks en verde.
