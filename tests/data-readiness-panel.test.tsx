@@ -364,3 +364,45 @@ describe("el panel no imprime datos del sanatorio", () => {
     expect(texto).toContain("Consultorios externos");
   });
 });
+
+describe("la tarjeta del Dashboard no puede llevarse la pantalla", () => {
+  const soloDashboard = () => [{ path: "/", element: <DashboardPage /> }];
+
+  /**
+   * Formas que rompían el render.
+   *
+   * `q.data.summary.resolved` sobre cualquiera de estas lanza, y una excepción
+   * durante el render desmonta el árbol entero: se cae **todo** el Dashboard
+   * —stats, actividad reciente, accesos rápidos— por un endpoint secundario.
+   */
+  const MALFORMADAS: [string, unknown][] = [
+    ["un array", []],
+    ["un objeto vacío", {}],
+    ["sin summary", { overall: "pending", sections: [] }],
+    ["summary incompleto", { overall: "pending", summary: { resolved: 1 } }],
+    ["summary con textos", { overall: "pending", summary: { resolved: "1", pending: "2", review: "0", total: "3" } }],
+    ["overall inventado", { overall: "explotado", summary: { resolved: 1, pending: 2, review: 0, total: 3 } }],
+    ["null", null],
+    ["una cadena", "no soy un objeto"],
+  ];
+
+  it.each(MALFORMADAS)("con %s el resto del Dashboard sigue en pie", async (_q, payload) => {
+    respuestas["/admin/data-readiness"] = payload;
+    montar(soloDashboard(), "/admin/");
+
+    // Lo que tiene que seguir visible: el encabezado y las tarjetas de stats.
+    expect(await screen.findByText("Inicio")).toBeTruthy();
+    expect(await screen.findByText("Mensajes nuevos")).toBeTruthy();
+    expect(screen.getByText("Accesos rápidos")).toBeTruthy();
+
+    // Y la tarjeta que no pudo dibujarse no aparece a medias.
+    await waitFor(() => expect(screen.queryByText("Datos pendientes")).toBeNull());
+  });
+
+  it("con la respuesta correcta la tarjeta sí se muestra", async () => {
+    // Control: el blindaje no puede ser "no dibujar nunca".
+    montar(soloDashboard(), "/admin/");
+    expect(await screen.findByText("Datos pendientes")).toBeTruthy();
+    expect(await screen.findByText("3 / 16")).toBeTruthy();
+  });
+});

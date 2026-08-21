@@ -27,6 +27,8 @@ export class HttpError extends Error {
 export const badRequest = (message = "payload invalido", details?: unknown) =>
   new HttpError(400, message, details);
 export const notFound = (message = "no encontrado") => new HttpError(404, message);
+/** La petición choca con el estado actual: mismo identificador, otro contenido. */
+export const conflict = (message = "conflicto con el estado actual") => new HttpError(409, message);
 export const tooManyRequests = (message = "demasiadas solicitudes") => new HttpError(429, message);
 
 /** Envuelve un handler async para que sus rechazos lleguen a `next(err)`. */

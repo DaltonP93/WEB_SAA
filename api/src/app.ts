@@ -57,7 +57,23 @@ export function createApp() {
   // Detrás de Nginx: req.ip tiene que ser la IP real del visitante para que el
   // rate limiting no cuente todo contra el proxy.
   app.set("trust proxy", process.env.TRUST_PROXY ?? "loopback");
-  app.use(morgan("dev"));
+  /**
+   * Registro de peticiones **sin la query string**.
+   *
+   * `morgan("dev")` loguea la URL completa, y en el panel eso incluye lo que
+   * el operador escribe para buscar: el apellido, el teléfono o el correo de
+   * un paciente terminan en los logs del servidor sin que nadie lo haya
+   * decidido. Se conservan los nombres de los parámetros —sirven para
+   * entender qué se pidió— y se descartan los valores.
+   */
+  morgan.token("ruta-sin-valores", (req) => {
+    const url = (req as { originalUrl?: string; url?: string }).originalUrl ?? (req as { url?: string }).url ?? "";
+    const [ruta, query] = url.split("?");
+    if (!query) return ruta;
+    const claves = [...new Set(query.split("&").map((p) => p.split("=")[0]).filter(Boolean))];
+    return claves.length ? `${ruta}?${claves.join(",")}=…` : ruta;
+  });
+  app.use(morgan(":method :ruta-sin-valores :status :response-time ms - :res[content-length]"));
 
   app.use("/uploads", express.static(UPLOAD_DIR, {
     immutable: true,

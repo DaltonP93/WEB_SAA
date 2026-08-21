@@ -6,7 +6,8 @@ import { rateLimit } from "../rate-limit.js";
 import { captchaPublicConfig, verifyCaptcha } from "../captcha.js";
 import { publicChannelValues } from "../contact-values.js";
 import { isEmergencyCta } from "../institutional-red.js";
-import { HttpError, badRequest, notFound } from "../http.js";
+import { HttpError, badRequest, conflict, notFound } from "../http.js";
+import { instanteDesdeHoraLocal } from "../timezone.js";
 
 export const publicRouter = Router();
 
@@ -277,12 +278,65 @@ const appointmentSchema = z.object({
   website: z.string().max(200).optional(),
 });
 
-/** Momento preferido: se acepta vacío, pero si viene tiene que ser una fecha. */
-function parsePreferredAt(value: string | undefined): Date | null | undefined {
-  if (value === undefined || value.trim() === "") return null;
-  const t = new Date(value);
-  return Number.isFinite(t.getTime()) ? t : undefined;
+/**
+ * Momento preferido, interpretado en la zona del sanatorio.
+ *
+ * `<input type="datetime-local">` manda una hora de pared sin offset, y
+ * `new Date(valor)` la resolvía con la zona del proceso: un VPS en UTC
+ * guardaba las 10:30 UTC para quien eligió las 10:30 de Asunción. La hora que
+ * quedaba almacenada dependía de cómo estuviera configurada la máquina, y no
+ * fallaba en ningún lado — sólo quedaba mal.
+ */
+const parsePreferredAt = (value: string | undefined) => instanteDesdeHoraLocal(value);
+
+/**
+ * El contenido de una solicitud, normalizado para poder compararlo.
+ *
+ * Es lo que decide si un reenvío con la misma clave es *el mismo* pedido o uno
+ * distinto. No entra nada que cambie entre intentos legítimos —el token del
+ * CAPTCHA es de un solo uso, el honeypot es del formulario y las marcas de
+ * tiempo son del servidor—: incluirlos haría que todo reintento pareciera un
+ * pedido diferente y el 409 saltaría siempre.
+ */
+interface Contenido {
+  name: string;
+  phone: string;
+  email: string;
+  specialtyId: number | null;
+  doctorId: number | null;
+  preferredAt: number | null;
+  message: string | null;
 }
+
+const contenidoDelPayload = (d: {
+  name: string;
+  phone: string;
+  email: string;
+  specialtyId?: number;
+  doctorId?: number;
+  message?: string;
+}, preferido: Date | null): Contenido => ({
+  name: d.name,
+  phone: d.phone,
+  email: d.email,
+  specialtyId: d.specialtyId ?? null,
+  doctorId: d.doctorId ?? null,
+  preferredAt: preferido ? preferido.getTime() : null,
+  message: d.message ?? null,
+});
+
+const contenidoDeLaFila = (f: Record<string, unknown>): Contenido => ({
+  name: String(f.name ?? ""),
+  phone: String(f.phone ?? ""),
+  email: String(f.email ?? ""),
+  specialtyId: f.specialty_id === null || f.specialty_id === undefined ? null : Number(f.specialty_id),
+  doctorId: f.doctor_id === null || f.doctor_id === undefined ? null : Number(f.doctor_id),
+  preferredAt: f.preferred_at ? new Date(f.preferred_at as string).getTime() : null,
+  message: f.message === null || f.message === undefined || f.message === "" ? null : String(f.message),
+});
+
+const mismoContenido = (a: Contenido, b: Contenido): boolean =>
+  (Object.keys(a) as (keyof Contenido)[]).every((k) => a[k] === b[k]);
 
 /**
  * Comprueba que el médico y la especialidad existan y se correspondan.
@@ -441,6 +495,24 @@ function parseJson(value: unknown): unknown {
   }
 }
 publicRouter.post("/appointments", formsLimiter, async (req, res) => {
+  // El orden de este handler es el contrato, no una preferencia de estilo.
+  //
+  // 1. honeypot (y el rate limit, que es el middleware de arriba);
+  // 2. forma del payload;
+  // 3. normalización de la fecha;
+  // 4. búsqueda de la clave de envío;
+  // 5. si ya existe con el mismo contenido → se devuelve, sin CAPTCHA;
+  // 6. si existe con otro contenido → 409, sin tocar la fila;
+  // 7. clave nueva → referencias y CAPTCHA;
+  // 8. insertar;
+  // 9. en la carrera del índice único, comparar de nuevo antes de responder.
+  //
+  // El CAPTCHA estaba en el paso 2 y ahí rompía el reintento: el token es de
+  // un solo uso, así que quien reenviaba tras una respuesta perdida traía uno
+  // ya consumido y recibía 400 sobre una solicitud que **ya estaba guardada**.
+  // Verificarlo después de resolver la idempotencia no abre ninguna puerta:
+  // una clave que todavía no existe sigue exigiendo CAPTCHA válido, y una que
+  // ya existe no crea nada.
   if (isHoneypotFilled(req.body)) {
     // Respondemos 201 para no darle información útil al bot.
     console.warn("[spam] honeypot activado en /appointments");
@@ -450,20 +522,40 @@ publicRouter.post("/appointments", formsLimiter, async (req, res) => {
   if (!parsed.success) {
     throw badRequest("payload invalido", parsed.error.flatten().fieldErrors);
   }
-  if (!(await verifyCaptcha(parsed.data.captchaToken, req.ip))) {
-    throw badRequest("verificación anti-spam fallida");
-  }
   const d = parsed.data;
 
   const preferido = parsePreferredAt(d.preferredAt);
   if (preferido === undefined) throw badRequest("payload invalido", { preferredAt: ["fecha inválida"] });
 
+  const contenido = contenidoDelPayload(d, preferido);
+
+  /**
+   * Resuelve una clave que ya existe: o es el mismo pedido, o es un conflicto.
+   *
+   * Devolver éxito sin comparar sería peor que duplicar: el cliente recibiría
+   * el id de una solicitud **distinta** y creería que la suya se registró.
+   */
+  const resolverExistente = (fila: Record<string, unknown> | undefined) => {
+    if (!fila) return null;
+    if (!mismoContenido(contenido, contenidoDeLaFila(fila))) {
+      throw conflict(
+        "esa clave de envío ya se usó para una solicitud con otros datos. " +
+          "Recargá el formulario para empezar una solicitud nueva.",
+      );
+    }
+    return res.status(200).json({ id: fila.id, duplicate: true });
+  };
+
+  const yaEstaba = await db("appointments").where({ submission_key: d.submissionKey }).first();
+  const respuestaPrevia = resolverExistente(yaEstaba);
+  if (respuestaPrevia) return respuestaPrevia;
+
   const problema = await validarReferencias(d.doctorId, d.specialtyId);
   if (problema) throw badRequest(problema);
 
-  // Idempotencia, primer intento: si la clave ya está, se devuelve lo que hay.
-  const existente = await db("appointments").where({ submission_key: d.submissionKey }).first("id");
-  if (existente) return res.status(200).json({ id: existente.id, duplicate: true });
+  if (!(await verifyCaptcha(d.captchaToken, req.ip))) {
+    throw badRequest("verificación anti-spam fallida");
+  }
 
   const fila = {
     name: d.name,
@@ -481,12 +573,14 @@ publicRouter.post("/appointments", formsLimiter, async (req, res) => {
     const [id] = await db("appointments").insert(fila);
     return res.status(201).json({ id });
   } catch (err) {
-    // Idempotencia, segundo intento: dos peticiones simultáneas pasan las dos
-    // por el `select` de arriba y las dos insertan. El índice único deja pasar
-    // una sola; la que pierde encuentra acá la fila de la que ganó.
+    // Dos peticiones simultáneas pasan las dos por la búsqueda de arriba y las
+    // dos insertan. El índice único deja pasar una sola; la que pierde
+    // encuentra acá la fila de la que ganó — y la compara igual, porque una
+    // carrera entre payloads distintos también es un conflicto.
     if (esClaveRepetida(err)) {
-      const fila = await db("appointments").where({ submission_key: d.submissionKey }).first("id");
-      if (fila) return res.status(200).json({ id: fila.id, duplicate: true });
+      const ganadora = await db("appointments").where({ submission_key: d.submissionKey }).first();
+      const respuesta = resolverExistente(ganadora);
+      if (respuesta) return respuesta;
     }
     // El error de mysql2 trae el SQL con los valores incrustados: nombre,
     // teléfono, correo y mensaje del paciente. Loguearlo tal cual mandaría

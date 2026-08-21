@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 
 /**
  * `update-vps.sh` no hace rollback, y ahora lo dice antes de tocar nada.
@@ -32,6 +32,18 @@ interface Resultado {
   stderr: string;
 }
 
+/**
+ * Directorio temporal propio, por el mismo motivo que en
+ * `deploy-update-reexec.test.ts`: los dos archivos ejecutan `update-vps.sh`,
+ * que escribe una copia de sí mismo en `$TMPDIR` con el prefijo
+ * `update-vps-`. Compartir `/tmp` hacía que cada uno viera los temporales del
+ * otro. Además los escenarios de acá se creaban con **ese mismo prefijo**, así
+ * que aparecían directamente en el conteo del otro archivo.
+ */
+const TMP_PROPIO = mkdtempSync(join(tmpdir(), "norollback-tmp-"));
+
+afterAll(() => rmSync(TMP_PROPIO, { recursive: true, force: true }));
+
 function correr(appDir: string, env: Record<string, string> = {}): Resultado {
   try {
     const stdout = execFileSync("bash", [SCRIPT], {
@@ -39,7 +51,7 @@ function correr(appDir: string, env: Record<string, string> = {}): Resultado {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 60_000,
-      env: { ...process.env, APP_DIR: appDir, ...env },
+      env: { ...process.env, APP_DIR: appDir, TMPDIR: TMP_PROPIO, ...env },
     });
     return { code: 0, stdout, stderr: "" };
   } catch (err) {
@@ -61,7 +73,8 @@ const creados: string[] = [];
  * primero, ese archivo desaparecería del árbol.
  */
 function appDirConHistoria(): { dir: string; viejo: string; actual: string } {
-  const dir = mkdtempSync(join(tmpdir(), "update-vps-"));
+  // Prefijo propio: "update-vps-" es el que usa el script para su copia.
+  const dir = mkdtempSync(join(TMP_PROPIO, "escenario-"));
   creados.push(dir);
   git(dir, "init", "-q", "-b", "main");
   writeFileSync(join(dir, "viejo.txt"), "versión anterior\n");

@@ -9,6 +9,29 @@ export interface DataTableColumn<T> {
   accessor?: (row: T) => string | number;
 }
 
+/**
+ * Búsqueda, orden y paginación resueltos por el servidor.
+ *
+ * Es opcional a propósito: los CRUD que cargan la tabla entera —Médicos,
+ * Especialidades, Servicios— siguen filtrando en el navegador sin cambio
+ * alguno. Sólo lo usa la bandeja de Turnos, que crece sin techo y donde
+ * recortar en el cliente significaba buscar dentro de las primeras 200 filas
+ * y no dentro de las solicitudes.
+ */
+export interface DataTableServer {
+  /** Texto de búsqueda. El componente lo dibuja; quién lo consulta es de afuera. */
+  query: string;
+  onQueryChange: (q: string) => void;
+  /** Página actual, base 0. */
+  page: number;
+  onPageChange: (p: number) => void;
+  /** Total de filas que coinciden con los filtros, no las recibidas. */
+  total: number;
+  sortKey: string | null;
+  sortDir: "asc" | "desc";
+  onSortChange: (key: string, dir: "asc" | "desc") => void;
+}
+
 interface Props<T> {
   columns: DataTableColumn<T>[];
   rows: T[];
@@ -20,6 +43,8 @@ interface Props<T> {
   pageSize?: number;
   loading?: boolean;
   emptyMessage?: string;
+  /** Cuando viene, el componente no filtra ni ordena ni pagina por su cuenta. */
+  server?: DataTableServer;
 }
 
 function norm(v: unknown): string {
@@ -41,11 +66,23 @@ export default function DataTable<T>({
   pageSize = 20,
   loading,
   emptyMessage = "No hay resultados.",
+  server,
 }: Props<T>) {
-  const [query, setQuery] = useState("");
-  const [sortKey, setSortKey] = useState<string | null>(null);
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
-  const [page, setPage] = useState(0);
+  const [queryLocal, setQueryLocal] = useState("");
+  const [sortKeyLocal, setSortKeyLocal] = useState<string | null>(null);
+  const [sortDirLocal, setSortDirLocal] = useState<"asc" | "desc">("asc");
+  const [pageLocal, setPageLocal] = useState(0);
+
+  // En modo servidor el estado vive afuera: el componente sólo lo dibuja y
+  // avisa. Tener dos copias —una acá y otra en la pantalla— haría que la
+  // caja de búsqueda y la consulta se desincronizaran en cuanto una de las
+  // dos se reiniciara sola.
+  const query = server ? server.query : queryLocal;
+  const setQuery = server ? server.onQueryChange : setQueryLocal;
+  const sortKey = server ? server.sortKey : sortKeyLocal;
+  const sortDir = server ? server.sortDir : sortDirLocal;
+  const page = server ? server.page : pageLocal;
+  const setPage = server ? server.onPageChange : setPageLocal;
 
   const searchCols = useMemo(
     () =>
@@ -56,12 +93,16 @@ export default function DataTable<T>({
   );
 
   const filtered = useMemo(() => {
+    // Con el servidor al mando, lo que llegó ya viene filtrado: volver a
+    // recortarlo acá escondería filas que sí coinciden.
+    if (server) return rows;
     const q = norm(query.trim());
     if (!q) return rows;
     return rows.filter((row) => searchCols.some((c) => norm(cellValue(c, row)).includes(q)));
-  }, [rows, query, searchCols]);
+  }, [rows, query, searchCols, server]);
 
   const sorted = useMemo(() => {
+    if (server) return filtered;
     if (!sortKey) return filtered;
     const col = columns.find((c) => c.key === sortKey);
     if (!col) return filtered;
@@ -75,22 +116,25 @@ export default function DataTable<T>({
       return sortDir === "asc" ? cmp : -cmp;
     });
     return copy;
-  }, [filtered, sortKey, sortDir, columns]);
+  }, [filtered, sortKey, sortDir, columns, server]);
 
-  const total = sorted.length;
+  // El total es el del servidor cuando lo hay: contar las filas recibidas
+  // diría "20 de 20" con doscientas solicitudes esperando.
+  const total = server ? server.total : sorted.length;
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const safePage = Math.min(page, pageCount - 1);
   const start = safePage * pageSize;
-  const pageRows = sorted.slice(start, start + pageSize);
+  const pageRows = server ? sorted : sorted.slice(start, start + pageSize);
 
   function toggleSort(col: DataTableColumn<T>) {
     if (!col.sortable) return;
-    if (sortKey === col.key) {
-      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    } else {
-      setSortKey(col.key);
-      setSortDir("asc");
+    const proxima: "asc" | "desc" = sortKey === col.key && sortDir === "asc" ? "desc" : "asc";
+    if (server) {
+      server.onSortChange(col.key, proxima);
+      return;
     }
+    setSortKeyLocal(col.key);
+    setSortDirLocal(proxima);
   }
 
   return (

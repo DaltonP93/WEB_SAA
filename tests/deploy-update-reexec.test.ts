@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 
 /**
  * La reejecución de `update-vps.sh` cuando el propio script cambia en el pull.
@@ -72,8 +72,24 @@ interface Escenario {
  * empuja al remoto, así que el `git reset --hard origin/main` del script lo
  * trae. `scriptV2` decide si el segundo commit cambia o no el propio script.
  */
+/**
+ * Directorio temporal **propio de este archivo**.
+ *
+ * `update-vps.sh` hace `mktemp "${TMPDIR:-/tmp}/update-vps-XXXXXX.sh"`, y la
+ * prueba de más abajo comprueba que esa copia no quede colgada listando el
+ * directorio. Con el `/tmp` compartido eso miraba también lo que crea
+ * `deploy-update-no-rollback.test.ts`, que corre en paralelo y usa el mismo
+ * prefijo: la copia del otro archivo aparecía en el "antes" y desaparecía en
+ * el "después", y la comparación fallaba sin que nada estuviera mal.
+ *
+ * Con un `TMPDIR` propio, cada archivo sólo ve lo suyo.
+ */
+const TMP_PROPIO = mkdtempSync(join(tmpdir(), "reexec-tmp-"));
+
+afterAll(() => rmSync(TMP_PROPIO, { recursive: true, force: true }));
+
 function montar(scriptV2: string): Escenario {
-  const raiz = mkdtempSync(join(tmpdir(), "reexec-"));
+  const raiz = mkdtempSync(join(TMP_PROPIO, "reexec-"));
   creados.push(raiz);
   const dir = join(raiz, "app");
   const bin = join(raiz, "bin");
@@ -131,7 +147,14 @@ function correr(esc: Escenario, env: Record<string, string> = {}) {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     timeout: 120_000,
-    env: { ...process.env, PATH: `${esc.bin}:${process.env.PATH}`, APP_DIR: esc.dir, ...env },
+    env: {
+      ...process.env,
+      PATH: `${esc.bin}:${process.env.PATH}`,
+      APP_DIR: esc.dir,
+      // El script escribe su copia acá y no en el /tmp compartido.
+      TMPDIR: TMP_PROPIO,
+      ...env,
+    },
   });
   return {
     code: res.status ?? -1,
@@ -229,12 +252,12 @@ describe("la reejecución es una sola: no hay bucle", () => {
 describe("el script corre desde una copia, no desde el archivo que el reset reescribe", () => {
   it("se ejecuta desde la copia y la limpia al terminar", () => {
     const esc = montar(SCRIPT_REAL);
-    const antes = readdirSync(tmpdir()).filter((f) => f.startsWith("update-vps-"));
+    const antes = readdirSync(TMP_PROPIO).filter((f) => f.startsWith("update-vps-"));
 
     const res = correr(esc);
 
     expect(res.code, res.stderr).toBe(0);
-    const despues = readdirSync(tmpdir()).filter((f) => f.startsWith("update-vps-"));
+    const despues = readdirSync(TMP_PROPIO).filter((f) => f.startsWith("update-vps-"));
     expect(despues, "la copia temporal no puede quedar colgada").toEqual(antes);
   }, 180_000);
 

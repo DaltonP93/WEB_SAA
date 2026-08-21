@@ -48,6 +48,22 @@ function nuevaClave(): string {
 
 const VACIO = { name: "", phone: "", email: "", specialtyId: "", preferredAt: "", message: "" };
 
+/**
+ * La hora que la persona eligió, tal cual, sin pasar por `Date`.
+ *
+ * `<input type="datetime-local">` da una hora de pared —`"2027-03-15T10:30"`—
+ * sin zona. `new Date(...).toLocaleString()` la interpretaba con la zona del
+ * navegador, así que el mensaje de WhatsApp podía decir una hora distinta de
+ * la que se marcó y de la que la API guarda (que es hora de Asunción).
+ * Reformatear el texto no supone nada y no puede equivocarse.
+ */
+function horaElegida(valor: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(valor);
+  if (!m) return valor;
+  const [, y, mes, d, h, min] = m;
+  return `${d}/${mes}/${y} ${h}:${min}`;
+}
+
 export default function AppointmentForm({ heading = "Solicitar turno", defaultSpecialtyId }: AppointmentFormProps) {
   const [searchParams] = useSearchParams();
   const doctorSlugParam = searchParams.get("doctor") ?? "";
@@ -107,7 +123,7 @@ export default function AppointmentForm({ heading = "Solicitar turno", defaultSp
     if (doctor.data?.name) lines.push(`Médico: ${doctor.data.name}`);
     const spec = specialtyName();
     if (spec) lines.push(`Especialidad: ${spec}`);
-    if (form.preferredAt) lines.push(`Fecha y hora preferidas: ${new Date(form.preferredAt).toLocaleString()}`);
+    if (form.preferredAt) lines.push(`Fecha y hora preferidas: ${horaElegida(form.preferredAt)}`);
     if (form.message.trim()) lines.push(`Detalle: ${form.message.trim()}`);
     return `https://wa.me/${waNumber}?text=${encodeURIComponent(lines.join("\n"))}`;
   }
