@@ -11,6 +11,10 @@ import DoctorDetailPage from "./pages/DoctorDetailPage";
 import SpecialtyDetailPage from "./pages/SpecialtyDetailPage";
 import NotFoundPage from "./pages/NotFoundPage";
 import { CHANNEL_KEYS, socialChannels, useContactChannels } from "./lib/contact-channels";
+import ConsentBanner from "./components/ConsentBanner";
+import { useConsentimiento } from "./lib/consent";
+import { cargarAnalitica, hayMedicion } from "./lib/analytics";
+import { capturarAtribucion } from "./lib/attribution";
 
 /** Rutas del portal unificadas en /portal-paciente (item 23 de la minuta). */
 const PORTAL_REDIRECTS = [
@@ -31,6 +35,25 @@ export default function App() {
   useEffect(() => {
     if (settingsQ.data?.theme) applyTheme(settingsQ.data.theme);
   }, [settingsQ.data]);
+
+  // La atribución se captura una vez, al arrancar: es la primera vista de la
+  // sesión la que trae los parámetros de campaña. No depende del
+  // consentimiento (ver `lib/attribution.ts`: es dato de primera parte que sólo
+  // viaja si la persona envía un formulario).
+  useEffect(() => {
+    capturarAtribucion();
+  }, []);
+
+  const { analiticaPermitida } = useConsentimiento();
+  const analytics = settingsQ.data?.analytics;
+  const medicionConfigurada = hayMedicion(analytics);
+
+  // La medición de terceros carga sólo con las dos condiciones a la vez: hay ID
+  // configurado y la persona aceptó. Cualquier cambio en una de las dos vuelve
+  // a evaluar; `cargarAnalitica` es idempotente, así que no duplica nada.
+  useEffect(() => {
+    if (medicionConfigurada && analiticaPermitida) cargarAnalitica(analytics);
+  }, [medicionConfigurada, analiticaPermitida, analytics]);
 
   const brand = settingsQ.data?.brand;
   const seo = settingsQ.data?.seo;
@@ -99,6 +122,9 @@ export default function App() {
           </motion.div>
         </AnimatePresence>
       </Layout>
+      {/* El aviso sólo aparece si hay algo que medir: sin ningún ID configurado
+          no hay analítica que consentir. */}
+      {medicionConfigurada && <ConsentBanner />}
     </>
   );
 }

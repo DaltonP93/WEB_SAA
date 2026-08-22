@@ -300,9 +300,20 @@ describeDb("un cambio en la tabla llega a todos los consumidores", () => {
   it("los ajustes públicos no filtran los snapshots de las migraciones", async () => {
     const settings = await (await fetch(`${baseUrl}/api/public/settings`)).json();
     // `captcha` no sale de la base: es la config pública del entorno (null
-    // mientras el sanatorio no cargue las claves).
-    expect(Object.keys(settings).sort()).toEqual(["brand", "captcha", "contact", "seo", "theme"]);
+    // mientras el sanatorio no cargue las claves). `analytics` siempre está
+    // presente —vacío si nadie lo configuró—: los IDs de medición son públicos
+    // por naturaleza (terminan en el navegador) y el front espera los tres
+    // campos aunque estén en "".
+    expect(Object.keys(settings).sort()).toEqual([
+      "analytics",
+      "brand",
+      "captcha",
+      "contact",
+      "seo",
+      "theme",
+    ]);
     expect(settings.captcha).toBeNull();
+    expect(settings.analytics).toEqual({ ga4: "", gtm: "", metaPixel: "" });
     // En la tabla sí están: lo que cambió es qué se publica.
     const internos = await db("settings").where("key", "like", "snapshot_%");
     expect(internos.length).toBeGreaterThan(0);

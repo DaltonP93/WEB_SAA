@@ -8,6 +8,7 @@ import {
   THEME_PALETTE,
   isApprovedThemeColor,
 } from "../../institutional-red.js";
+import { ANALITICA_VACIA, validarAnalitica } from "../../marketing.js";
 
 export const settingsRouter = Router();
 
@@ -25,7 +26,7 @@ export const settingsRouter = Router();
  * tocan: ni con rol editor ni con superadmin, porque no es una cuestión de
  * permisos sino de que no son contenido.
  */
-export const ADMIN_SETTING_KEYS = ["brand", "theme", "contact", "seo"] as const;
+export const ADMIN_SETTING_KEYS = ["brand", "theme", "contact", "seo", "analytics"] as const;
 
 /** ¿La clave es administrable desde el panel? */
 function isAdminSettingKey(key: string): boolean {
@@ -139,6 +140,11 @@ settingsRouter.put("/", async (req, res) => {
     return res.status(400).json({ error: "payload invalido", issues: themeErrors });
   }
 
+  const analyticsErrors = "analytics" in parsed.data ? assertAnalytics(parsed.data.analytics) : [];
+  if (analyticsErrors.length > 0) {
+    return res.status(400).json({ error: "payload invalido", issues: analyticsErrors });
+  }
+
   // Transaccional: guardar la marca y fallar en el tema dejaba la mitad
   // aplicada, y el panel no tenía forma de saber qué quedó guardado.
   await db.transaction(async (trx) => {
@@ -175,6 +181,10 @@ settingsRouter.put("/:key", async (req, res) => {
     const errors = assertThemeColors(req.body);
     if (errors.length > 0) return res.status(400).json({ error: "payload invalido", issues: errors });
   }
+  if (key === "analytics") {
+    const errors = assertAnalytics(req.body);
+    if (errors.length > 0) return res.status(400).json({ error: "payload invalido", issues: errors });
+  }
   const cleanValue = JSON.stringify(sanitizeSettingValue(key, req.body));
   await db("settings")
     .insert({ key, value: cleanValue })
@@ -208,15 +218,16 @@ const RETIRED_CONTACT_FIELDS = [
  *
  * `scripts` era un campo de "JavaScript personalizado" que el panel ofrecía y
  * la API vaciaba siempre: se guardaba, decía "Guardado" y no conservaba nada.
- * Meta Pixel, Google Ads y Analytics van a entrar por módulos propios, no por
- * un textarea de JS arbitrario.
+ * Meta Pixel, Google Ads y Analytics entran por un módulo propio —la clave
+ * `analytics`, con identificadores validados—, no por un textarea de JS
+ * arbitrario. Ese módulo ya existe (ver `api/src/marketing.ts`).
  */
 export const RETIRED_SETTING_KEYS = ["social", "scripts"];
 
 const RETIRED_SETTING_MESSAGE: Record<string, string> = {
   social: '"social" ya no se administra desde Ajustes: las redes se cargan en Canales de contacto',
   scripts:
-    '"scripts" se retiró: no se inyecta JavaScript arbitrario en el sitio. Las integraciones de medición van a entrar por módulos propios.',
+    '"scripts" se retiró: no se inyecta JavaScript arbitrario en el sitio. La medición se configura en "analytics" con el ID de cada plataforma, no con código pegado.',
 };
 
 /**
@@ -240,12 +251,29 @@ function assertThemeColors(value: unknown): string[] {
   return errors;
 }
 
+/**
+ * El tema y `analytics` comparten forma de validación: reunir errores de
+ * formato para devolver un 400 con motivo, sin lanzar.
+ */
+function assertAnalytics(value: unknown): string[] {
+  const r = validarAnalitica(value);
+  return r.ok ? [] : r.errores;
+}
+
 function sanitizeSettingValue(key: string, value: unknown): unknown {
   if (key === "contact" && value && typeof value === "object" && !Array.isArray(value)) {
     const contact = { ...(value as Record<string, unknown>) };
     for (const field of RETIRED_CONTACT_FIELDS) delete contact[field];
     if (typeof contact.mapEmbed === "string") contact.mapEmbed = sanitizeMapEmbed(contact.mapEmbed);
     return contact;
+  }
+  // Se guarda la forma normalizada —los tres IDs, cada uno válido o ""—, nunca
+  // el objeto crudo que mandó el panel. Ya pasó por `assertAnalytics`, así que
+  // acá `validarAnalitica` siempre devuelve ok; el valor normalizado descarta
+  // cualquier clave extra que se haya colado.
+  if (key === "analytics") {
+    const r = validarAnalitica(value);
+    return r.ok ? r.value : ANALITICA_VACIA;
   }
   return value;
 }

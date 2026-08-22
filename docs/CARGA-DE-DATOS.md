@@ -304,6 +304,44 @@ Cambiarla antes deja los `canonical` y el `sitemap.xml` apuntando a un sitio que
 todavía no responde, que es peor para el posicionamiento que dejarla como está.
 **Es una decisión del propietario del proyecto**, no del equipo de contenido.
 
+### 4.3 · Analítica y marketing (Ajustes → Analítica y marketing)
+
+Se cargan **identificadores**, no código. En **Ajustes → Analítica y marketing**
+hay tres campos:
+
+| Campo | Qué pegar | De dónde sale |
+|---|---|---|
+| Google Analytics 4 | `G-XXXXXXXXXX` | Admin de GA4 → Flujo de datos |
+| Google Tag Manager | `GTM-XXXXXXX` | Contenedor de GTM |
+| Meta (Facebook) Pixel | sólo números | Administrador de eventos de Meta |
+
+Lo que quede vacío se ignora. El panel valida el formato: si pegás otra cosa
+—por ejemplo el bloque `<script>` que te da Google en vez del ID—, lo rechaza.
+
+**Dos cosas tienen que pasar para que mida de verdad:**
+
+1. **Consentimiento del visitante.** La medición no carga hasta que la persona
+   acepta el aviso de cookies. Si nadie configuró ningún ID, el aviso ni
+   aparece.
+2. **Abrir la CSP del servidor (producción).** El sitio bloquea por seguridad
+   los scripts de otros dominios. Para que cargue la plataforma que elijas, hay
+   que agregar sus hosts al `Content-Security-Policy` de Nginx, en
+   `scripts/deploy/setup-vps.sh`:
+   - Google (GA4 / GTM): agregar `https://www.googletagmanager.com` a
+     `script-src` y `https://www.google-analytics.com` a `connect-src`.
+   - Meta Pixel: agregar `https://connect.facebook.net` a `script-src` y
+     `https://www.facebook.com` a `connect-src`.
+
+   Es una edición del servidor, del mismo orden que cargar los IDs: **una
+   decisión de producción**. En desarrollo no hay CSP y la medición funciona sin
+   este paso, así que se puede probar antes.
+
+**De dónde vino cada turno o mensaje.** Cuando alguien llega desde una campaña
+con parámetros `utm_*` en la URL, esos datos se guardan y aparecen en la columna
+*Origen* de la bandeja de Turnos y en el CSV que se exporta. No hace falta
+configurar nada: funciona siempre, y no es rastreo —es dato que viaja sólo si la
+persona envía el formulario, y sólo al sanatorio—.
+
 ---
 
 ## 5 · Lista de control

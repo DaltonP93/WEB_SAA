@@ -7,6 +7,7 @@ import { api } from "../api";
 import type { AppointmentFormProps } from "@sa/shared/blocks";
 import { CHANNEL_KEYS, waDigits, useContactChannels } from "../lib/contact-channels";
 import { irA } from "../lib/navigate";
+import { obtenerAtribucion } from "../lib/attribution";
 import Captcha, { useCaptchaConfig } from "../components/Captcha";
 
 /**
@@ -165,6 +166,9 @@ export default function AppointmentForm({ heading = "Solicitar turno", defaultSp
         consent: true,
         submissionKey: claveRef.current,
         captchaToken: captchaToken ?? undefined,
+        // De dónde vino esta solicitud, si la persona llegó por una campaña.
+        // `undefined` cuando no hay atribución: no se manda una clave vacía.
+        attribution: obtenerAtribucion(),
         website,
       });
 

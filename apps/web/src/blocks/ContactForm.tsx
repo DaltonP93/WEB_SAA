@@ -3,6 +3,7 @@ import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
 import { api } from "../api";
 import type { ContactFormProps } from "@sa/shared/blocks";
+import { obtenerAtribucion } from "../lib/attribution";
 import Captcha, { useCaptchaConfig } from "../components/Captcha";
 
 const inputClass =
@@ -32,6 +33,7 @@ export default function ContactForm({ heading = "Contacto", showPhone = true }: 
       await api.post("/public/contact-messages", {
         ...form,
         captchaToken: captchaToken ?? undefined,
+        attribution: obtenerAtribucion(),
       });
       setState("ok");
       setForm({ name: "", email: "", phone: "", message: "" });

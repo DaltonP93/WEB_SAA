@@ -26,7 +26,7 @@ import {
  * de datos que el panel no entiende: alcanzaba con que la serialización
  * cambiara un byte para dejar sin efecto el `down()` de una migración.
  *
- * Ahora hay una allowlist explícita: brand, theme, contact y seo.
+ * Ahora hay una allowlist explícita: brand, theme, contact, seo y analytics.
  *
  *   TEST_DATABASE=1 pnpm test tests/settings-allowlist.test.ts
  */
@@ -35,7 +35,7 @@ const ROOT = resolve(__dirname, "..");
 const DB_NAME = `${process.env.TEST_DB_NAME ?? "sanatorio_test"}_setallow`;
 const describeDb = DB_TESTS_ENABLED ? describe : describe.skip;
 
-const ADMINISTRABLES = ["brand", "theme", "contact", "seo"];
+const ADMINISTRABLES = ["brand", "theme", "contact", "seo", "analytics"];
 
 /** Claves operativas que nunca pueden salir ni entrar por la API. */
 const INTERNAS = [
@@ -94,9 +94,19 @@ describeDb("ajustes administrables: sólo la allowlist", () => {
     await dropTestDatabase(DB_NAME);
   });
 
-  it("el GET devuelve exactamente los ajustes administrables", async () => {
+  it("el GET no devuelve nada fuera de la allowlist", async () => {
+    // El GET devuelve las claves administrables que **existen** en la base. Una
+    // que nunca se configuró —como `analytics` en una instalación nueva— no
+    // aparece hasta que se guarda; lo que no puede pasar es que se cuele una
+    // clave fuera de la allowlist. El invariante es ese, no que estén las cinco.
     const settings = await (await fetch(`${baseUrl}/api/admin/settings`, { headers: auth() })).json();
-    expect(Object.keys(settings).sort()).toEqual([...ADMINISTRABLES].sort());
+    for (const clave of Object.keys(settings)) {
+      expect(ADMINISTRABLES, `se filtró ${clave}, fuera de la allowlist`).toContain(clave);
+    }
+    // Las que sí se siembran tienen que estar.
+    for (const clave of ["brand", "theme", "contact", "seo"]) {
+      expect(Object.keys(settings), `falta ${clave}`).toContain(clave);
+    }
   });
 
   it("y las claves internas siguen existiendo en la base", async () => {

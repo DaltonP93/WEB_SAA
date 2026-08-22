@@ -362,6 +362,11 @@ Los 25 puntos acordados con el cliente están implementados. Lo estructural:
   - **La animación se conserva entera**: cuadros, transparencia, `delay` por cuadro y `loop`. Sharp 0.35.3 los arrastra solo, pero se pasan explícitos porque esa conservación no está en su contrato público.
   - **La configuración de staging se comprueba al arrancar** (`api/src/staging.ts`): staging no puede ser `UPLOAD_DIR`, estar dentro de él ni en otro sistema de archivos. Una configuración insegura no deja arrancar, en vez de dejar el contrato sin cumplir en silencio.
   - **No se borra un archivo referenciado**: se responde 409 diciendo dónde está usado y cuántas veces —bloques (`blocks.props`), `settings.brand.logoUrl`, `settings.seo.ogImage`, `doctors.photo_url`— sin publicar el contenido institucional.
+✅ **Analítica, consentimiento y atribución (marketing, ronda 1)**:
+  - **Consentimiento primero** (`apps/web/src/lib/consent.ts` + `ConsentBanner`): ninguna medición de terceros carga hasta que el visitante acepta. Decisión versionada en `localStorage`; "Rechazar" con el mismo peso que "Aceptar" (sin patrón oscuro). `null` (no decidió) ≠ `false` (rechazó).
+  - **Medición por identificadores, no por JS pegado** (`api/src/marketing.ts`, clave `analytics`): GA4, GTM y Meta Pixel se configuran con su **ID**, validado por formato (`G-…`, `GTM-…`, dígitos); vacío = apagado. Es el "módulo propio" que prometía el mensaje de la clave retirada `scripts`. El loader (`apps/web/src/lib/analytics.ts`) inyecta el SDK oficial sólo si hay ID **y** consentimiento; es idempotente y revalida el ID antes de ponerlo en un `src`.
+  - **Atribución de conversiones** (`apps/web/src/lib/attribution.ts` + columna `attribution` en `appointments` y `contact_messages`): captura `utm_*`/`gclid`/`fbclid` en la primera vista (first-touch de sesión) y los adjunta al turno o mensaje. Es dato de primera parte —no requiere consentimiento— saneado por allowlist en la API, mostrado en la bandeja y el CSV, y **nunca** en logs.
+  - **CSP**: la medición en **producción** necesita habilitar los hosts de la plataforma en el `Content-Security-Policy` de Nginx (`setup-vps.sh`). Es una edición de servidor que se hace junto con cargar los IDs (decisión de producción); está documentada en `docs/CARGA-DE-DATOS.md`. En dev no hay CSP y la carga funciona.
 ✅ **SEO**: `sitemap.xml` + `robots.txt` dinámicos desde la DB (`api/src/index.ts`); meta por ruta con react-helmet-async; **prerender estático de `/estudios`** en el build (`apps/web/scripts/prerender.mjs`, parte de `pnpm --filter @sa/web build`) que inyecta la lista agrupada + meta + JSON-LD `ItemList` en `dist/estudios/index.html`, best-effort leyendo la API durante el deploy (servido por Nginx vía `try_files`, sin cambios de infra). La URL base de canonical/sitemap sale de `PUBLIC_SITE_URL` en `api/.env` (hoy apunta a la IP del VPS; cambiar al dominio real cuando esté en producción).
 ✅ **Panel admin nivelado** (deployado en prod) con componentes reutilizables:
   - `DataTable.tsx` — tabla genérica tipada: búsqueda accent-insensitive, orden por columna, paginación cliente, skeletons de carga, slot de acciones. Usada en `DoctorsListPage`.
@@ -381,9 +386,9 @@ Los 25 puntos acordados con el cliente están implementados. Lo estructural:
   - Toggle publicar/despublicar inline en `PagesListPage` y `NewsListPage`.
   - `LucideIcon.tsx` — renderiza iconos [lucide](https://lucide.dev/icons/) por nombre kebab-case (`heart-pulse`). Usa `lucide-react/dynamicIconImports` + `React.lazy` + `Suspense` (⚠️ en lucide-react 0.460 **no existe** el subpath `lucide-react/dynamic`). `isIconName()` valida antes de renderizar. El helper `IconBadge` de `EntityManager` muestra el icono si el valor es un nombre lucide válido, y si no cae al emoji tal cual — antes el nombre se imprimía como texto crudo y se superponía a los títulos.
 
-✅ **Tests automatizados**: `pnpm test` (vitest) — **1232 pruebas en 58 archivos**
-al cierre de la ronda de Logos y Page Builder (baseline anterior: **1128 en 53**,
-cierre de la ronda de Multimedia). Las que necesitan base real se activan con
+✅ **Tests automatizados**: `pnpm test` (vitest) — **1279 pruebas en 62 archivos**
+al cierre del round 1 de marketing (analítica, consentimiento y atribución;
+baseline anterior: **1232 en 58**, cierre de la ronda de Logos y Page Builder). Las que necesitan base real se activan con
 `TEST_DATABASE=1` y se saltan solas si no está. CI corre la suite completa contra
 MySQL 8. El smoke testing manual del Agente 3 **complementa** la suite, no la
 reemplaza: lo que se puede afirmar con una prueba, se afirma con una prueba.

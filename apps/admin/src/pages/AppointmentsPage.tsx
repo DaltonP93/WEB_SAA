@@ -42,6 +42,33 @@ interface Turno {
   updated_at: string | null;
   doctor_name: string | null;
   specialty_name: string | null;
+  /** De dónde vino la solicitud, si llegó por una campaña. La API la devuelve saneada o null. */
+  attribution: Atribucion | null;
+}
+
+/** Espejo mínimo de la atribución que arma la API (`api/src/marketing.ts`). */
+interface Atribucion {
+  utm_source?: string;
+  utm_medium?: string;
+  utm_campaign?: string;
+  utm_term?: string;
+  utm_content?: string;
+  gclid?: string;
+  fbclid?: string;
+  landing?: string;
+  referrer?: string;
+}
+
+/** Un resumen legible de la atribución para la bandeja: "origen · medio · campaña". */
+function resumenAtribucion(a: Atribucion | null): string {
+  if (!a) return "";
+  const partes = [a.utm_source, a.utm_medium, a.utm_campaign].filter(Boolean);
+  if (partes.length > 0) return partes.join(" · ");
+  // Sin UTMs pero con un id de clic: al menos decir que vino de un anuncio.
+  if (a.gclid) return "Google Ads (gclid)";
+  if (a.fbclid) return "Meta (fbclid)";
+  if (a.referrer) return a.referrer;
+  return "";
 }
 
 interface Pagina {
@@ -286,6 +313,23 @@ export default function AppointmentsPage() {
       header: "Mensaje",
       accessor: (t) => t.message ?? "",
       render: (t) => <span className="text-xs text-gray-600">{t.message ?? "—"}</span>,
+    },
+    {
+      key: "attribution",
+      header: "Origen",
+      accessor: (t) => resumenAtribucion(t.attribution),
+      render: (t) => {
+        const resumen = resumenAtribucion(t.attribution);
+        if (!resumen) return <span className="text-xs text-gray-400">Directo</span>;
+        return (
+          <span
+            className="text-xs text-gray-700"
+            title={JSON.stringify(t.attribution)}
+          >
+            {resumen}
+          </span>
+        );
+      },
     },
   ];
 

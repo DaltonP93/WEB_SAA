@@ -1854,3 +1854,95 @@ Cero hilos abiertos no es lo mismo que revisado: significa que nadie miró. Este
 PR queda en Draft y se reporta como listo para revisión; antes de fusionarlo
 corresponde solicitar una revisión real y esperar que aparezca registrada,
 además de los tres checks en verde.
+
+---
+
+## 16. Marketing — analítica, consentimiento y atribución (ronda actual, Draft)
+
+Parte de `main` = `a4f17a0` (merge del PR #18), verificado como HEAD real antes
+de ramificar. Es el **round 1 de marketing**; rama independiente del PR #19
+(saneo SVG/PDF + panel), que sigue abierto.
+
+Tres piezas que el sitio no tenía y que son el cimiento de cualquier marketing
+sin depender de terceros para lo básico. El orden importa: **el consentimiento
+gobierna la analítica**, y la atribución es de primera parte, así que va por otra
+puerta.
+
+### 16.1 El proyecto ya había reservado este lugar
+
+`settings.ts` retiró en su momento la clave `scripts` —un textarea de JavaScript
+arbitrario— con un mensaje explícito: *"Meta Pixel, Google Ads y Analytics van a
+entrar por módulos propios, no por un textarea de JS arbitrario."* Este round es
+ese módulo. La diferencia no es cosmética: un `<script>` pegado hace cualquier
+cosa; un **ID** sólo puede ser un ID, y se valida por formato antes de que el
+front lo ponga en el `src` de un script.
+
+### 16.2 Consentimiento primero
+
+`apps/web/src/lib/consent.ts` + `ConsentBanner`. Nada de medición de terceros
+carga hasta que la persona acepta. La decisión se guarda versionada en
+`localStorage` (subir `CONSENT_VERSION` invalida los "sí" viejos cuando cambia
+el alcance). `null` = no decidió (se muestra el aviso, no se mide); `false` =
+rechazó (no se muestra, no se mide); `true` = mide. "Rechazar" tiene el mismo
+peso visual que "Aceptar": un consentimiento que se arranca escondiendo el "no"
+no es consentimiento.
+
+### 16.3 Medición por ID, con doble condición
+
+`analytics` es una clave administrable nueva (`{ ga4, gtm, metaPixel }`), cada
+ID validado por formato en `api/src/marketing.ts` (`G-…`, `GTM-…`, dígitos;
+vacío = apagado). El loader (`apps/web/src/lib/analytics.ts`) inyecta el SDK
+oficial **sólo si** hay ID configurado **y** hay consentimiento; es idempotente
+(no duplica scripts en un cambio de ruta) y **revalida el ID** aunque la API ya
+lo haya validado, porque un valor con forma inválida terminaría en un `src` y no
+se confía en una sola capa.
+
+**CSP:** la carga en producción necesita habilitar los hosts de Google/Meta en
+el `Content-Security-Policy` de Nginx. **No se tocó `setup-vps.sh` en este
+round**: la CSP es la política de seguridad del servidor, y el encargo difirió
+esas acciones. Se documentó la línea exacta en `docs/CARGA-DE-DATOS.md` §4.3, y
+se hace junto con cargar los IDs (misma decisión de producción). En dev no hay
+CSP: la medición funciona y se prueba. Si la CSP no está abierta, el navegador
+bloquea el script y la analítica no mide — no rompe la página.
+
+### 16.4 Atribución de conversiones
+
+Migración nueva y reversible (`20260825000000_attribution.ts`): columna
+`attribution` JSON anulable en `appointments` y `contact_messages`. El front
+(`apps/web/src/lib/attribution.ts`) captura `utm_*`/`gclid`/`fbclid` en la
+primera vista de la sesión (first-touch, no se pisa) y los adjunta al turno o
+mensaje. La API los sanea por **allowlist** —sólo esas claves, sin HTML, cortas—
+y los guarda; la bandeja de Turnos los muestra en la columna *Origen* y el CSV
+los exporta.
+
+**No requiere consentimiento, y es correcto:** no es rastreo de terceros, es
+dato de primera parte que no sale del navegador hasta que la persona **envía** un
+formulario, y entonces viaja sólo a la API del sanatorio, con la solicitud que
+esa persona quiso hacer. No es dato personal —es de dónde vino el clic, no quién
+lo dio— así que puede vivir junto a la conversión y mostrarse en el panel. Y
+**nunca va a los logs**: el `catch` del insert ya sólo conserva el código del
+motor.
+
+### 16.5 Validación y corrector
+
+Suite completa en verde (el número exacto, en la sección de validación del PR).
+Cada corrección se verificó **reintroduciendo el defecto**: 16 defectos, 16
+detectados —ga4 en minúsculas, atribución sin allowlist, no recortar `<`/`>`,
+`leerAtribucion` sin sanear, settings sin validar (bulk y por clave), public sin
+exponer/guardar, panel/CSV sin atribución, id inválido al `src`, loader no
+idempotente, first-touch pisado, landing sin campaña, banner que no distingue
+`null` de decisión, consentimiento sin versión—.
+
+La primera pasada dejó uno sin detectar: la validación del endpoint
+`PUT /settings/:key` para `analytics` no estaba cubierta (la prueba usaba sólo el
+PUT masivo). Se agregó el caso y pasó a detectarse. Dos guardas existentes
+—`settings-allowlist` y `single-source`— cambiaron de valor esperado para
+incluir `analytics`; ninguna se relajó (la de `single-source` ahora además exige
+que la analítica salga vacía por defecto).
+
+### 16.6 Qué NO abarca este round
+
+Campañas (crear/gestionar anuncios en Meta/Google/Instagram) siguen bloqueadas:
+requieren registro de app OAuth y cuentas de negocio que no existen. Esto es
+**medición**, no **pauta**. Tampoco se tocó `PUBLIC_SITE_URL`, DNS, VPS ni el
+historial Git.
