@@ -180,6 +180,16 @@ dataReadinessRouter.get("/", async (_req, res) => {
     // El alcance confirmado, para que la pantalla pueda mostrarlo y para que
     // quien revise sepa **qué** se confirmó, no sólo que algo se confirmó.
     confirmation: confirmacionBiopsias,
+    /**
+     * ¿Tiene sentido ofrecer confirmar esto ahora?
+     *
+     * No es lo mismo "falta la confirmación" que "no hay nada que confirmar".
+     * Si la página no existe, el endpoint de confirmaciones **igual aceptaría**
+     * el `PUT` —no mira páginas, y no debería—, así que sin este campo el panel
+     * ofrecería el formulario, guardaría con éxito y el ítem seguiría en
+     * `review`. Un éxito que no cambia nada es peor que un botón ausente.
+     */
+    confirmable: Boolean(paginaBiopsias),
   };
 
   // ------------------------------------------------------------- avisos

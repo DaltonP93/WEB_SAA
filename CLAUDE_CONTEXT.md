@@ -2078,7 +2078,7 @@ es imposible; si vuelve a pasar, el próximo mensaje va a decir por qué.
 
 | Comprobación | Resultado |
 |---|---|
-| `TEST_DATABASE=1 pnpm test` | **1333 pruebas en 62 archivos, todas en verde** |
+| `TEST_DATABASE=1 pnpm test` | **1362 pruebas en 64 archivos, todas en verde** |
 | `pnpm typecheck` | OK |
 | Builds `@sa/api` / `@sa/web` / `@sa/admin` | OK |
 | `node scripts/ci/verify-prerender.mjs` | OK, exit 0 |
@@ -2128,3 +2128,89 @@ Cero hilos abiertos no es lo mismo que revisado: significa que nadie miró. Este
 PR queda en Draft y se reporta como listo para revisión; antes de fusionarlo
 corresponde solicitar una revisión real y esperar que aparezca registrada,
 además de los tres checks en verde.
+
+### 16.10 El panel expone lo que la API ya garantizaba
+
+Las cuatro correcciones anteriores dejaron contratos correctos, probados contra
+la base… y **sin superficie en el panel**. Una función que sólo se puede
+ejercer desde una terminal no está entregada, y una guarda que actúa en
+silencio no protege a nadie de la confusión.
+
+Tres huecos, encontrados releyendo lo que esta misma ronda había producido.
+
+#### El mecanismo de confirmación no tenía interfaz
+
+Cero referencias a `data-confirmations` en `apps/admin`. `DataReadinessPage`
+recibía el campo `confirmation` y lo ignoraba, y la guía de carga terminaba
+explicándole a un administrador de sanatorio cómo mandar un `PUT` con curl.
+
+`ConfirmacionDato.tsx` lo resuelve: muestra quién confirmó, cuándo y **qué**
+—sin el alcance, la constancia no dice qué se afirmó—, y ofrece el formulario a
+quien puede usarlo. Un editor ve el estado y a quién pedírselo: ofrecerle el
+formulario sería invitarlo a escribir el alcance entero para recibir un 403 al
+guardar.
+
+Apareció un borde real al construirlo: **si la página de Biopsias no existe, el
+endpoint de confirmaciones igual acepta el `PUT`** —no mira páginas, y no
+debería—. Sin distinguir los dos casos, el panel habría ofrecido el formulario,
+guardado con éxito y el ítem habría seguido en `review`. Un éxito que no cambia
+nada es peor que un botón ausente. La sección informa ahora `confirmable`, y el
+panel ofrece confirmar sólo cuando hay algo que confirmar.
+
+#### Las guardas de Usuarios eran invisibles
+
+La mutación de borrado **no tenía `onError`**. El 409 que impide cerrar el panel
+para siempre llegaba, se descartaba, y desde el otro lado se veía un clic que no
+hacía nada. La protección más importante del módulo era invisible justo en el
+momento en que actuaba — y ninguna prueba de API puede detectarlo, porque el
+servidor hizo exactamente lo correcto.
+
+Era además la única pantalla que seguía usando el `confirm()` del navegador,
+contra el estándar del proyecto que ya usan Médicos, Páginas, Turnos y
+Multimedia, y preguntaba "¿Eliminar?" sin decir a quién. Ahora usa el diálogo
+del panel con el nombre y el email adentro, deshabilita los dos casos que la API
+rechaza —borrarse a uno mismo, borrar al último superadmin— con el motivo en el
+`title`, avisa cuando queda un solo superadmin y valida el formulario con los
+mismos mínimos que aplica el servidor.
+
+#### El panel no sabía quién había entrado
+
+Nada de lo anterior es posible sin conocer el rol. `useSesion()` lee
+`GET /auth/me` — que ya existía y ninguna pantalla consultaba.
+
+**No es una autorización.** Lo que decide quién puede hacer qué sigue siendo
+`requireRole` en la API: cualquiera puede editar `localStorage`. Esto sólo evita
+ofrecer lo que no se va a poder hacer. Se consulta contra el servidor en vez de
+decodificar el token porque el rol de una sesión abierta puede haber cambiado
+desde que se emitió: un superadmin bajado a editor sigue con su token viejo en
+la pestaña. Y ante la duda —mientras carga, o si falla— **no** se ofrece la
+acción: mostrar el botón y que el servidor conteste 403 es peor que no
+mostrarlo, porque el operador ya escribió el texto cuando se entera.
+
+#### Corrector
+
+Catorce defectos reintroducidos, catorce detectados:
+
+| Defecto reintroducido | Pruebas que caen |
+|---|---|
+| Usuarios: borrado sin `onError` | 1 |
+| Usuarios: guardar sin `onError` | 1 |
+| Usuarios: vuelve el `confirm()` del navegador | 5 |
+| Usuarios: se ofrece borrarse a uno mismo y al último superadmin | 2 |
+| Usuarios: sin aviso de que queda un solo superadmin | 1 |
+| Usuarios: el formulario deja mandar cualquier cosa | 2 |
+| Confirmación: el formulario se le ofrece a cualquiera | 3 |
+| Confirmación: el panel manda la fecha y el autor | 2 |
+| Confirmación: registrar sin `onError` | 1 |
+| Confirmación: se puede confirmar sin escribir el alcance | 1 |
+| Confirmación: no se muestra qué se confirmó | 1 |
+| Confirmación: la fecha se imprime como ISO crudo | 1 |
+| Confirmación: se ofrece confirmar sin página que confirmar | 1 |
+| API: la sección deja de informar `confirmable` | 1 |
+
+El último dio **0 fallos en la primera pasada y no era cierto**: MariaDB se
+había caído en el contenedor, las pruebas de base se saltaron solas y el
+corrector leyó ese cero como "no detectado". Levantada la base, el defecto se
+detecta. Vale como recordatorio de que una suite que se **saltea** no es una
+suite que **pasa**, y de que un corrector que no distingue las dos cosas puede
+dar por buena una prueba que nunca corrió.

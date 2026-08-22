@@ -273,6 +273,13 @@ la única salida sería editar la base a mano y el ítem seguiría diciendo
 leer o le falta `confirmedAt` o `scope`, la sección vuelve a `review`. Darla por
 buena sería justamente el error que este mecanismo existe para no cometer.
 
+**`confirmable` distingue "falta confirmar" de "no hay nada que confirmar".** Si
+la página no existe, el endpoint de confirmaciones **igual aceptaría** el `PUT`
+—no mira páginas, y no debería—, así que sin este campo el panel ofrecería el
+formulario, guardaría con éxito y el ítem seguiría en `review`. Un éxito que no
+cambia nada es peor que un botón ausente. Con la página presente es `true`
+aunque todavía no haya confirmación.
+
 La sección devuelve además `confirmation` con lo confirmado —alcance, quién y
 cuándo—, para que quien revise sepa **qué** se confirmó y no sólo que algo se
 confirmó. Es el único caso en que la respuesta lleva texto cargado por el
@@ -371,7 +378,8 @@ Ilustrativa: fija los nombres y los tipos, no los valores.
       "route": "/pages/12",             // "/pages" si la página no existe
       "pageSlug": "estudios-biopsias",
       "reason": "Requiere confirmación escrita del sanatorio…",
-      "confirmation": null              // el objeto confirmado, o null (§4.3.1)
+      "confirmation": null,             // el objeto confirmado, o null (§4.3.1)
+      "confirmable": true               // false si todavía no hay qué confirmar
     }
   ],
   "warnings": [
@@ -475,6 +483,8 @@ equivoca. Están en `tests/data-readiness.test.ts`,
 11b. Confirmar y retirar exigen `superadmin`; leer, no. La fecha la pone el
     servidor aunque el cliente mande la suya. `confirmacion_biopsias` no se
     puede escribir por `/api/admin/settings`.
+11c. `confirmable` es `false` cuando la página no existe y `true` cuando existe,
+    haya o no confirmación.
 12. Con el snapshot de Emergencias en `motivo: "editada"`, el aviso aparece y el
     JSON **no** contiene la nota legacy.
 13. Los catálogos usados son los de la API: si se agrega una clave a
