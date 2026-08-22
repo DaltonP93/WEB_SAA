@@ -12,17 +12,17 @@
  * 1. hay un ID configurado para esa plataforma, y
  * 2. la persona aceptó la analítica (ver `consent.ts`).
  *
- * ## En producción hace falta abrir la CSP
+ * ## La CSP ya permite estos hosts
  *
- * La CSP del sitio es `default-src 'self'`: bloquea los scripts de Google y Meta
- * a propósito. Para que esta carga funcione en producción, el `Content-Security-
- * Policy` de Nginx tiene que incluir los hosts de la plataforma que se use. Esa
- * es una edición del servidor que se hace **junto con** poner los IDs, las dos
- * decisiones de producción. Está documentada en `docs/CARGA-DE-DATOS.md`. En
- * desarrollo no hay CSP, así que la carga funciona y se puede probar.
+ * La CSP del sitio es `default-src 'self'`, pero `script-src`/`connect-src` ya
+ * incluyen los hosts de Google (GA4/GTM) y Meta —en la CSP de Nginx
+ * (`scripts/deploy/setup-vps.sh`) y en la `<meta>` de `apps/web/index.html`, que
+ * la prueba `tests/analytics-csp.test.ts` mantiene en sincronía—. No cargan nada
+ * por sí mismos: sin un ID configurado no se inyecta ningún script que los use.
  *
- * Si la CSP no está abierta, el navegador bloquea el script y la analítica
- * simplemente no mide: no rompe la página ni deja el sitio a medias.
+ * Si por algún motivo la CSP desplegada no los tuviera, el navegador bloquearía
+ * el script y la analítica simplemente no mediría: no rompe la página ni deja el
+ * sitio a medias.
  */
 
 export interface Analitica {

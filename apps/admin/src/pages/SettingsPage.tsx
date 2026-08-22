@@ -192,8 +192,8 @@ export default function SettingsPage() {
           </div>
         </div>
         <p className="text-xs text-gray-500 mt-3">
-          En producción, además de cargar el ID acá, hay que habilitar el host de la plataforma en
-          la política de seguridad del servidor (CSP). Está explicado en la guía de carga de datos.
+          La política de seguridad del sitio (CSP) ya permite los hosts de Google y Meta: alcanza con
+          cargar el ID acá y que el visitante acepte el aviso de cookies.
         </p>
       </section>
 

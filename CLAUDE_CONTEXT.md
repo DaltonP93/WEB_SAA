@@ -1897,13 +1897,16 @@ oficial **sólo si** hay ID configurado **y** hay consentimiento; es idempotente
 lo haya validado, porque un valor con forma inválida terminaría en un `src` y no
 se confía en una sola capa.
 
-**CSP:** la carga en producción necesita habilitar los hosts de Google/Meta en
-el `Content-Security-Policy` de Nginx. **No se tocó `setup-vps.sh` en este
-round**: la CSP es la política de seguridad del servidor, y el encargo difirió
-esas acciones. Se documentó la línea exacta en `docs/CARGA-DE-DATOS.md` §4.3, y
-se hace junto con cargar los IDs (misma decisión de producción). En dev no hay
-CSP: la medición funciona y se prueba. Si la CSP no está abierta, el navegador
-bloquea el script y la analítica no mide — no rompe la página.
+**CSP:** `script-src`/`connect-src` de las **dos** CSP del sitio —Nginx
+(`setup-vps.sh`) y la `<meta>` de `apps/web/index.html`— ya incluyen los hosts de
+Google (GA4/GTM) y Meta. Se abrieron **a pedido explícito del propietario**
+después de la primera entrega del round, que las había dejado sin tocar por la
+regla de no modificar el VPS. `tests/analytics-csp.test.ts` fija que los hosts
+estén en ambas, que las dos coincidan y que `default-src`/`object-src` sigan
+cerrados —abrir de más al tocar una CSP es el descuido clásico—. Los hosts no
+cargan nada por sí mismos: sin ID configurado no hay script que los use. El
+despliegue toma esa CSP; si por algo la desplegada no la tuviera, el navegador
+bloquea el script y la analítica no mide, sin romper la página.
 
 ### 16.4 Atribución de conversiones
 
@@ -1944,5 +1947,7 @@ que la analítica salga vacía por defecto).
 
 Campañas (crear/gestionar anuncios en Meta/Google/Instagram) siguen bloqueadas:
 requieren registro de app OAuth y cuentas de negocio que no existen. Esto es
-**medición**, no **pauta**. Tampoco se tocó `PUBLIC_SITE_URL`, DNS, VPS ni el
-historial Git.
+**medición**, no **pauta**. No se tocó `PUBLIC_SITE_URL`, DNS ni el historial
+Git. De `setup-vps.sh` se editó **sólo** la línea de la CSP —a pedido explícito
+del propietario— para permitir los hosts de analítica; no se tocó nada del
+aprovisionamiento, credenciales, TLS ni despliegue.

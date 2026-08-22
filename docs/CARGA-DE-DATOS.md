@@ -323,18 +323,14 @@ Lo que quede vacío se ignora. El panel valida el formato: si pegás otra cosa
 1. **Consentimiento del visitante.** La medición no carga hasta que la persona
    acepta el aviso de cookies. Si nadie configuró ningún ID, el aviso ni
    aparece.
-2. **Abrir la CSP del servidor (producción).** El sitio bloquea por seguridad
-   los scripts de otros dominios. Para que cargue la plataforma que elijas, hay
-   que agregar sus hosts al `Content-Security-Policy` de Nginx, en
-   `scripts/deploy/setup-vps.sh`:
-   - Google (GA4 / GTM): agregar `https://www.googletagmanager.com` a
-     `script-src` y `https://www.google-analytics.com` a `connect-src`.
-   - Meta Pixel: agregar `https://connect.facebook.net` a `script-src` y
-     `https://www.facebook.com` a `connect-src`.
-
-   Es una edición del servidor, del mismo orden que cargar los IDs: **una
-   decisión de producción**. En desarrollo no hay CSP y la medición funciona sin
-   este paso, así que se puede probar antes.
+2. **La CSP ya está abierta para estos hosts.** El sitio bloquea por seguridad
+   los scripts de otros dominios, pero los de Google (GA4/GTM) y Meta Pixel ya
+   están declarados en la `Content-Security-Policy` —tanto en la de Nginx
+   (`scripts/deploy/setup-vps.sh`) como en la `<meta>` de `apps/web/index.html`—.
+   No hay que tocar nada más: alcanza con cargar el ID y que el visitante
+   acepte. (Esos hosts no cargan nada por sí mismos: sin un ID configurado no
+   hay ningún script que los use.) Un despliegue nuevo toma esa CSP
+   automáticamente.
 
 **De dónde vino cada turno o mensaje.** Cuando alguien llega desde una campaña
 con parámetros `utm_*` en la URL, esos datos se guardan y aparecen en la columna
