@@ -15,6 +15,7 @@ import { dataReadinessRouter } from "./data_readiness.js";
 import { dataConfirmationsRouter } from "./data_confirmations.js";
 import { mediaRouter } from "./media.js";
 import { usersRouter } from "./users.js";
+import { redirectsRouter } from "./redirects.js";
 
 export const adminRouter = Router();
 adminRouter.use(requireAuth);
@@ -34,3 +35,4 @@ adminRouter.use("/data-readiness", dataReadinessRouter);
 adminRouter.use("/data-confirmations", dataConfirmationsRouter);
 adminRouter.use("/media", mediaRouter);
 adminRouter.use("/users", usersRouter);
+adminRouter.use("/redirects", redirectsRouter);

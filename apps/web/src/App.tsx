@@ -16,13 +16,27 @@ import { useConsentimiento } from "./lib/consent";
 import { cargarAnalitica, hayMedicion } from "./lib/analytics";
 import { capturarAtribucion } from "./lib/attribution";
 
-/** Rutas del portal unificadas en /portal-paciente (item 23 de la minuta). */
+/**
+ * Rutas del portal unificadas en /portal-paciente (item 23 de la minuta).
+ *
+ * Es el respaldo: si el endpoint de redirects no responde, estas cuatro se
+ * redirigen igual del lado del cliente. La lista viva —incluidos los redirects
+ * que se cargan desde el panel— llega de `/public/redirects`. `tests/sitemap.test.ts`
+ * exige que esta constante siga listando exactamente las rutas legacy.
+ */
 const PORTAL_REDIRECTS = [
   "/portal-resultados-diagnostico",
   "/portal-resultados-laboratorio",
   "/portal-presupuestos-cirugia",
   "/portal-facturacion-electronica",
 ];
+
+const PORTAL_CANONICAL = "/portal-paciente";
+
+/** Sólo se redirige a rutas internas: nunca fuera del sitio. */
+function esRutaInterna(to: unknown): to is string {
+  return typeof to === "string" && to.startsWith("/") && to[1] !== "/" && !to.startsWith("/\\");
+}
 
 export default function App() {
   const location = useLocation();
@@ -31,6 +45,16 @@ export default function App() {
     queryKey: ["settings"],
     queryFn: async () => (await api.get("/public/settings")).data,
   });
+  // Redirects administrables (incluye las cuatro legacy sembradas). Si falla, se
+  // cae al respaldo estático de las legacy.
+  const redirectsQ = useQuery({
+    queryKey: ["redirects"],
+    queryFn: async () => (await api.get("/public/redirects")).data as { from: string; to: string }[],
+  });
+  const redirects =
+    redirectsQ.data && redirectsQ.data.length > 0
+      ? redirectsQ.data.filter((r) => esRutaInterna(r.to))
+      : PORTAL_REDIRECTS.map((from) => ({ from, to: PORTAL_CANONICAL }));
 
   useEffect(() => {
     if (settingsQ.data?.theme) applyTheme(settingsQ.data.theme);
@@ -115,10 +139,11 @@ export default function App() {
               <Route path="/profesionales" element={<DoctorsPage />} />
               <Route path="/profesionales/:slug" element={<DoctorDetailPage />} />
               <Route path="/especialidades/:slug" element={<SpecialtyDetailPage />} />
-              {/* Portal del paciente: una sola ruta canónica. Las páginas
-                  sueltas anteriores redirigen para no perder enlaces viejos. */}
-              {PORTAL_REDIRECTS.map((from) => (
-                <Route key={from} path={from} element={<Navigate to="/portal-paciente" replace />} />
+              {/* Redirects administrables: una sola ruta canónica para el
+                  portal más lo que se cargue desde el panel. Las páginas sueltas
+                  anteriores redirigen para no perder enlaces viejos. */}
+              {redirects.map((r) => (
+                <Route key={r.from} path={r.from} element={<Navigate to={r.to} replace />} />
               ))}
               {/* La sección Noticias se retiró del sitio público (minuta de ajustes).
                   El CRUD sigue en el admin por si se reactiva más adelante. */}

@@ -34,6 +34,7 @@ const SECTIONS: { title: string; items: NavItem[] }[] = [
     title: "Sistema",
     items: [
       { to: "/settings", label: "Branding y settings", icon: "palette" },
+      { to: "/redirects", label: "Redirects", icon: "milestone" },
       { to: "/users", label: "Usuarios", icon: "users" },
     ],
   },
