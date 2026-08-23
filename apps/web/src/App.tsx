@@ -93,6 +93,12 @@ export default function App() {
         <meta name="twitter:description" content={seo?.description ?? ""} />
         <meta name="twitter:image" content={seo?.ogImage ?? brand?.logoUrl ?? ""} />
         {brand?.faviconUrl && <link rel="icon" href={brand.faviconUrl} />}
+        {/* Verificación de propiedad: la etiqueta sólo aparece si hay token
+            configurado. El valor ya viene validado por formato desde la API. */}
+        {seo?.verification?.google && (
+          <meta name="google-site-verification" content={seo.verification.google} />
+        )}
+        {seo?.verification?.bing && <meta name="msvalidate.01" content={seo.verification.bing} />}
         <script type="application/ld+json">{JSON.stringify(orgJsonLd)}</script>
       </Helmet>
       <Layout settings={settingsQ.data}>

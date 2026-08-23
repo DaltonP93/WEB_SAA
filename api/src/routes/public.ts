@@ -8,6 +8,7 @@ import { publicChannelValues } from "../contact-values.js";
 import { isEmergencyCta } from "../institutional-red.js";
 import { HttpError, badRequest, conflict, notFound } from "../http.js";
 import { instanteDesdeHoraLocal } from "../timezone.js";
+import { normalizarSeo } from "../seo.js";
 import { ANALITICA_VACIA, sanearAtribucion, validarAnalitica } from "../marketing.js";
 
 export const publicRouter = Router();
@@ -91,7 +92,13 @@ publicRouter.get("/settings", async (_req, res) => {
   const out: Record<string, unknown> = {};
   for (const r of rows) {
     out[r.key] =
-      r.key === "contact" ? publicContact(r.value) : r.key === "analytics" ? publicAnalytics(r.value) : r.value;
+      r.key === "contact"
+        ? publicContact(r.value)
+        : r.key === "analytics"
+          ? publicAnalytics(r.value)
+          : r.key === "seo"
+            ? normalizarSeo(r.value)
+            : r.value;
   }
   // Si nunca se configuró, la clave no existe en la base: el front igual espera
   // los tres campos, así que se completa con la forma vacía (medición apagada).

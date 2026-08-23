@@ -150,6 +150,35 @@ export default function SettingsPage() {
           <div><label className="label">Descripción</label><textarea className="input" rows={2} value={s.seo?.description ?? ""} onChange={(e) => setKey("seo", { description: e.target.value })} /></div>
           <div><label className="label">OG Image</label><input className="input" value={s.seo?.ogImage ?? ""} onChange={(e) => setKey("seo", { ogImage: e.target.value })} /></div>
         </div>
+
+        <h3 className="font-semibold mt-6 mb-2">Verificación de propiedad</h3>
+        <p className="text-sm text-gray-600 mb-3">
+          Para dar de alta el sitio en Google Search Console o Bing con el método de la etiqueta
+          HTML, pegá acá <strong>sólo el token</strong> (el valor del atributo <code>content</code>),
+          no la etiqueta entera. Vacío = sin verificar por esa plataforma.
+        </p>
+        <div className="grid gap-4">
+          <div>
+            <label className="label" htmlFor="seo-gsc">Google Search Console</label>
+            <input
+              id="seo-gsc"
+              className="input"
+              placeholder="Token de google-site-verification"
+              value={s.seo?.verification?.google ?? ""}
+              onChange={(e) => setKey("seo", { verification: { ...(s.seo?.verification ?? {}), google: e.target.value.trim() } })}
+            />
+          </div>
+          <div>
+            <label className="label" htmlFor="seo-bing">Bing Webmaster Tools</label>
+            <input
+              id="seo-bing"
+              className="input"
+              placeholder="Token de msvalidate.01"
+              value={s.seo?.verification?.bing ?? ""}
+              onChange={(e) => setKey("seo", { verification: { ...(s.seo?.verification ?? {}), bing: e.target.value.trim() } })}
+            />
+          </div>
+        </div>
       </section>
 
       <section className="card p-5">
