@@ -9,6 +9,7 @@ import {
   isApprovedThemeColor,
 } from "../../institutional-red.js";
 import { ANALITICA_VACIA, validarAnalitica } from "../../marketing.js";
+import { normalizarSeo, validarVerificacion } from "../../seo.js";
 
 export const settingsRouter = Router();
 
@@ -145,6 +146,11 @@ settingsRouter.put("/", async (req, res) => {
     return res.status(400).json({ error: "payload invalido", issues: analyticsErrors });
   }
 
+  const seoErrors = "seo" in parsed.data ? assertSeoVerification(parsed.data.seo) : [];
+  if (seoErrors.length > 0) {
+    return res.status(400).json({ error: "payload invalido", issues: seoErrors });
+  }
+
   // Transaccional: guardar la marca y fallar en el tema dejaba la mitad
   // aplicada, y el panel no tenía forma de saber qué quedó guardado.
   await db.transaction(async (trx) => {
@@ -183,6 +189,10 @@ settingsRouter.put("/:key", async (req, res) => {
   }
   if (key === "analytics") {
     const errors = assertAnalytics(req.body);
+    if (errors.length > 0) return res.status(400).json({ error: "payload invalido", issues: errors });
+  }
+  if (key === "seo") {
+    const errors = assertSeoVerification(req.body);
     if (errors.length > 0) return res.status(400).json({ error: "payload invalido", issues: errors });
   }
   const cleanValue = JSON.stringify(sanitizeSettingValue(key, req.body));
@@ -260,6 +270,18 @@ function assertAnalytics(value: unknown): string[] {
   return r.ok ? [] : r.errores;
 }
 
+/**
+ * `seo` es un objeto de campos libres (título, descripción, OG image) más el
+ * sub-objeto `verification` con los tokens de Search Console / Bing. Sólo se
+ * valida `verification`: el resto es contenido que el front escapa al renderizar.
+ */
+function assertSeoVerification(value: unknown): string[] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  if (!("verification" in (value as Record<string, unknown>))) return [];
+  const r = validarVerificacion((value as Record<string, unknown>).verification);
+  return r.ok ? [] : r.errores;
+}
+
 function sanitizeSettingValue(key: string, value: unknown): unknown {
   if (key === "contact" && value && typeof value === "object" && !Array.isArray(value)) {
     const contact = { ...(value as Record<string, unknown>) };
@@ -274,6 +296,11 @@ function sanitizeSettingValue(key: string, value: unknown): unknown {
   if (key === "analytics") {
     const r = validarAnalitica(value);
     return r.ok ? r.value : ANALITICA_VACIA;
+  }
+  // `seo`: se conservan los campos libres y se normaliza sólo `verification`
+  // (tokens con forma válida o descartados). Ya pasó por `assertSeoVerification`.
+  if (key === "seo") {
+    return normalizarSeo(value);
   }
   return value;
 }

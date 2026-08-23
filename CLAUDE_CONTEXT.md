@@ -1859,20 +1859,380 @@ PR queda en Draft y se reporta como listo para revisión; antes de fusionarlo
 corresponde solicitar una revisión real y esperar que aparezca registrada,
 además de los tres checks en verde.
 
+### 15.11 Cierre
+
+PR #18 fusionado en `a4f17a0`. **Sin ninguna review registrada en GitHub**, igual
+que #16 y #17.
+
 ---
 
-## 16. Marketing — analítica, consentimiento y atribución (ronda actual, Draft)
+## 16. Saneo real de SVG y PDF, confirmación de Biopsias y blindaje de Usuarios — ✅ PR #19 fusionado
 
 Parte de `main` = `a4f17a0` (merge del PR #18), verificado como HEAD real antes
-de ramificar. Es el **round 1 de marketing**; rama independiente del PR #19
-(saneo SVG/PDF + panel), que sigue abierto.
+de ramificar.
+
+Cierra los **cuatro** ítems de desarrollo que quedaban en la tabla §15.9. Los
+tres restantes de esa tabla no son desarrollo y siguen abiertos por decisión del
+propietario; están en §16.8 con el motivo.
+
+El hilo común de la ronda: cuatro lugares donde el proyecto decía menos de lo
+que podía o afirmaba algo que no había comprobado.
+
+### 16.1 El SVG estaba rechazado, y era la postura correcta
+
+Un SVG no es una imagen: es un documento XML que el navegador ejecuta. Puede
+traer `<script>`, manejadores `onload`, `<foreignObject>` con HTML adentro,
+animaciones SMIL que reescriben atributos en tiempo de ejecución, `@import` a un
+servidor ajeno y referencias externas que filtran quién está mirando la página.
+Sin saneo, la única postura honesta era rechazarlo, y así lo decía el panel.
+
+Ahora hay saneo (`api/src/svg.ts`) y se acepta. Con `sanitize-html`, que ya
+sanea el HTML del panel: parsea el documento y descarta todo lo que no esté
+explícitamente permitido. Un filtro por expresiones regulares no da esa
+garantía — `<scr<script>ipt>` alcanza para burlarlo.
+
+Tres decisiones que no son obvias:
+
+**`lowerCaseAttributeNames: false`.** En SVG los nombres de atributo distinguen
+mayúsculas. `viewBox` en minúsculas no existe, y un logo sin `viewBox` deja de
+escalar.
+
+**Se rechaza antes de parsear** lo que un parser no debería ni ver: `<!DOCTYPE`,
+`<!ENTITY` y `<?xml-stylesheet?>`. Las entidades externas son XXE, que lee
+archivos del servidor. Un SVG exportado por cualquier herramienta de diseño no
+trae nada de eso.
+
+**Se guardan los bytes saneados, no el original.** Guardar el original y confiar
+en que el saneo lo revisó deja el archivo peligroso en el disco esperando a que
+alguien lo sirva por otra vía.
+
+Queda una defensa más por debajo: la CSP de la API es `default-src 'none'`, así
+que un SVG abierto directamente en `/uploads` no puede ejecutar nada aunque el
+saneo fallara. Se sanea igual: una sola capa no es una garantía.
+
+#### El agujero que encontró la prueba de `<SCRIPT>`
+
+`lowerCaseTags: false` es obligatorio —`linearGradient`, `clipPath`,
+`feGaussianBlur` y `textPath` dejan de existir en minúsculas— pero
+`sanitize-html` compara los nombres tal cual vienen. `<SCRIPT>` no coincidía con
+`script`, así que **no entraba en `nonTextTags`**: se descartaba la etiqueta y su
+contenido quedaba como texto suelto dentro del SVG. El saneador informaba éxito
+y el código seguía en el archivo publicado.
+
+Se probó renombrar la etiqueta a su forma canónica desde `transformTags` —que
+corre antes de decidir si está permitida— y funciona a medias: `sanitize-html`
+recuerda el renombre por profundidad y no lo limpia al cerrar, así que el
+siguiente hermano al mismo nivel cerraba con la etiqueta ajena. Un `<rect/>`
+salía como `<rect></script>`. Producir XML mal formado para tapar un agujero es
+cambiar un problema por otro.
+
+Se rechaza el archivo, y no por comodidad: SVG es XML y sus nombres de elemento
+distinguen mayúsculas, así que `<SCRIPT>` **no es** el elemento script de SVG ni
+ninguna otra cosa válida. Su presencia no es un descuido de formato.
+
+#### Las dimensiones se leen, no se rasterizan
+
+Sharp podría abrir el SVG y decir cuánto mide, pero abrirlo es correr librsvg
+sobre un archivo que subió alguien: otro parser más sobre entrada no confiable,
+para averiguar dos números que están escritos en el propio archivo. Se leen del
+texto ya saneado. `width="50%"` no se convierte en `50`: un porcentaje no dice
+cuánto mide, y decirlo sería inventar un dato.
+
+### 16.2 El PDF se validaba y no se saneaba, y así estaba documentado
+
+La ronda anterior cambió la detección por cinco bytes por una validación
+estructural real, y dejó escrito —correctamente— que **validar no es sanear**.
+Los bytes se guardaban como llegaban. Un PDF perfectamente válido puede traer
+`/OpenAction`, que se ejecuta **al abrirlo**, sin que nadie haga clic; `/AA`,
+que se dispara al imprimir o al cerrar; `/Names /JavaScript`; adjuntos; y
+anotaciones con `/Launch`, que abren un programa.
+
+`api/src/pdf.ts` los quita. Dos cosas se midieron en vez de suponerlas, y las
+dos cambiaron el diseño:
+
+**Borrar la referencia no borra el objeto.** Quitar `/OpenAction` del catálogo
+quita el *puntero*, pero pdf-lib escribe igual el objeto huérfano: `save()`
+serializa todos los objetos registrados, los apunte alguien o no. Medido: tras
+borrar la referencia, la cadena del payload seguía en los bytes. Un lector que
+siga el catálogo nunca lo ejecutaría, y llamar "saneado" a un archivo que
+todavía contiene el código sería exactamente la clase de media verdad que este
+proyecto no publica. El documento se **reconstruye** con `copyPages`, que copia
+sólo lo que las páginas necesitan.
+
+**El orden importa.** Cortar `/Annots` *después* de `copyPages` no sirve: la
+anotación ya viajó al documento nuevo y queda registrada como huérfana. La
+prueba del `/Launch` lo demostró — la ruta del programa a lanzar seguía en los
+bytes de salida. Se corta del documento de origen y antes de copiar. Efecto
+lateral bueno: `quitado` describe lo que traía **el original**.
+
+Una entrada vacía se borra pero **no se informa como quitada**: una página
+creada por cualquier biblioteca trae `/Annots []`, y contarla haría que un PDF
+limpio informara "se le quitó una anotación". Un informe que dice de más sobre
+un archivo inocente vale tan poco como uno que calla sobre uno peligroso.
+
+**Qué sigue sin afirmar.** No inspecciona los flujos de contenido de cada
+página. Es una limpieza de las vías conocidas de ejecución sobre un documento
+que además pasó una validación estructural: sustancialmente más que antes, y no
+una desinfección demostrable. Hay una prueba que fija esa frontera, para que si
+alguna vez se amplía se note dónde.
+
+**Tres pruebas de PDF cambiaron de valor esperado, ninguna se relajó.** Exigían
+`guardado.equals(pdf)` —igualdad byte a byte—, y esa igualdad era justamente lo
+que impedía quitarle las acciones al documento. Ahora exigen algo más fuerte: que
+el documento siga abriéndose, que conserve sus páginas y que la carga útil no
+esté en los bytes.
+
+### 16.3 Biopsias: faltaba el lugar donde el sanatorio dice que sí
+
+La pantalla de "Datos pendientes" marcaba Biopsias como `review` de forma
+incondicional, y estaba bien. Que el texto de la página sea largo, o que ya no
+traiga la nota de "a confirmar", no significa que el sanatorio haya confirmado el
+alcance, los requisitos y los plazos. Una heurística sobre el texto convertiría
+"alguien editó la página" en "el alcance está confirmado", que es exactamente la
+afirmación que no se puede hacer sin autorización.
+
+Lo que faltaba no era la heurística: era **el lugar donde el sanatorio dice que
+sí**. `api/src/routes/admin/data_confirmations.ts` es ese lugar. Registra que una
+persona con autoridad afirmó algo, con su nombre, la fecha y el alcance que
+afirmó. No valida el contenido de la página, no lo corrige y no lo publica.
+
+- **`scope` es obligatorio** (mínimo 10 caracteres). Sin él la confirmación
+  diría "está bien" sin decir qué está bien, que no sirve de constancia ni para
+  el sanatorio ni para quien tenga que revisarlo después.
+- **`confirmedAt` lo pone el servidor.** Una fecha que manda quien confirma
+  podría fechar la confirmación en cualquier momento.
+- **Confirmar y desconfirmar exigen `superadmin`; leer, no.** Un editor puede
+  escribir el texto de la página; declarar que ese texto está confirmado es otra
+  cosa.
+- **Se guarda en `settings` con una clave que no está en `ADMIN_SETTING_KEYS`**,
+  así que el editor genérico de Configuración no la puede tocar: se cambia por el
+  endpoint o no se cambia.
+- **Una fila ilegible no cuenta como confirmación.** Darla por buena sería el
+  error que este módulo existe para no cometer.
+- **Se puede retirar.** Una confirmación puede dejar de ser cierta: cambian los
+  plazos, se deja de hacer un estudio. Sin forma de retirarla, la única salida
+  sería editar la base a mano.
+
+`data_readiness.ts` pasa a leer esa confirmación. La prueba que impide que
+vuelva la heurística edita la página de Biopsias hasta dejarla completa —un
+texto largo, sin ninguna marca de "a confirmar", justo lo que un detector de
+contenido tomaría por bueno— y exige que el estado siga en `review`.
+
+**El contenido lo carga el sanatorio.** Este endpoint no inventa qué biopsias se
+hacen ni con qué plazos: recibe lo que le dicen y lo guarda.
+
+### 16.4 Usuarios: dos formas de quedarse afuera del panel para siempre
+
+1. **Borrar al último superadmin.** El rol `editor` no puede administrar
+   usuarios: sin ningún superadmin, nadie puede crear uno. La única salida es
+   entrar a MySQL a mano en el VPS, que es exactamente el tipo de intervención
+   que este panel existe para no necesitar.
+2. **Bajarle el rol al último superadmin.** El mismo agujero por otra puerta: la
+   versión anterior protegía el borrado —y sólo el propio— pero dejaba que un
+   `PUT` con `role: "editor"` produjera el mismo resultado.
+
+Las dos se cierran contando cuántos superadmin quedarían **después** de la
+operación, no antes. Y se prueban contra la base, no contra el código: cada caso
+termina comprobando que todavía queda alguien que puede administrar usuarios.
+
+Lo demás que respondía mal:
+
+| Antes | Ahora |
+|---|---|
+| `schema.parse()` → `ZodError` → **500 "error interno"** | `safeParse` → **400** con los campos que fallan |
+| email repetido → choque contra el índice único → **500** | **409** "ya existe un usuario con ese email" |
+| `PUT` a un id inexistente → 0 filas y `{ ok: true }` | **404** |
+| `update({})` con un `PUT` sin cambios → SQL inválido | devuelve la fila tal como está |
+| `DELETE` de un id no numérico llegaba a la base | **400** |
+
+`password_hash` no sale nunca: `CAMPOS` enumera lo que se devuelve. Un hash
+bcrypt es atacable sin conexión; publicarlo en una respuesta del panel lo copia
+a la caché del navegador y a cualquier captura de pantalla de soporte.
+
+### 16.5 El panel dejó de contradecir al servidor
+
+`MediaPage` decía "SVG no se acepta", que era cierto mientras no hubo saneo.
+Dejar el aviso viejo mandaría al operador a convertir sus logos a PNG sin
+motivo. Ahora ofrece `.svg` en el `accept`, lo recomienda para logos y **avisa
+que se sanea**: no puede prometer que el archivo se guarda tal cual, porque no
+es así.
+
+Una prueba nueva lee `FORMATOS` de `api/src/imagenes.ts` y exige que el `accept`
+del panel los contenga a todos. Cuando las dos listas se separan, el panel miente
+en una de las dos direcciones: ofrece algo que después se rechaza, o esconde algo
+que sí se acepta.
+
+### 16.6 El fallo del rollback bajo carga
+
+En una corrida completa, `tests/rollback-atomico.test.ts` falló con
+`Command failed: git -C /tmp/… commit -qm …` y **nada más**: `execFileSync`
+descarta el stderr al lanzar. En aislamiento pasa, y volvió a pasar en la corrida
+completa final.
+
+No se marcó como intermitente y no se relajó nada. El helper `git` del escenario
+pasó a `spawnSync` y ahora incluye el stderr, el stdout y el código de salida en
+el error. Diagnosticar un fallo que sólo aparece bajo carga con el motivo borrado
+es imposible; si vuelve a pasar, el próximo mensaje va a decir por qué.
+
+### 16.7 Validación
+
+| Comprobación | Resultado |
+|---|---|
+| `TEST_DATABASE=1 pnpm test` | **1362 pruebas en 64 archivos, todas en verde** |
+| `pnpm typecheck` | OK |
+| Builds `@sa/api` / `@sa/web` / `@sa/admin` | OK |
+| `node scripts/ci/verify-prerender.mjs` | OK, exit 0 |
+| `pnpm audit --prod` | *No known vulnerabilities found* |
+| `node scripts/check-secrets.mjs` | sin credenciales en el árbol |
+
+Baseline sobre `main` (PR #18 fusionado): **1232 en 58 archivos**.
+
+Cada corrección se verificó **reintroduciendo el defecto**. Trece defectos, cada
+uno detectado por al menos una prueba:
+
+| Defecto reintroducido | Pruebas que caen |
+|---|---|
+| SVG: sin rechazo de grafías evasivas | 5 |
+| SVG: `nonTextTags` por defecto | 3 |
+| SVG: `lowerCaseAttributeNames: true` | 2 |
+| PDF: cortar `/Annots` después de copiar | 1 |
+| PDF: informar como quitada una entrada vacía | 1 |
+| PDF: editar en vez de reconstruir | 5 |
+| Biopsias: deducir el estado del contenido | 7 |
+| Biopsias: confirmar sin exigir `superadmin` | 1 |
+| Biopsias: aceptar la fecha del cliente | 1 |
+| Usuarios: sin guardia al bajar el último rol | 1 |
+| Usuarios: `parse()` en vez de `safeParse()` | 6 |
+| Usuarios: devolver `password_hash` | 1 |
+| Panel: volver al contrato viejo de SVG | 3 |
+
+La primera pasada dejó uno sin detectar —`nonTextTags` por defecto— porque la
+lista del proyecto se solapa con la de la biblioteca (`script`, `style`) en los
+casos que ya estaban probados. Lo que la lista propia agrega es que
+`<foreignObject>`, `<a>` y `<use>` se vayan **con su contenido**: medido, sin
+ella el texto de adentro sobrevive dentro del `<svg>` publicado. Se agregó esa
+prueba y el defecto pasó a detectarse.
+
+### 16.8 Qué falta, y por qué no se hizo acá
+
+| Ítem | Estado |
+|---|---|
+| A-3 (`PUBLIC_SITE_URL` al dominio definitivo) | 🔲 **configuración de producción**. El encargo prohíbe expresamente tocar `PUBLIC_SITE_URL` y DNS, y el dominio no está confirmado |
+| Purga del secreto histórico (`9ced09d`) | 🔲 **decisión del propietario** — NO-GO de producción vigente; sólo se informa. Reescribir el historial es destructivo e irreversible |
+| Campañas Meta / Google / Instagram | 🔲 otra fase completa. Requiere registro de aplicación OAuth, client IDs y cuentas de negocio que hoy no existen; andamiar contra nada sería inventar |
+
+### 16.9 Sobre la revisión
+
+Los PR #16, #17 y **#18** se fusionaron sin ninguna review registrada en GitHub.
+Cero hilos abiertos no es lo mismo que revisado: significa que nadie miró. Este
+PR queda en Draft y se reporta como listo para revisión; antes de fusionarlo
+corresponde solicitar una revisión real y esperar que aparezca registrada,
+además de los tres checks en verde.
+
+### 16.10 El panel expone lo que la API ya garantizaba
+
+Las cuatro correcciones anteriores dejaron contratos correctos, probados contra
+la base… y **sin superficie en el panel**. Una función que sólo se puede
+ejercer desde una terminal no está entregada, y una guarda que actúa en
+silencio no protege a nadie de la confusión.
+
+Tres huecos, encontrados releyendo lo que esta misma ronda había producido.
+
+#### El mecanismo de confirmación no tenía interfaz
+
+Cero referencias a `data-confirmations` en `apps/admin`. `DataReadinessPage`
+recibía el campo `confirmation` y lo ignoraba, y la guía de carga terminaba
+explicándole a un administrador de sanatorio cómo mandar un `PUT` con curl.
+
+`ConfirmacionDato.tsx` lo resuelve: muestra quién confirmó, cuándo y **qué**
+—sin el alcance, la constancia no dice qué se afirmó—, y ofrece el formulario a
+quien puede usarlo. Un editor ve el estado y a quién pedírselo: ofrecerle el
+formulario sería invitarlo a escribir el alcance entero para recibir un 403 al
+guardar.
+
+Apareció un borde real al construirlo: **si la página de Biopsias no existe, el
+endpoint de confirmaciones igual acepta el `PUT`** —no mira páginas, y no
+debería—. Sin distinguir los dos casos, el panel habría ofrecido el formulario,
+guardado con éxito y el ítem habría seguido en `review`. Un éxito que no cambia
+nada es peor que un botón ausente. La sección informa ahora `confirmable`, y el
+panel ofrece confirmar sólo cuando hay algo que confirmar.
+
+#### Las guardas de Usuarios eran invisibles
+
+La mutación de borrado **no tenía `onError`**. El 409 que impide cerrar el panel
+para siempre llegaba, se descartaba, y desde el otro lado se veía un clic que no
+hacía nada. La protección más importante del módulo era invisible justo en el
+momento en que actuaba — y ninguna prueba de API puede detectarlo, porque el
+servidor hizo exactamente lo correcto.
+
+Era además la única pantalla que seguía usando el `confirm()` del navegador,
+contra el estándar del proyecto que ya usan Médicos, Páginas, Turnos y
+Multimedia, y preguntaba "¿Eliminar?" sin decir a quién. Ahora usa el diálogo
+del panel con el nombre y el email adentro, deshabilita los dos casos que la API
+rechaza —borrarse a uno mismo, borrar al último superadmin— con el motivo en el
+`title`, avisa cuando queda un solo superadmin y valida el formulario con los
+mismos mínimos que aplica el servidor.
+
+#### El panel no sabía quién había entrado
+
+Nada de lo anterior es posible sin conocer el rol. `useSesion()` lee
+`GET /auth/me` — que ya existía y ninguna pantalla consultaba.
+
+**No es una autorización.** Lo que decide quién puede hacer qué sigue siendo
+`requireRole` en la API: cualquiera puede editar `localStorage`. Esto sólo evita
+ofrecer lo que no se va a poder hacer. Se consulta contra el servidor en vez de
+decodificar el token porque el rol de una sesión abierta puede haber cambiado
+desde que se emitió: un superadmin bajado a editor sigue con su token viejo en
+la pestaña. Y ante la duda —mientras carga, o si falla— **no** se ofrece la
+acción: mostrar el botón y que el servidor conteste 403 es peor que no
+mostrarlo, porque el operador ya escribió el texto cuando se entera.
+
+#### Corrector
+
+Catorce defectos reintroducidos, catorce detectados:
+
+| Defecto reintroducido | Pruebas que caen |
+|---|---|
+| Usuarios: borrado sin `onError` | 1 |
+| Usuarios: guardar sin `onError` | 1 |
+| Usuarios: vuelve el `confirm()` del navegador | 5 |
+| Usuarios: se ofrece borrarse a uno mismo y al último superadmin | 2 |
+| Usuarios: sin aviso de que queda un solo superadmin | 1 |
+| Usuarios: el formulario deja mandar cualquier cosa | 2 |
+| Confirmación: el formulario se le ofrece a cualquiera | 3 |
+| Confirmación: el panel manda la fecha y el autor | 2 |
+| Confirmación: registrar sin `onError` | 1 |
+| Confirmación: se puede confirmar sin escribir el alcance | 1 |
+| Confirmación: no se muestra qué se confirmó | 1 |
+| Confirmación: la fecha se imprime como ISO crudo | 1 |
+| Confirmación: se ofrece confirmar sin página que confirmar | 1 |
+| API: la sección deja de informar `confirmable` | 1 |
+
+El último dio **0 fallos en la primera pasada y no era cierto**: MariaDB se
+había caído en el contenedor, las pruebas de base se saltaron solas y el
+corrector leyó ese cero como "no detectado". Levantada la base, el defecto se
+detecta. Vale como recordatorio de que una suite que se **saltea** no es una
+suite que **pasa**, y de que un corrector que no distingue las dos cosas puede
+dar por buena una prueba que nunca corrió.
+
+---
+
+## 17. Marketing — analítica, consentimiento y atribución — ✅ PR #20 fusionado
+
+Ramificó de `main` = `a4f17a0` (merge del PR #18) como **round 1 de marketing**,
+en paralelo al PR #19 (saneo SVG/PDF + Biopsias + Usuarios). El #19 se fusionó
+primero; al fusionar el #20 el merge tomó, para los dos archivos de documentación
+en conflicto, sólo el lado de marketing y descartó lo del #19 (§16 y sus bullets
+en `AGENTS.md`, más el conteo real de pruebas). Esta sección quedó como §17 —tras
+la §16 del #19— al reconciliar esa documentación en un cambio posterior sobre
+`main`.
 
 Tres piezas que el sitio no tenía y que son el cimiento de cualquier marketing
 sin depender de terceros para lo básico. El orden importa: **el consentimiento
 gobierna la analítica**, y la atribución es de primera parte, así que va por otra
 puerta.
 
-### 16.1 El proyecto ya había reservado este lugar
+### 17.1 El proyecto ya había reservado este lugar
 
 `settings.ts` retiró en su momento la clave `scripts` —un textarea de JavaScript
 arbitrario— con un mensaje explícito: *"Meta Pixel, Google Ads y Analytics van a
@@ -1881,7 +2241,7 @@ ese módulo. La diferencia no es cosmética: un `<script>` pegado hace cualquier
 cosa; un **ID** sólo puede ser un ID, y se valida por formato antes de que el
 front lo ponga en el `src` de un script.
 
-### 16.2 Consentimiento primero
+### 17.2 Consentimiento primero
 
 `apps/web/src/lib/consent.ts` + `ConsentBanner`. Nada de medición de terceros
 carga hasta que la persona acepta. La decisión se guarda versionada en
@@ -1891,7 +2251,7 @@ rechazó (no se muestra, no se mide); `true` = mide. "Rechazar" tiene el mismo
 peso visual que "Aceptar": un consentimiento que se arranca escondiendo el "no"
 no es consentimiento.
 
-### 16.3 Medición por ID, con doble condición
+### 17.3 Medición por ID, con doble condición
 
 `analytics` es una clave administrable nueva (`{ ga4, gtm, metaPixel }`), cada
 ID validado por formato en `api/src/marketing.ts` (`G-…`, `GTM-…`, dígitos;
@@ -1912,7 +2272,7 @@ cargan nada por sí mismos: sin ID configurado no hay script que los use. El
 despliegue toma esa CSP; si por algo la desplegada no la tuviera, el navegador
 bloquea el script y la analítica no mide, sin romper la página.
 
-### 16.4 Atribución de conversiones
+### 17.4 Atribución de conversiones
 
 Migración nueva y reversible (`20260825000000_attribution.ts`): columna
 `attribution` JSON anulable en `appointments` y `contact_messages`. El front
@@ -1930,7 +2290,7 @@ lo dio— así que puede vivir junto a la conversión y mostrarse en el panel. Y
 **nunca va a los logs**: el `catch` del insert ya sólo conserva el código del
 motor.
 
-### 16.5 Validación y corrector
+### 17.5 Validación y corrector
 
 Suite completa en verde (el número exacto, en la sección de validación del PR).
 Cada corrección se verificó **reintroduciendo el defecto**: 16 defectos, 16
@@ -1947,7 +2307,7 @@ PUT masivo). Se agregó el caso y pasó a detectarse. Dos guardas existentes
 incluir `analytics`; ninguna se relajó (la de `single-source` ahora además exige
 que la analítica salga vacía por defecto).
 
-### 16.6 Qué NO abarca este round
+### 17.6 Qué NO abarca este round
 
 Campañas (crear/gestionar anuncios en Meta/Google/Instagram) siguen bloqueadas:
 requieren registro de app OAuth y cuentas de negocio que no existen. Esto es
