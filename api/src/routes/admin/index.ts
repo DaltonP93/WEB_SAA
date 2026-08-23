@@ -12,6 +12,7 @@ import { contactMessagesRouter } from "./contact_messages.js";
 import { contactChannelsRouter } from "./contact_channels.js";
 import { schedulesRouter } from "./schedules.js";
 import { dataReadinessRouter } from "./data_readiness.js";
+import { dataConfirmationsRouter } from "./data_confirmations.js";
 import { mediaRouter } from "./media.js";
 import { usersRouter } from "./users.js";
 
@@ -30,5 +31,6 @@ adminRouter.use("/contact-messages", contactMessagesRouter);
 adminRouter.use("/contact-channels", contactChannelsRouter);
 adminRouter.use("/schedules", schedulesRouter);
 adminRouter.use("/data-readiness", dataReadinessRouter);
+adminRouter.use("/data-confirmations", dataConfirmationsRouter);
 adminRouter.use("/media", mediaRouter);
 adminRouter.use("/users", usersRouter);

@@ -1506,7 +1506,7 @@ PR #16 fusionado. Los tres checks cerraron en verde sobre `4560252`.
 
 ---
 
-## 14. Multimedia: staging, formato real y logs sin datos personales (ronda actual, Draft)
+## 14. Multimedia: staging, formato real y logs sin datos personales — ✅ PR #17 fusionado
 
 Parte de `main` = `fc69871` (merge del PR #16), verificado como HEAD real antes
 de ramificar.
@@ -1667,7 +1667,7 @@ PR #17 fusionado. Los tres checks cerraron en verde sobre `a5404ca`.
 
 ---
 
-## 15. Logos, selector multimedia y reordenamiento genérico (ronda actual, Draft)
+## 15. Logos, selector multimedia y reordenamiento genérico — ✅ PR #18 fusionado
 
 Parte de `main` = `7a91e1f` (merge del PR #17), verificado como HEAD real antes
 de ramificar.
@@ -1836,6 +1836,10 @@ de animación; la opacidad fija y el enlace anónimo hacen caer 6 de `Logos`;
 mostrar los inactivos, 3; y que `mover` mute el array, 5 del Page Builder.
 
 ### 15.9 Qué falta
+
+> Los cuatro primeros ítems de esta tabla se cerraron en la **§16**. Se deja la
+> tabla como estaba porque es el registro de qué faltaba al terminar esa ronda,
+> no el estado de hoy.
 
 | Ítem | Estado |
 |---|---|

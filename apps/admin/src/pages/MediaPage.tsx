@@ -9,10 +9,10 @@ import { useConfirm } from "../components/ConfirmDialog";
  *
  * Lo que esta pantalla decía no era lo que el servidor hacía:
  *
- * - recomendaba **SVG** para logos, y la API lo rechaza (no hay saneo de SVG,
- *   y un SVG es un documento que puede traer scripts adentro);
- * - `accept="image/*"` ofrecía subir BMP, TIFF, AVIF o SVG, todos rechazados
- *   después de esperar la subida entera;
+ * - recomendaba **SVG** para logos cuando la API lo rechazaba (hoy sí lo
+ *   acepta, porque hay saneo real: ver `api/src/svg.ts`);
+ * - `accept="image/*"` ofrecía subir BMP, TIFF y AVIF, rechazados después de
+ *   esperar la subida entera;
  * - anunciaba que el servidor redimensiona a 2400 px cuando redimensiona a
  *   1600;
  * - exigía 200 × 200 antes de subir, con lo que un logo de 400 × 80 no
@@ -34,8 +34,9 @@ const MIN_LADO = 16;
 const MIN_PIXELES = 1024;
 
 /** Exactamente lo que la API acepta, ni uno más. */
-const ACCEPT = ".jpg,.jpeg,.png,.webp,.gif,.pdf,image/jpeg,image/png,image/webp,image/gif,application/pdf";
-const TIPOS = ["image/jpeg", "image/png", "image/webp", "image/gif", "application/pdf"];
+const ACCEPT =
+  ".jpg,.jpeg,.png,.webp,.gif,.svg,.pdf,image/jpeg,image/png,image/webp,image/gif,image/svg+xml,application/pdf";
+const TIPOS = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/svg+xml", "application/pdf"];
 
 interface Media {
   id: number;
@@ -242,7 +243,7 @@ export default function MediaPage() {
       <div className="card p-4 mb-6 bg-blue-50 border-blue-200 text-sm">
         <h2 className="font-semibold text-brand mb-2">Qué acepta el servidor</h2>
         <ul className="space-y-1 text-gray-700">
-          <li>• <strong>Formatos</strong>: JPG, PNG, WebP, GIF y PDF. Cada uno se guarda en su propio formato.</li>
+          <li>• <strong>Formatos</strong>: JPG, PNG, WebP, GIF, SVG y PDF. Cada uno se guarda en su propio formato.</li>
           <li>• <strong>Transparencia y animación</strong>: se conservan. Un GIF o un WebP animado mantiene todos sus cuadros.</li>
           <li>• <strong>Peso máximo</strong>: {MAX_MB} MB.</li>
           <li>
@@ -251,7 +252,10 @@ export default function MediaPage() {
           </li>
           <li>• <strong>Fotos de médicos</strong>: cuadrada (1:1). Encuadre rostro y hombros.</li>
           <li>• <strong>Banners / hero</strong>: horizontal 16:9, 1600×900 px o más.</li>
-          <li>• <strong>Logos</strong>: PNG o WebP con fondo transparente. SVG no se acepta por ahora.</li>
+          <li>
+            • <strong>Logos</strong>: PNG o WebP con fondo transparente, o SVG. El SVG se sanea al subirlo: se le quitan
+            scripts, estilos y referencias a otros servidores, y se guarda la versión limpia.
+          </li>
           <li>• Las fotos pierden su EXIF al procesarse: no se publica dónde ni con qué se tomaron.</li>
         </ul>
       </div>

@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api } from "../api";
+import ConfirmacionDato, { type Confirmacion } from "../components/ConfirmacionDato";
 
 /**
  * Datos pendientes: qué falta para que el sitio deje de decir "a confirmar".
@@ -10,6 +11,11 @@ import { api } from "../api";
  * el enlace a la pantalla donde se resuelve cada caso. El endpoint tampoco los
  * manda, así que no hay nada que filtrar acá — pero la regla vale igual para lo
  * que se agregue después.
+ *
+ * **La única excepción es el alcance confirmado**, y es deliberada: una
+ * constancia que no dice qué se confirmó no sirve de constancia. No es
+ * contenido de una página, es el texto de la afirmación institucional, y lo
+ * escribe la misma persona que lo lee acá.
  *
  * Todos los estados los calcula el servidor. Si esta pantalla los recalculara,
  * dos lugares tendrían que estar de acuerdo sobre qué cuenta como resuelto, y
@@ -36,6 +42,10 @@ interface Seccion {
   total?: number;
   reason?: string;
   pageSlug?: string;
+  /** Presente en las secciones que se resuelven con una confirmación escrita. */
+  confirmation?: Confirmacion | null;
+  /** `false` cuando todavía no hay nada que confirmar (falta la página). */
+  confirmable?: boolean;
 }
 
 interface Aviso {
@@ -222,6 +232,10 @@ export default function DataReadinessPage() {
                 </p>
                 <ListaItems items={s.items} seccion={s.id} ruta={s.route} />
               </>
+            ) : s.confirmable ? (
+              // Se resuelve con una confirmación escrita, y hay algo que
+              // confirmar: el motivo lo explica el propio bloque.
+              <ConfirmacionDato item={s.id} confirmation={s.confirmation ?? null} motivo={s.reason} />
             ) : (
               <p className="text-sm text-gray-600 mt-2">{s.reason}</p>
             )}
