@@ -255,8 +255,36 @@ entrega de resultados.
 queda, el sitio dice al mismo tiempo que el alcance está definido y que no lo
 está.
 
+### 3.1 · Escribir el texto no lo marca como confirmado
+
+Son dos cosas distintas y hacen falta las dos:
+
+1. **Escribir la página** (Contenido → Páginas → *Biopsias*). Lo puede hacer
+   cualquier editor.
+2. **Registrar la confirmación**, que es la constancia de que el sanatorio
+   afirma ese alcance. Se hace desde **Panel → Datos pendientes**, en la
+   tarjeta *Alcance de Biopsias*: el botón **Registrar confirmación** pide qué
+   se confirma —qué estudios, con qué requisitos, en qué plazos— y lo guarda
+   con tu nombre y la fecha. Sólo aparece para usuarios con rol **superadmin**;
+   un editor ve el estado y a quién pedírselo.
+
+Mientras no exista el punto 2, "Datos pendientes" sigue marcando Biopsias en
+revisión **por más completo que quede el texto**, y es a propósito: que alguien
+haya editado la página no es lo mismo que el sanatorio haya confirmado su
+contenido. El sistema no lo deduce del texto porque no puede: es una afirmación
+institucional, y sólo la puede hacer una persona.
+
+Lo que se escriba en *"Qué se confirma"* queda como constancia y se muestra en
+la misma pantalla. Escribilo con suficiente detalle para que otra persona pueda
+revisarlo dentro de seis meses: "está todo bien" no dice qué está bien.
+
+Si el alcance cambia —cambian los plazos, se deja de hacer un estudio— se usa
+**Retirar confirmación** en esa misma tarjeta y el ítem vuelve a revisión.
+
 **Verificar (API):** `curl -s https://<dominio>/api/public/pages/estudios-biopsias`
 **Verificar (sitio):** abrir `/estudios-biopsias`.
+**Verificar (confirmación):** en el panel, *Datos pendientes* muestra Biopsias
+en verde con quién confirmó y cuándo.
 
 ---
 
@@ -320,6 +348,7 @@ Para revisar de un vistazo qué falta:
 - [ ] `email-general` — correo general
 - [ ] Horarios — al menos un área activa
 - [ ] Biopsias — alcance definitivo y nota de "a confirmar" retirada
+- [ ] Biopsias — confirmación registrada por un superadmin (§3.1)
 
 Ninguno de estos ítems bloquea a los demás: se pueden cargar en cualquier orden,
 a medida que el sanatorio los confirme.

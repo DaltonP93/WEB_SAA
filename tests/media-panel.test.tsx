@@ -9,8 +9,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  *
  * Lo que sólo se ve en el DOM, y que estaba mal:
  *
- * - recomendaba **SVG** para logos, que la API rechaza — el operador seguía el
- *   consejo del propio panel y recibía un error;
+ * - recomendaba **SVG** para logos cuando la API lo rechazaba — el operador
+ *   seguía el consejo del propio panel y recibía un error. Hoy la API sí lo
+ *   acepta, y el panel tiene que decir eso y no lo contrario;
  * - decía que el servidor redimensiona a 2400 px cuando redimensiona a 1600;
  * - `URL.createObjectURL()` se llamaba **dentro del render**: un blob nuevo por
  *   cada re-render y ninguno liberado;
@@ -163,27 +164,55 @@ afterEach(() => {
 
 describe("panel de Multimedia", () => {
   describe("lo que el panel dice que acepta es lo que la API acepta", () => {
-    it("el `accept` enumera sólo JPG, PNG, WebP, GIF y PDF", async () => {
+    it("el `accept` enumera sólo JPG, PNG, WebP, GIF, SVG y PDF", async () => {
       montar();
       const input = (await screen.findByLabelText("Archivo a subir")) as HTMLInputElement;
       const accept = input.getAttribute("accept") ?? "";
 
-      // `image/*` ofrecía BMP, TIFF, AVIF y SVG, todos rechazados después de
-      // esperar la subida entera.
+      // `image/*` ofrecía BMP, TIFF y AVIF, rechazados después de esperar la
+      // subida entera.
       expect(accept).not.toContain("image/*");
-      for (const permitido of [".jpg", ".png", ".webp", ".gif", ".pdf"]) {
+      for (const permitido of [".jpg", ".png", ".webp", ".gif", ".svg", ".pdf"]) {
         expect(accept, `falta ${permitido}`).toContain(permitido);
       }
-      expect(accept).not.toContain("svg");
+      for (const rechazado of [".bmp", ".tif", ".avif"]) {
+        expect(accept, `ofrece ${rechazado}, que la API rechaza`).not.toContain(rechazado);
+      }
     });
 
-    it("no recomienda SVG y dice explícitamente que no se acepta", async () => {
+    /**
+     * El `accept` es la lista que el operador ve; `FORMATOS` es la que el
+     * servidor aplica. Cuando se separan, el panel miente en una de las dos
+     * direcciones: ofrece algo que después se rechaza, o esconde algo que sí
+     * se acepta. Esta prueba lee la lista real de la API en vez de repetirla.
+     */
+    it("el `accept` es exactamente la lista de `FORMATOS` de la API", () => {
+      const api = readFileSync("api/src/imagenes.ts", "utf8");
+      const panel = readFileSync("apps/admin/src/pages/MediaPage.tsx", "utf8");
+
+      const bloque = /export const FORMATOS[^{]*\{([\s\S]*?)\n\};/.exec(api)?.[1] ?? "";
+      expect(bloque, "no se pudo leer FORMATOS de la API").not.toBe("");
+      const mimes = [...bloque.matchAll(/mime:\s*"([^"]+)"/g)].map((m) => m[1]);
+      expect(mimes.length, "FORMATOS quedó vacío o cambió de forma").toBeGreaterThan(4);
+
+      const accept = /const ACCEPT =\s*([\s\S]*?);/.exec(panel)?.[1] ?? "";
+      for (const mime of mimes) {
+        expect(accept, `el panel no ofrece ${mime}, que la API acepta`).toContain(mime);
+      }
+    });
+
+    it("recomienda SVG para logos y dice que se sanea, no que se guarda tal cual", async () => {
       montar();
       await screen.findByText(/Qué acepta el servidor/i);
       const texto = document.body.textContent ?? "";
 
-      expect(texto, "seguía recomendando SVG, que la API rechaza").not.toMatch(/SVG si es posible/i);
-      expect(texto).toMatch(/SVG no se acepta/i);
+      // Antes decía "SVG no se acepta", que era cierto mientras no hubo saneo.
+      // Ahora lo hay, y dejar el aviso viejo mandaría al operador a convertir
+      // sus logos a PNG sin motivo.
+      expect(texto, "seguía diciendo que el SVG se rechaza").not.toMatch(/SVG no se acepta/i);
+      expect(texto).toMatch(/SVG/);
+      // Y no puede prometer que se guarda intacto: se guarda la versión limpia.
+      expect(texto, "no avisa que el SVG se modifica al subirlo").toMatch(/se sanea/i);
     });
 
     it("los límites que muestra son los del servidor", async () => {

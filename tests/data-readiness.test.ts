@@ -379,6 +379,10 @@ describeDb("GET /api/admin/data-readiness", () => {
       expect(s.status).toBe("review");
       expect(s.pageSlug).toBe("estudios-biopsias");
       expect(s.route).toBe(`/pages/${pagina.id}`);
+      // Falta la confirmación, pero **hay algo que confirmar**: la página
+      // existe. Es lo que le dice al panel que puede ofrecer el formulario.
+      expect(s.confirmable).toBe(true);
+      expect(s.confirmation).toBeNull();
     });
 
     it("sigue en review aunque el texto sea largo y no diga 'a confirmar'", async () => {
@@ -414,6 +418,16 @@ describeDb("GET /api/admin/data-readiness", () => {
         const s = seccion(await pedir(), "biopsias");
         expect(s.route, "/pages/undefined sería una pantalla rota").toBe("/pages");
         expect(s.status).toBe("review");
+        /**
+         * No es lo mismo "falta la confirmación" que "no hay nada que
+         * confirmar".
+         *
+         * El endpoint de confirmaciones aceptaría el `PUT` igual —no mira
+         * páginas, y no debería—, así que sin este campo el panel ofrecería el
+         * formulario, guardaría con éxito y el ítem seguiría en `review`. Un
+         * éxito que no cambia nada es peor que un botón ausente.
+         */
+        expect(s.confirmable, "se ofrecería confirmar una página que no existe").toBe(false);
       } finally {
         await db("pages").where({ id: pagina.id }).update({ slug: "estudios-biopsias" });
       }

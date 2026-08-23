@@ -383,8 +383,14 @@ describeDb("pipeline de multimedia", () => {
       expect(fila.height).toBeNull();
       expect(fila.frames).toBeNull();
 
+      // El PDF se **sanea**, así que los bytes cambian a propósito: la versión
+      // anterior de esta prueba exigía `guardado.equals(pdf)`, y esa igualdad
+      // era justamente la que impedía quitarle las acciones al documento. Lo
+      // que se conserva no son los bytes, es el documento: sigue abriéndose y
+      // sigue teniendo sus dos páginas. Si hubiera pasado por Sharp —el punto
+      // original de la prueba— no sería un PDF abrible.
       const guardado = await fs.promises.readFile(path.join(UPLOAD_DIR, path.basename(fila.url)));
-      expect(guardado.equals(pdf), "el PDF se modificó").toBe(true);
+      expect((await PDFDocument.load(guardado)).getPageCount(), "el PDF dejó de abrirse").toBe(2);
     });
 
     it("una imagen que se expande de forma desproporcionada se rechaza", async () => {

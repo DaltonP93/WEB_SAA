@@ -144,10 +144,40 @@ describe("el contrato no inventa datos del cliente", () => {
     expect(correos).toEqual([]);
   });
 
-  it("deja Biopsias en revisión manual mientras no haya confirmación", () => {
+  it("deja Biopsias en revisión mientras no haya confirmación registrada", () => {
     const seccion = PROSA.slice(PROSA.indexOf("Alcance de Biopsias"));
-    expect(seccion).toMatch(/siempre `review`/i);
-    expect(seccion).toMatch(/no se deduce del contenido/i);
+
+    // Lo que ya no se exige: que diga "siempre `review`". Dejó de ser cierto
+    // cuando apareció el mecanismo de confirmación, y un contrato que describe
+    // un comportamiento que el código no tiene es peor que uno incompleto.
+    expect(seccion).toMatch(/`review`/);
+    expect(seccion).toMatch(/mientras no exista una confirmación/i);
+
+    // Lo que sí se sigue exigiendo, que es el invariante de verdad: el estado
+    // **nunca** sale del contenido de la página.
+    expect(seccion, "el contrato dejó de prohibir la heurística sobre el texto").toMatch(
+      /nunca se deduce del contenido/i,
+    );
+  });
+
+  /**
+   * El mecanismo tiene que estar documentado con sus tres garantías, no sólo
+   * mencionado: quién puede usarlo, que el alcance es obligatorio y que la
+   * fecha no la pone el cliente. Un contrato que dice "hay una confirmación"
+   * sin decir quién la puede firmar no describe nada comprobable.
+   */
+  it("documenta el mecanismo de confirmación con sus garantías", () => {
+    const seccion = PROSA.slice(PROSA.indexOf("Alcance de Biopsias"));
+
+    expect(seccion).toContain("/api/admin/data-confirmations");
+    expect(seccion, "no dice qué rol puede confirmar").toMatch(/superadmin/);
+    expect(seccion, "no dice que el alcance es obligatorio").toMatch(/`scope` es obligatorio/i);
+    expect(seccion, "no dice quién pone la fecha").toMatch(/los pone el servidor/i);
+    expect(seccion, "no dice que se puede retirar").toMatch(/se puede retirar/i);
+    expect(seccion, "no dice qué pasa con una fila ilegible").toMatch(/ilegible/i);
+    expect(seccion, "no dice que queda fuera del editor de Configuración").toMatch(
+      /ADMIN_SETTING_KEYS/,
+    );
   });
 
   it("dice que es de sólo lectura", () => {
@@ -278,6 +308,28 @@ describe("el endpoint cumple las prohibiciones del contrato", () => {
   it("Biopsias no se deduce del contenido de la página", () => {
     // No se lee ningún bloque ni ningún texto: sólo si la página existe.
     expect(ENDPOINT).not.toContain('"blocks"');
-    expect(ENDPOINT).toContain('status: "review" as const');
+
+    /**
+     * Lo que cambió y lo que no.
+     *
+     * Antes el estado era `review` fijo, y esta prueba lo fijaba. Ahora hay un
+     * segundo estado posible —`complete`— pero **no** porque el endpoint mire
+     * el contenido: lo decide una confirmación escrita y registrada por un
+     * superadmin, con nombre y fecha. Ver `data_confirmations.ts`.
+     *
+     * La invariante que hay que sostener no es "siempre review": es que el
+     * estado no salga nunca de inspeccionar el texto de la página. Eso es lo
+     * que se afirma acá.
+     */
+    expect(ENDPOINT, "el estado de Biopsias dejó de depender de la confirmación").toContain(
+      "confirmacionDe(",
+    );
+    expect(ENDPOINT).toContain('confirmacionBiopsias ? "complete" : "review"');
+
+    // Y sigue sin haber ninguna heurística sobre el contenido.
+    for (const olor of ["props", "includes(", "length >", "match(", "test("]) {
+      const enBiopsias = ENDPOINT.slice(ENDPOINT.indexOf("------------ biopsias"));
+      expect(enBiopsias, `apareció una heurística sobre el contenido: ${olor}`).not.toContain(olor);
+    }
   });
 });
