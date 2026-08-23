@@ -9,6 +9,7 @@ import { isEmergencyCta } from "../institutional-red.js";
 import { HttpError, badRequest, conflict, notFound } from "../http.js";
 import { instanteDesdeHoraLocal } from "../timezone.js";
 import { normalizarSeo } from "../seo.js";
+import { redirectsActivos } from "../redirects.js";
 import { ANALITICA_VACIA, sanearAtribucion, validarAnalitica } from "../marketing.js";
 
 export const publicRouter = Router();
@@ -108,6 +109,17 @@ publicRouter.get("/settings", async (_req, res) => {
   // el front no dibuja ningún widget.
   out.captcha = captchaPublicConfig();
   res.json(out);
+});
+
+/**
+ * Los redirects 301 activos, para que el front (SPA) también redirija del lado
+ * del cliente las rutas que administra el panel —no sólo las cuatro legacy—.
+ * Sale de la misma caché en memoria que usa el middleware, así que refleja el
+ * último cambio sin consultar la base en cada request. `to` ya viene validado
+ * como ruta interna.
+ */
+publicRouter.get("/redirects", (_req, res) => {
+  res.json(redirectsActivos());
 });
 
 publicRouter.get("/menus", async (_req, res) => {

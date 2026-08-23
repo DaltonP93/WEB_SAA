@@ -10,7 +10,7 @@ import { adminRouter } from "./routes/admin/index.js";
 import { db, checkDatabase } from "./db.js";
 import { asyncHandler, errorHandler, withTimeout, wrapRouterAsync } from "./http.js";
 import { rutaSinValores } from "./log-seguro.js";
-import { legacyRedirects } from "./legacy-redirects.js";
+import { redirectsMiddleware, cargarRedirects } from "./redirects.js";
 import { warnIfCaptchaMisconfigured } from "./captcha.js";
 
 export const PORT = Number(process.env.PORT ?? 4000);
@@ -103,8 +103,12 @@ export function createApp() {
       },
     });
   });
-  // Rutas viejas del portal: 301 real antes de cualquier otra cosa.
-  app.use(legacyRedirects);
+  // Redirects 301 administrables: la caché arranca con las rutas legacy y se
+  // refresca acá con lo que haya en la base (mismas legacy sembradas + lo que
+  // cargue el panel). No se hace `await`: un fallo o demora de base no debe
+  // frenar el arranque, y la caché ya tiene un valor seguro mientras tanto.
+  void cargarRedirects();
+  app.use(redirectsMiddleware);
 
   app.get("/robots.txt", (_req, res) => {
     const siteUrl = getSiteUrl();
