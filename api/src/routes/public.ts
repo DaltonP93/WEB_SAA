@@ -8,6 +8,7 @@ import { publicChannelValues } from "../contact-values.js";
 import { isEmergencyCta } from "../institutional-red.js";
 import { HttpError, badRequest, conflict, notFound } from "../http.js";
 import { instanteDesdeHoraLocal } from "../timezone.js";
+import { ANALITICA_VACIA, sanearAtribucion, validarAnalitica } from "../marketing.js";
 
 export const publicRouter = Router();
 
@@ -40,7 +41,7 @@ const plainText = (max: number) =>
  * el resto. Los teléfonos, correos y horarios ya no están acá: viven en
  * `/public/contact-channels` y `/public/schedules`.
  */
-const PUBLIC_SETTING_KEYS = ["brand", "theme", "contact", "seo"];
+const PUBLIC_SETTING_KEYS = ["brand", "theme", "contact", "seo", "analytics"];
 
 /**
  * `contact` se sanea al salir, no sólo al guardarse.
@@ -70,10 +71,31 @@ function safeParse(value: string): unknown {
   }
 }
 
+/**
+ * `analytics` se normaliza al salir.
+ *
+ * Los IDs de medición son públicos por naturaleza —terminan en el navegador de
+ * cualquiera que abra el sitio—, así que exponerlos no filtra nada. Pero una
+ * fila editada a mano podría traer un valor con forma inválida, y el front lo
+ * interpolaría en la URL de un script. Se devuelve siempre la forma validada:
+ * los tres IDs, cada uno con formato correcto o vacío.
+ */
+function publicAnalytics(value: unknown): unknown {
+  const raw = typeof value === "string" ? safeParse(value) : value;
+  const r = validarAnalitica(raw);
+  return r.ok ? r.value : ANALITICA_VACIA;
+}
+
 publicRouter.get("/settings", async (_req, res) => {
   const rows = await db("settings").whereIn("key", PUBLIC_SETTING_KEYS).select("key", "value");
   const out: Record<string, unknown> = {};
-  for (const r of rows) out[r.key] = r.key === "contact" ? publicContact(r.value) : r.value;
+  for (const r of rows) {
+    out[r.key] =
+      r.key === "contact" ? publicContact(r.value) : r.key === "analytics" ? publicAnalytics(r.value) : r.value;
+  }
+  // Si nunca se configuró, la clave no existe en la base: el front igual espera
+  // los tres campos, así que se completa con la forma vacía (medición apagada).
+  if (!("analytics" in out)) out.analytics = ANALITICA_VACIA;
   // No sale de la base: es configuración del entorno. Sólo el proveedor y la
   // site key —la clave secreta nunca se envía—. `null` = sin verificación, y
   // el front no dibuja ningún widget.
@@ -274,6 +296,15 @@ const appointmentSchema = z.object({
     .min(8)
     .max(64)
     .regex(/^[A-Za-z0-9_-]+$/, "clave de envío inválida"),
+  /**
+   * De dónde vino esta conversión (utm_*, gclid, fbclid, landing, referrer).
+   *
+   * Se acepta cualquier objeto y se **sanea** después con `sanearAtribucion`:
+   * la validación es una allowlist de claves, no un esquema rígido, porque el
+   * conjunto de parámetros de campaña no es fijo. Opcional: la mayoría de las
+   * conversiones no traen ninguno.
+   */
+  attribution: z.record(z.string(), z.unknown()).optional(),
   // Honeypot: si viene con contenido, es spam.
   website: z.string().max(200).optional(),
 });
@@ -557,6 +588,12 @@ publicRouter.post("/appointments", formsLimiter, async (req, res) => {
     throw badRequest("verificación anti-spam fallida");
   }
 
+  // La atribución se sanea y se guarda como JSON (o NULL). No es dato personal
+  // —es de dónde vino el clic, no quién lo dio—, pero como todo lo demás de la
+  // fila, no va a los logs: el `catch` de abajo sólo conserva el código del
+  // motor, nunca el cuerpo.
+  const atribucion = sanearAtribucion(d.attribution);
+
   const fila = {
     name: d.name,
     phone: d.phone,
@@ -567,6 +604,7 @@ publicRouter.post("/appointments", formsLimiter, async (req, res) => {
     message: d.message ?? null,
     submission_key: d.submissionKey,
     consent_at: new Date(),
+    attribution: atribucion ? JSON.stringify(atribucion) : null,
   };
 
   try {
@@ -598,6 +636,7 @@ const contactSchema = z.object({
   phone: plainText(40).optional(),
   message: plainText(4000).pipe(z.string().min(5, "mensaje demasiado corto")),
   captchaToken: z.string().max(4000).optional(),
+  attribution: z.record(z.string(), z.unknown()).optional(),
   website: z.string().max(200).optional(),
 });
 publicRouter.post("/contact-messages", formsLimiter, async (req, res) => {
@@ -613,11 +652,13 @@ publicRouter.post("/contact-messages", formsLimiter, async (req, res) => {
     throw badRequest("verificación anti-spam fallida");
   }
   const d = parsed.data;
+  const atribucion = sanearAtribucion(d.attribution);
   const [id] = await db("contact_messages").insert({
     name: d.name,
     email: d.email,
     phone: d.phone ?? null,
     message: d.message,
+    attribution: atribucion ? JSON.stringify(atribucion) : null,
   });
   res.status(201).json({ id });
 });

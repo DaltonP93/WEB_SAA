@@ -237,7 +237,14 @@ server {
   # frame-src/script-src incluyen los hosts del desafío anti-spam. Sólo se
   # usan si el sanatorio configura CAPTCHA_PROVIDER y las claves; sin eso el
   # front no carga ningún script de terceros.
-  add_header Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self' https://challenges.cloudflare.com https://www.google.com https://www.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https:; connect-src 'self' https://challenges.cloudflare.com; form-action 'self'; frame-src https://www.youtube.com https://www.youtube-nocookie.com https://player.vimeo.com https://www.google.com https://google.com https://maps.google.com https://www.google.com.py https://google.com.py https://challenges.cloudflare.com; frame-ancestors 'none'" always;
+  # Los hosts de analítica (googletagmanager / google-analytics / connect.facebook /
+  # facebook) están en script-src y connect-src para que la medición opt-in
+  # (GA4, GTM, Meta Pixel) pueda cargar cuando el sanatorio configura un ID y el
+  # visitante acepta. No cargan nada por sí mismos: sin ID configurado no hay
+  # ningún script que los use. Tienen que coincidir con la CSP <meta> de
+  # apps/web/index.html (la prueba video-embed-csp fija el frame-src; estos dos
+  # se mantienen a mano). Ver docs/CARGA-DE-DATOS.md §4.3.
+  add_header Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self' https://challenges.cloudflare.com https://www.google.com https://www.gstatic.com https://www.googletagmanager.com https://connect.facebook.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https:; connect-src 'self' https://challenges.cloudflare.com https://www.googletagmanager.com https://www.google-analytics.com https://analytics.google.com https://region1.google-analytics.com https://connect.facebook.net https://www.facebook.com; form-action 'self'; frame-src https://www.youtube.com https://www.youtube-nocookie.com https://player.vimeo.com https://www.google.com https://google.com https://maps.google.com https://www.google.com.py https://google.com.py https://challenges.cloudflare.com; frame-ancestors 'none'" always;
 
   # API (^~ para que gane prioridad sobre la regex de assets estáticos)
   location ^~ /api/ {

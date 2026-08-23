@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "../../db.js";
 import { badRequest, notFound } from "../../http.js";
 import { formatearEnZona, inicioDelDia, inicioDelDiaSiguiente } from "../../timezone.js";
+import { leerAtribucion, type Atribucion } from "../../marketing.js";
 
 /**
  * Bandeja de solicitudes de turno.
@@ -95,11 +96,24 @@ const COLUMNAS = [
   "a.message",
   "a.status",
   "a.consent_at",
+  "a.attribution",
   "a.created_at",
   "a.updated_at",
   "d.name as doctor_name",
   "s.name as specialty_name",
 ];
+
+/**
+ * Normaliza la atribución de una fila para la respuesta.
+ *
+ * La columna JSON vuelve como string en MariaDB y parseada en MySQL 8, y una
+ * fila vieja o editada a mano podría traer cualquier cosa: `leerAtribucion`
+ * devuelve siempre la forma saneada o `null`. Así el panel recibe un objeto
+ * consistente y no el string crudo del motor.
+ */
+function conAtribucion<T extends { attribution?: unknown }>(fila: T): T & { attribution: Atribucion | null } {
+  return { ...fila, attribution: leerAtribucion(fila.attribution) };
+}
 
 function aplicarFiltros(qb: any, f: Filtros) {
   if (f.status) qb.where("a.status", f.status);
@@ -145,12 +159,12 @@ appointmentsRouter.get("/", async (req, res) => {
 
   const [{ total }] = await aplicarFiltros(consultaBase(), f).count({ total: "a.id" });
 
-  const items = await aplicarOrden(aplicarFiltros(consultaBase(), f), f)
+  const filas = await aplicarOrden(aplicarFiltros(consultaBase(), f), f)
     .limit(f.limit)
     .offset(f.offset)
     .select(COLUMNAS);
 
-  res.json({ items, total: Number(total), limit: f.limit, offset: f.offset });
+  res.json({ items: filas.map(conAtribucion), total: Number(total), limit: f.limit, offset: f.offset });
 });
 
 /**
@@ -180,6 +194,12 @@ appointmentsRouter.get("/export", async (req, res) => {
     ["Preferencia", (r) => formatearEnZona(r.preferred_at)],
     ["Estado", (r) => r.status],
     ["Mensaje", (r) => r.message ?? ""],
+    // Atribución: las tres columnas que sirven en una planilla de marketing.
+    // El resto (utm_term, utm_content, gclid, fbclid) vive en la respuesta de
+    // la bandeja; en el CSV serían columnas casi siempre vacías.
+    ["Origen", (r) => leerAtribucion(r.attribution)?.utm_source ?? ""],
+    ["Medio", (r) => leerAtribucion(r.attribution)?.utm_medium ?? ""],
+    ["Campaña", (r) => leerAtribucion(r.attribution)?.utm_campaign ?? ""],
     ["Actualizado", (r) => formatearEnZona(r.updated_at)],
   ];
 

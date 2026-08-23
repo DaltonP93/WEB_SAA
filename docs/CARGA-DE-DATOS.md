@@ -332,6 +332,40 @@ Cambiarla antes deja los `canonical` y el `sitemap.xml` apuntando a un sitio que
 todavía no responde, que es peor para el posicionamiento que dejarla como está.
 **Es una decisión del propietario del proyecto**, no del equipo de contenido.
 
+### 4.3 · Analítica y marketing (Ajustes → Analítica y marketing)
+
+Se cargan **identificadores**, no código. En **Ajustes → Analítica y marketing**
+hay tres campos:
+
+| Campo | Qué pegar | De dónde sale |
+|---|---|---|
+| Google Analytics 4 | `G-XXXXXXXXXX` | Admin de GA4 → Flujo de datos |
+| Google Tag Manager | `GTM-XXXXXXX` | Contenedor de GTM |
+| Meta (Facebook) Pixel | sólo números | Administrador de eventos de Meta |
+
+Lo que quede vacío se ignora. El panel valida el formato: si pegás otra cosa
+—por ejemplo el bloque `<script>` que te da Google en vez del ID—, lo rechaza.
+
+**Dos cosas tienen que pasar para que mida de verdad:**
+
+1. **Consentimiento del visitante.** La medición no carga hasta que la persona
+   acepta el aviso de cookies. Si nadie configuró ningún ID, el aviso ni
+   aparece.
+2. **La CSP ya está abierta para estos hosts.** El sitio bloquea por seguridad
+   los scripts de otros dominios, pero los de Google (GA4/GTM) y Meta Pixel ya
+   están declarados en la `Content-Security-Policy` —tanto en la de Nginx
+   (`scripts/deploy/setup-vps.sh`) como en la `<meta>` de `apps/web/index.html`—.
+   No hay que tocar nada más: alcanza con cargar el ID y que el visitante
+   acepte. (Esos hosts no cargan nada por sí mismos: sin un ID configurado no
+   hay ningún script que los use.) Un despliegue nuevo toma esa CSP
+   automáticamente.
+
+**De dónde vino cada turno o mensaje.** Cuando alguien llega desde una campaña
+con parámetros `utm_*` en la URL, esos datos se guardan y aparecen en la columna
+*Origen* de la bandeja de Turnos y en el CSV que se exporta. No hace falta
+configurar nada: funciona siempre, y no es rastreo —es dato que viaja sólo si la
+persona envía el formulario, y sólo al sanatorio—.
+
 ---
 
 ## 5 · Lista de control

@@ -7,7 +7,11 @@
          anti-spam. Los hosts de Turnstile/reCAPTCHA están declarados pero sólo
          se usan si el sanatorio configura CAPTCHA_PROVIDER + claves; sin eso
          el front no carga ningún script de terceros. -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self' https://challenges.cloudflare.com https://www.google.com https://www.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https:; connect-src 'self' https://challenges.cloudflare.com; form-action 'self'; frame-src https://www.youtube.com https://www.youtube-nocookie.com https://player.vimeo.com https://www.google.com https://google.com https://maps.google.com https://www.google.com.py https://google.com.py https://challenges.cloudflare.com; upgrade-insecure-requests" />
+    <!-- script-src/connect-src incluyen los hosts de analítica opt-in (GA4, GTM,
+         Meta Pixel). Sin un ID configurado y sin consentimiento no se carga
+         ningún script que los use. Tienen que coincidir con la CSP de Nginx en
+         scripts/deploy/setup-vps.sh. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self' https://challenges.cloudflare.com https://www.google.com https://www.gstatic.com https://www.googletagmanager.com https://connect.facebook.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https:; connect-src 'self' https://challenges.cloudflare.com https://www.googletagmanager.com https://www.google-analytics.com https://analytics.google.com https://region1.google-analytics.com https://connect.facebook.net https://www.facebook.com; form-action 'self'; frame-src https://www.youtube.com https://www.youtube-nocookie.com https://player.vimeo.com https://www.google.com https://google.com https://maps.google.com https://www.google.com.py https://google.com.py https://challenges.cloudflare.com; upgrade-insecure-requests" />
     <meta name="referrer" content="strict-origin-when-cross-origin" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#005587" />

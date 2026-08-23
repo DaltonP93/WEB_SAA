@@ -16,7 +16,7 @@ import { useUnsavedGuard } from "../hooks/useUnsavedGuard";
  * lista (`ADMIN_SETTING_KEYS` en `api/src/routes/admin/settings.ts`); acá se
  * repite para no depender de que la respuesta venga ya filtrada.
  */
-const ADMIN_SETTING_KEYS = ["brand", "theme", "contact", "seo"] as const;
+const ADMIN_SETTING_KEYS = ["brand", "theme", "contact", "seo", "analytics"] as const;
 
 export default function SettingsPage() {
   const q = useQuery({
@@ -150,6 +150,51 @@ export default function SettingsPage() {
           <div><label className="label">Descripción</label><textarea className="input" rows={2} value={s.seo?.description ?? ""} onChange={(e) => setKey("seo", { description: e.target.value })} /></div>
           <div><label className="label">OG Image</label><input className="input" value={s.seo?.ogImage ?? ""} onChange={(e) => setKey("seo", { ogImage: e.target.value })} /></div>
         </div>
+      </section>
+
+      <section className="card p-5">
+        <h2 className="font-semibold mb-3">Analítica y marketing</h2>
+        <p className="text-sm text-gray-600 mb-3">
+          Pegá el <strong>identificador</strong> de cada plataforma, no el código que te dan. Lo que
+          quede vacío se ignora. La medición sólo carga en el sitio cuando el visitante acepta el
+          aviso de cookies; si nadie configuró ningún ID, ese aviso no aparece.
+        </p>
+        <div className="grid gap-4">
+          <div>
+            <label className="label" htmlFor="an-ga4">Google Analytics 4</label>
+            <input
+              id="an-ga4"
+              className="input"
+              placeholder="G-XXXXXXXXXX"
+              value={s.analytics?.ga4 ?? ""}
+              onChange={(e) => setKey("analytics", { ga4: e.target.value.trim() })}
+            />
+          </div>
+          <div>
+            <label className="label" htmlFor="an-gtm">Google Tag Manager</label>
+            <input
+              id="an-gtm"
+              className="input"
+              placeholder="GTM-XXXXXXX"
+              value={s.analytics?.gtm ?? ""}
+              onChange={(e) => setKey("analytics", { gtm: e.target.value.trim() })}
+            />
+          </div>
+          <div>
+            <label className="label" htmlFor="an-meta">Meta (Facebook) Pixel</label>
+            <input
+              id="an-meta"
+              className="input"
+              placeholder="Sólo números"
+              value={s.analytics?.metaPixel ?? ""}
+              onChange={(e) => setKey("analytics", { metaPixel: e.target.value.trim() })}
+            />
+          </div>
+        </div>
+        <p className="text-xs text-gray-500 mt-3">
+          La política de seguridad del sitio (CSP) ya permite los hosts de Google y Meta: alcanza con
+          cargar el ID acá y que el visitante acepte el aviso de cookies.
+        </p>
       </section>
 
 
