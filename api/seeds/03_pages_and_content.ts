@@ -160,10 +160,11 @@ function servicePage(title: string, subtitle: string, intro: string, extra: Bloc
   ];
 }
 
-const PAGES: { slug: string; title: string; description: string; status?: string; order: number; blocks: BlockSpec[] }[] = [
+const PAGES: { slug: string; title: string; seoTitle?: string; description: string; status?: string; order: number; blocks: BlockSpec[] }[] = [
   {
     slug: "home",
     title: "Inicio",
+    seoTitle: "Sanatorio Adventista de Asunción",
     description: "Sanatorio Adventista de Asunción — atención médica integral.",
     order: 0,
     blocks: [
@@ -628,12 +629,13 @@ export async function seed(knex: Knex): Promise<void> {
     blocks: BlockSpec[],
     order: number,
     status = "published",
+    seoTitle = title,
   ) => {
     const [pageId] = await knex("pages").insert({
       slug,
       title,
       status,
-      seo: JSON.stringify({ title, description }),
+      seo: JSON.stringify({ title: seoTitle, description }),
       order,
     });
     if (blocks.length === 0) return;
@@ -648,7 +650,7 @@ export async function seed(knex: Knex): Promise<void> {
   };
 
   for (const p of PAGES) {
-    await insertPage(p.slug, p.title, p.description, p.blocks, p.order, p.status ?? "published");
+    await insertPage(p.slug, p.title, p.description, p.blocks, p.order, p.status ?? "published", p.seoTitle);
   }
 
   for (let i = 0; i < SERVICE_PAGES.length; i++) {

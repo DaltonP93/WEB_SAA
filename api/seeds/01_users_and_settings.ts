@@ -40,8 +40,8 @@ export async function seed(knex: Knex): Promise<void> {
     brand: {
       name: "Sanatorio Adventista de Asunción",
       tagline: "Cuidamos tu salud con vocación de servicio",
-      logoUrl: "",
-      faviconUrl: "",
+      logoUrl: "/logo-sanatorio.png",
+      faviconUrl: "/favicon.png",
     },
     theme: {
       // Lineamientos de marca Adventist Health
