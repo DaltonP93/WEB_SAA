@@ -3,11 +3,28 @@ import { z } from "zod";
 import { db } from "../../db.js";
 import { sanitizeHtml, sanitizeMapEmbed, safeLinkHref } from "../../html.js";
 import { validateBlockProps } from "../../block-validation.js";
+import { instanteDesdeHoraLocal } from "../../timezone.js";
 
 export const pagesRouter = Router();
 
+const COLUMNAS_LISTA = ["id", "slug", "title", "status", "order", "publish_at", "updated_at"] as const;
+
 pagesRouter.get("/", async (_req, res) => {
-  const rows = await db("pages").orderBy("order").select("id", "slug", "title", "status", "order");
+  // La papelera vive aparte: la lista principal muestra sólo lo que no está
+  // borrado.
+  const rows = await db("pages").whereNull("deleted_at").orderBy("order").select(...COLUMNAS_LISTA);
+  res.json(rows);
+});
+
+/**
+ * La papelera: páginas borradas de forma recuperable. Va **antes** de `/:id`
+ * para que Express no interprete "papelera" como un id.
+ */
+pagesRouter.get("/papelera", async (_req, res) => {
+  const rows = await db("pages")
+    .whereNotNull("deleted_at")
+    .orderBy("deleted_at", "desc")
+    .select("id", "slug", "title", "status", "deleted_at");
   res.json(rows);
 });
 
@@ -31,30 +48,94 @@ const pageSchema = z.object({
     ogImage: z.string().max(500).optional().or(z.literal("")),
   }).strip().optional(),
   order: z.number().int().optional(),
+  // Se acepta como texto y se interpreta abajo en la zona institucional; el
+  // esquema sólo comprueba que sea texto o nulo (vaciar el agendamiento).
+  publish_at: z.string().nullable().optional(),
 });
 
+/**
+ * Traduce el `publish_at` del payload a lo que se guarda.
+ *
+ * Devuelve `{ set: Date|null }` cuando hay que escribir la columna, o
+ * `{ invalido: true }` cuando vino algo que no es una fecha. La zona la resuelve
+ * `instanteDesdeHoraLocal` (institucional), no la del proceso.
+ */
+function resolverPublishAt(valor: string | null | undefined): { set: Date | null } | { invalido: true } {
+  const instante = instanteDesdeHoraLocal(valor);
+  if (instante === undefined) return { invalido: true }; // vino texto, pero no es fecha
+  return { set: instante }; // null (vaciar) o Date (agendar)
+}
+
 pagesRouter.post("/", async (req, res) => {
-  const p = pageSchema.parse(req.body);
+  const parsed = pageSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "payload invalido", issues: parsed.error.issues });
+  const p = parsed.data;
+
+  let publishAt: Date | null = null;
+  if (p.publish_at !== undefined && p.publish_at !== null && p.publish_at !== "") {
+    const r = resolverPublishAt(p.publish_at);
+    if ("invalido" in r) return res.status(400).json({ error: "publish_at no es una fecha válida" });
+    publishAt = r.set;
+  }
+
   const [id] = await db("pages").insert({
     slug: p.slug,
     title: p.title,
     status: p.status ?? "draft",
     seo: p.seo ? JSON.stringify(p.seo) : null,
     order: p.order ?? 0,
+    publish_at: publishAt,
   });
   res.status(201).json({ id });
 });
 
 pagesRouter.put("/:id", async (req, res) => {
-  const p = pageSchema.partial().parse(req.body);
+  const parsed = pageSchema.partial().safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "payload invalido", issues: parsed.error.issues });
+  const p = parsed.data;
   const patch: any = { ...p };
   if (p.seo !== undefined) patch.seo = JSON.stringify(p.seo);
+  // `publish_at` sólo se toca si vino la clave: ausente = no cambia; ""/null =
+  // se desagenda; texto de fecha = se agenda; texto no-fecha = 400.
+  if ("publish_at" in p) {
+    const r = resolverPublishAt(p.publish_at ?? null);
+    if ("invalido" in r) return res.status(400).json({ error: "publish_at no es una fecha válida" });
+    patch.publish_at = r.set;
+  }
   patch.updated_at = db.fn.now();
-  await db("pages").where({ id: req.params.id }).update(patch);
+  const n = await db("pages").where({ id: req.params.id }).whereNull("deleted_at").update(patch);
+  if (n === 0) return res.status(404).json({ error: "no encontrada" });
   res.json({ ok: true });
 });
 
+/** Borrado recuperable: va a la papelera, no se pierde. */
 pagesRouter.delete("/:id", async (req, res) => {
+  const n = await db("pages")
+    .where({ id: req.params.id })
+    .whereNull("deleted_at")
+    .update({ deleted_at: db.fn.now() });
+  if (n === 0) return res.status(404).json({ error: "no encontrada" });
+  res.status(204).end();
+});
+
+/** Restaurar desde la papelera. */
+pagesRouter.post("/:id/restore", async (req, res) => {
+  const n = await db("pages")
+    .where({ id: req.params.id })
+    .whereNotNull("deleted_at")
+    .update({ deleted_at: null, updated_at: db.fn.now() });
+  if (n === 0) return res.status(404).json({ error: "no está en la papelera" });
+  res.json({ ok: true });
+});
+
+/**
+ * Borrado definitivo: sólo desde la papelera, y esto sí es irreversible (se
+ * lleva los bloques por cascade). Exigir que ya esté en la papelera evita
+ * destruir una página viva de un solo click.
+ */
+pagesRouter.delete("/:id/definitivo", async (req, res) => {
+  const fila = await db("pages").where({ id: req.params.id }).whereNotNull("deleted_at").first();
+  if (!fila) return res.status(404).json({ error: "no está en la papelera" });
   await db("pages").where({ id: req.params.id }).del();
   res.status(204).end();
 });

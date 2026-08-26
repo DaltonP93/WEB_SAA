@@ -10,6 +10,7 @@ import { HttpError, badRequest, conflict, notFound } from "../http.js";
 import { instanteDesdeHoraLocal } from "../timezone.js";
 import { normalizarSeo } from "../seo.js";
 import { redirectsActivos } from "../redirects.js";
+import { filtrarPaginaPublica } from "../pages-visibilidad.js";
 import { ANALITICA_VACIA, sanearAtribucion, validarAnalitica } from "../marketing.js";
 
 export const publicRouter = Router();
@@ -130,12 +131,14 @@ publicRouter.get("/menus", async (_req, res) => {
 });
 
 publicRouter.get("/pages", async (_req, res) => {
-  const rows = await db("pages").where({ status: "published" }).orderBy("order").select("id", "slug", "title");
+  const rows = await filtrarPaginaPublica(db("pages"), db)
+    .orderBy("order")
+    .select("id", "slug", "title");
   res.json(rows);
 });
 
 publicRouter.get("/pages/:slug", async (req, res) => {
-  const page = await db("pages").where({ slug: req.params.slug, status: "published" }).first();
+  const page = await filtrarPaginaPublica(db("pages").where({ slug: req.params.slug }), db).first();
   if (!page) throw notFound("página no encontrada");
   const blocks = await db("blocks").where({ page_id: page.id }).orderBy("order");
   const visibleBlocks = blocks.filter((block) => shouldExposePublicBlock(page.slug, block));
