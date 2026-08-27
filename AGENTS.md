@@ -370,6 +370,12 @@ Los 25 puntos acordados con el cliente están implementados. Lo estructural:
   - **Medición por identificadores, no por JS pegado** (`api/src/marketing.ts`, clave `analytics`): GA4, GTM y Meta Pixel se configuran con su **ID**, validado por formato (`G-…`, `GTM-…`, dígitos); vacío = apagado. Es el "módulo propio" que prometía el mensaje de la clave retirada `scripts`. El loader (`apps/web/src/lib/analytics.ts`) inyecta el SDK oficial sólo si hay ID **y** consentimiento; es idempotente y revalida el ID antes de ponerlo en un `src`.
   - **Atribución de conversiones** (`apps/web/src/lib/attribution.ts` + columna `attribution` en `appointments` y `contact_messages`): captura `utm_*`/`gclid`/`fbclid` en la primera vista (first-touch de sesión) y los adjunta al turno o mensaje. Es dato de primera parte —no requiere consentimiento— saneado por allowlist en la API, mostrado en la bandeja y el CSV, y **nunca** en logs.
   - **CSP**: `script-src`/`connect-src` ya incluyen los hosts de Google (GA4/GTM) y Meta, en las **dos** CSP del sitio —Nginx (`setup-vps.sh`) y la `<meta>` de `apps/web/index.html`—, mantenidas en sincronía por `tests/analytics-csp.test.ts`. No cargan nada por sí mismos: sin ID configurado no hay script que los use. `default-src`/`object-src` siguen cerrados.
+✅ **Backlog desarrollable (sin producción)** — cinco mejoras administrables, cada una con migración reversible + pruebas + corrector:
+  - **Verificación de propiedad** (`api/src/seo.ts`, clave `seo.verification`): tokens de Search Console / Bing validados por forma; el front dibuja el `<meta>` sólo si hay token. Una fila con token roto se descarta al salir (nunca llega al `content`).
+  - **Redirects 301 administrables** (`api/src/redirects.ts` + tabla `redirects`): las rutas viejas salen del código a una tabla editable; middleware con caché en memoria (no consulta la base por request), garantía dura contra *open redirect* (destino siempre interno), y las cuatro legacy del portal quedan sembradas. `legacy-redirects.ts` queda como su definición canónica.
+  - **Papelera + publicación programada** (`deleted_at`/`publish_at` en `pages`): borrado recuperable con borrado definitivo aparte, y `publish_at` que oculta una página publicada hasta su fecha (`publish_at <= NOW()`, sin cron). El criterio de "página pública" vive en `api/src/pages-visibilidad.ts` y lo comparten lista, detalle y sitemap.
+  - **Historial de versiones** (tabla `page_revisions`): cada guardado de bloques archiva una foto (título, estado, SEO, bloques + autor), podada a las últimas 30; restaurar aplica una versión y archiva otra (reversible). El `slug` no se restaura (identidad/URL).
+  - **Newsletter propia** (tabla `newsletter_subscribers` + bloque `newsletter`): captura de correos sin proveedor externo —honeypot + rate-limit, idempotente, atribución saneada—, con bandeja y export CSV en el panel; el bloque se coloca donde el editor quiera.
 ✅ **SEO**: `sitemap.xml` + `robots.txt` dinámicos desde la DB (`api/src/index.ts`); meta por ruta con react-helmet-async; **prerender estático de `/estudios`** en el build (`apps/web/scripts/prerender.mjs`, parte de `pnpm --filter @sa/web build`) que inyecta la lista agrupada + meta + JSON-LD `ItemList` en `dist/estudios/index.html`, best-effort leyendo la API durante el deploy (servido por Nginx vía `try_files`, sin cambios de infra). La URL base de canonical/sitemap sale de `PUBLIC_SITE_URL` en `api/.env` (hoy apunta a la IP del VPS; cambiar al dominio real cuando esté en producción).
 ✅ **Panel admin nivelado** (deployado en prod) con componentes reutilizables:
   - `DataTable.tsx` — tabla genérica tipada: búsqueda accent-insensitive, orden por columna, paginación cliente, skeletons de carga, slot de acciones. Usada en `DoctorsListPage`.
@@ -389,11 +395,11 @@ Los 25 puntos acordados con el cliente están implementados. Lo estructural:
   - Toggle publicar/despublicar inline en `PagesListPage` y `NewsListPage`.
   - `LucideIcon.tsx` — renderiza iconos [lucide](https://lucide.dev/icons/) por nombre kebab-case (`heart-pulse`). Usa `lucide-react/dynamicIconImports` + `React.lazy` + `Suspense` (⚠️ en lucide-react 0.460 **no existe** el subpath `lucide-react/dynamic`). `isIconName()` valida antes de renderizar. El helper `IconBadge` de `EntityManager` muestra el icono si el valor es un nombre lucide válido, y si no cae al emoji tal cual — antes el nombre se imprimía como texto crudo y se superponía a los títulos.
 
-✅ **Tests automatizados**: `pnpm test` (vitest) — **1413 pruebas en 69 archivos**
-tras reconciliar en `main` la ronda de saneo de SVG/PDF, Biopsias y Usuarios
-(**1362 en 64**) con el round 1 de marketing (analítica, consentimiento y
-atribución; **1283 en 63**), sobre el baseline **1232 en 58** de la ronda de
-Logos y Page Builder. Las que necesitan base real se activan con
+✅ **Tests automatizados**: `pnpm test` (vitest) — **1467 pruebas en 76 archivos**
+tras el backlog desarrollable (verificación Search Console, redirects 301
+administrables, papelera + publicación programada, historial de versiones y
+captura de newsletter), sobre la reconciliación de SVG/PDF+Biopsias+Usuarios y
+marketing (**1413 en 69**). Las que necesitan base real se activan con
 `TEST_DATABASE=1` y se saltan solas si no está. CI corre la suite completa contra
 MySQL 8. El smoke testing manual del Agente 3 **complementa** la suite, no la
 reemplaza: lo que se puede afirmar con una prueba, se afirma con una prueba.

@@ -2315,3 +2315,73 @@ requieren registro de app OAuth y cuentas de negocio que no existen. Esto es
 Git. De `setup-vps.sh` se editó **sólo** la línea de la CSP —a pedido explícito
 del propietario— para permitir los hosts de analítica; no se tocó nada del
 aprovisionamiento, credenciales, TLS ni despliegue.
+
+---
+
+## 18. Backlog desarrollable — cinco mejoras sin producción (PRs #21–#23)
+
+Los ítems de *alcance claro* del runbook de puesta en producción: mejoras que se
+podían construir **sin** desplegar, sin DNS ni credenciales, sin inventar. Cada
+una es migración reversible + API + panel + pruebas obligatorias + corrector, y
+salió como PR Draft independiente sobre `main`. Antes de todo, una corrección:
+el merge del PR #20 había descartado la documentación del #19 (§16 y sus
+bullets), y se reconcilió sobre `main` con el conteo real de pruebas.
+
+### 18.1 Verificación de propiedad (Search Console / Bing)
+
+`api/src/seo.ts`, dentro de la clave `seo` (`verification.google`/`bing`). El
+token se valida por **forma** (allowlist `[A-Za-z0-9_-]`, 8–100), igual criterio
+que los IDs de medición: un valor con comillas o `<>` podría romper el atributo
+`content` del `<meta>`. Dos caminos: escritura todo-o-nada (400 que dice qué
+token falla) y lectura que salva cada token válido por su cuenta. `App.tsx`
+dibuja el `<meta name="google-site-verification">` / `msvalidate.01` sólo si hay
+token. (PR #21, fusionado.)
+
+### 18.2 Redirects 301 administrables
+
+`api/src/redirects.ts` + tabla `redirects`. Las rutas viejas salen del código a
+una tabla editable desde el panel. **Garantía dura contra open redirect**: el
+destino tiene que ser una ruta interna del mismo sitio (`/algo`, nunca `//host`,
+`\host` ni `https://…`), validado al guardar, al aplicar y al cargar la caché.
+El middleware lee de una **caché en memoria** (no consulta la base por request);
+arranca con las cuatro legacy del portal —a prueba de base caída— y se refresca
+al arrancar y tras cada cambio. `legacy-redirects.ts` queda como la definición
+canónica de esa lista, que `tests/sitemap.test.ts` mantiene en sincronía con el
+front y el Nginx. (PR #22, fusionado.)
+
+### 18.3 Papelera y publicación programada de páginas
+
+`deleted_at` y `publish_at` (DATETIME, no TIMESTAMP: sin el corte de 2038) en
+`pages`. Borrar es **recuperable** (papelera); el borrado definitivo sólo sale
+de la papelera y ahí sí arrastra los bloques. `publish_at` oculta una página
+publicada hasta su fecha, decidido **al leer** (`publish_at <= NOW()`, con el
+reloj de la base), sin cron. El criterio de "página pública" —publicada, no
+borrada, no agendada— vive en `api/src/pages-visibilidad.ts` y lo comparten la
+lista pública, el detalle por slug y el sitemap, para que no diverjan.
+
+### 18.4 Historial de versiones de páginas
+
+Tabla `page_revisions`. Cada `PUT /pages/:id/blocks` archiva —en la misma
+transacción que guarda— una foto (título, estado, SEO, bloques + autor), podada
+a las últimas 30 por página. `POST …/revisions/:id/restore` aplica una versión
+y **archiva otra** (restaurar es reversible). El `slug` no se restaura: es la
+identidad y la URL. El historial se va con la página en el borrado definitivo
+(cascade).
+
+### 18.5 Newsletter propia + export de leads
+
+Tabla `newsletter_subscribers` + bloque `newsletter`. Captura de correos **sin
+proveedor externo**: `POST /public/newsletter` con honeypot + rate-limit
+(un correo suelto no justifica CAPTCHA), **idempotente** (`onConflict(email)
+.ignore()`: reenviar no duplica ni revela si ya estaba), atribución saneada por
+la allowlist de marketing, y el correo nunca va a logs. El panel lista, exporta
+CSV (celda a prueba de inyección de fórmulas) y da de baja. El bloque se coloca
+donde el editor quiera —no se fuerza el formulario en ninguna página—.
+
+### 18.6 Qué quedó afuera (decisión de producto, no se inventa)
+
+Reactivar Noticias/Blog, roles y permisos granulares, y multi-idioma / buscador
+público / constructor de formularios: cada uno necesita definir alcance (qué
+puede cada rol, qué idiomas, qué se indexa, qué campos) antes de construir. Se
+dejan explícitamente pendientes de una decisión del propietario en vez de
+inventar una.
