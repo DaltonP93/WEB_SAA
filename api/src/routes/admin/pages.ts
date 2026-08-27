@@ -1,4 +1,5 @@
 import { Router } from "express";
+import type { Knex } from "knex";
 import { z } from "zod";
 import { db } from "../../db.js";
 import { sanitizeHtml, sanitizeMapEmbed, safeLinkHref } from "../../html.js";
@@ -140,6 +141,52 @@ pagesRouter.delete("/:id/definitivo", async (req, res) => {
   res.status(204).end();
 });
 
+/** JSON de columna: MariaDB lo devuelve como string, MySQL 8 ya parseado. */
+function parseJson(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+/** Cuántas versiones se conservan por página. Las más viejas se descartan. */
+const MAX_REVISIONES = 30;
+
+/**
+ * Archiva una foto del estado actual de la página (título, estado, SEO y
+ * bloques) y poda las versiones que exceden el tope. Corre dentro de la misma
+ * transacción que guardó, para que la versión archivada coincida exactamente
+ * con lo que quedó.
+ */
+async function archivarRevision(trx: Knex.Transaction, pageId: number, userId?: number): Promise<void> {
+  const page = await trx("pages").where({ id: pageId }).first();
+  if (!page) return;
+  const blocks = await trx("blocks").where({ page_id: pageId }).orderBy("order").select("type", "props", "order");
+  const snapshot = {
+    title: page.title,
+    slug: page.slug,
+    status: page.status,
+    seo: parseJson(page.seo) ?? null,
+    blocks: blocks.map((b) => ({ type: b.type, props: parseJson(b.props), order: b.order })),
+  };
+  await trx("page_revisions").insert({
+    page_id: pageId,
+    snapshot: JSON.stringify(snapshot),
+    created_by: userId ?? null,
+  });
+  // Poda: se conservan las MAX_REVISIONES más nuevas (id descendente).
+  const sobrantes = await trx("page_revisions")
+    .where({ page_id: pageId })
+    .orderBy("id", "desc")
+    .offset(MAX_REVISIONES)
+    .select("id");
+  if (sobrantes.length > 0) {
+    await trx("page_revisions").whereIn("id", sobrantes.map((r) => r.id)).del();
+  }
+}
+
 const blocksReplaceSchema = z.object({
   blocks: z.array(
     z.object({
@@ -173,6 +220,71 @@ pagesRouter.put("/:id/blocks", async (req, res) => {
       });
     }
     await trx("pages").where({ id: pageId }).update({ updated_at: trx.fn.now() });
+    // Cada guardado deja una versión en el historial, con lo que quedó recién
+    // escrito y quién lo guardó.
+    await archivarRevision(trx, pageId, req.user?.id);
+  });
+  res.json({ ok: true });
+});
+
+/** Historial de versiones de una página (más nueva primero). */
+pagesRouter.get("/:id/revisions", async (req, res) => {
+  const pageId = Number(req.params.id);
+  const page = await db("pages").where({ id: pageId }).first();
+  if (!page) return res.status(404).json({ error: "no encontrada" });
+  const rows = await db("page_revisions as r")
+    .leftJoin("users as u", "u.id", "r.created_by")
+    .where("r.page_id", pageId)
+    .orderBy("r.id", "desc")
+    .select("r.id", "r.created_at", "r.created_by", "r.snapshot", "u.name as author_name");
+  res.json(
+    rows.map((r) => {
+      const snap = parseJson(r.snapshot) as any;
+      return {
+        id: r.id,
+        created_at: r.created_at,
+        author: r.author_name ?? null,
+        title: snap?.title ?? null,
+        blockCount: Array.isArray(snap?.blocks) ? snap.blocks.length : 0,
+      };
+    }),
+  );
+});
+
+/**
+ * Restaura una versión: aplica su título, estado, SEO y bloques como el estado
+ * actual, y archiva una versión nueva (así restaurar también se puede deshacer).
+ *
+ * El `slug` NO se restaura: es la identidad y la URL de la página. Cambiarlo al
+ * volver a una versión vieja rompería enlaces y podría chocar con otra página.
+ */
+pagesRouter.post("/:id/revisions/:revId/restore", async (req, res) => {
+  const pageId = Number(req.params.id);
+  const revId = Number(req.params.revId);
+  const rev = await db("page_revisions").where({ id: revId, page_id: pageId }).first();
+  if (!rev) return res.status(404).json({ error: "versión no encontrada" });
+  const snap = parseJson(rev.snapshot) as any;
+  if (!snap || typeof snap !== "object") return res.status(422).json({ error: "versión ilegible" });
+
+  const bloques: any[] = Array.isArray(snap.blocks) ? snap.blocks : [];
+  await db.transaction(async (trx) => {
+    await trx("pages").where({ id: pageId }).update({
+      title: snap.title,
+      status: snap.status === "published" ? "published" : "draft",
+      seo: snap.seo ? JSON.stringify(snap.seo) : null,
+      updated_at: trx.fn.now(),
+    });
+    await trx("blocks").where({ page_id: pageId }).del();
+    for (let i = 0; i < bloques.length; i++) {
+      const b = bloques[i];
+      await trx("blocks").insert({
+        page_id: pageId,
+        type: String(b.type),
+        props: JSON.stringify(b.props ?? {}),
+        order: i,
+      });
+    }
+    await archivarRevision(trx, pageId, req.user?.id);
   });
   res.json({ ok: true });
 });

@@ -56,6 +56,22 @@ export default function PageBuilderPage() {
     mutationFn: async () => (await api.put(`/admin/pages/${pageId}/blocks`, { blocks: blocks.map(({ type, props }) => ({ type, props })) })).data,
   });
 
+  const [verHistorial, setVerHistorial] = useState(false);
+  const revisiones = useQuery({
+    queryKey: ["adm-page-rev", pageId],
+    queryFn: async () => (await api.get(`/admin/pages/${pageId}/revisions`)).data as any[],
+    enabled: verHistorial,
+  });
+  const restaurar = useMutation({
+    mutationFn: async (revId: number) => (await api.post(`/admin/pages/${pageId}/revisions/${revId}/restore`)).data,
+    onSuccess: () => {
+      toast.success("Versión restaurada");
+      qc.invalidateQueries({ queryKey: ["adm-page", pageId] });
+      qc.invalidateQueries({ queryKey: ["adm-page-rev", pageId] });
+    },
+    onError: () => toast.error("No se pudo restaurar"),
+  });
+
   useUnsavedGuard(dirty && !saveMeta.isPending && !saveBlocks.isPending);
 
   async function saveAll() {
@@ -95,9 +111,37 @@ export default function PageBuilderPage() {
         <h1 className="text-2xl font-bold">{page.title}</h1>
         <div className="flex gap-2">
           <a href={`${previewBase.replace(/\/$/, "")}/${page.slug === "home" ? "" : page.slug}`} target="_blank" rel="noreferrer" className="btn-secondary">Ver en sitio</a>
+          <button onClick={() => setVerHistorial((v) => !v)} className="btn-secondary">Historial</button>
           <button onClick={saveAll} className="btn-primary btn-lg">Guardar</button>
         </div>
       </div>
+
+      {verHistorial && (
+        <div className="card p-4 mb-6">
+          <h2 className="font-semibold mb-1">Historial de versiones</h2>
+          <p className="text-xs text-gray-500 mb-3">
+            Cada vez que guardás queda una versión. Restaurar aplica los bloques de esa versión como
+            estado actual; también queda guardada, así que restaurar se puede deshacer.
+          </p>
+          {revisiones.isLoading && <div className="text-sm text-gray-500">Cargando…</div>}
+          {revisiones.data && revisiones.data.length === 0 && (
+            <div className="text-sm text-gray-500">Todavía no hay versiones guardadas.</div>
+          )}
+          <div className="divide-y">
+            {(revisiones.data ?? []).map((r: any) => (
+              <div key={r.id} className="py-2 flex items-center justify-between text-sm">
+                <div>
+                  <span className="font-medium">{r.created_at ? new Date(r.created_at).toLocaleString() : `#${r.id}`}</span>
+                  <span className="text-gray-500"> · {r.blockCount} bloque{r.blockCount === 1 ? "" : "s"}{r.author ? ` · ${r.author}` : ""}</span>
+                </div>
+                <button className="btn-secondary" disabled={restaurar.isPending} onClick={() => restaurar.mutate(r.id)}>
+                  Restaurar
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="card p-4 mb-6 grid md:grid-cols-4 gap-3">
         <div><label className="label">Título</label><input className="input" value={page.title} onChange={(e) => { setPage({ ...page, title: e.target.value }); setDirty(true); }} /></div>
