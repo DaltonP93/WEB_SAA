@@ -191,6 +191,11 @@ const blockPropsSchemas = {
     heading: z.string().max(180).optional().or(z.literal("")),
     logos: z.array(z.object({ imageUrl: z.string().trim().min(1).max(500), alt: z.string().max(180).optional().or(z.literal("")), href: urlLike }).strip()).max(30),
   }).strip(),
+  newsletter: z.object({
+    heading: z.string().max(180).optional().or(z.literal("")),
+    text: z.string().max(400).optional().or(z.literal("")),
+    buttonLabel: z.string().max(60).optional().or(z.literal("")),
+  }).strip(),
   spacer: z.object({ height: z.number().int().min(0).max(240) }).strip(),
 } satisfies Record<BlockType, z.ZodTypeAny>;
 

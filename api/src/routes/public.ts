@@ -652,6 +652,42 @@ publicRouter.post("/appointments", formsLimiter, async (req, res) => {
   }
 });
 
+/**
+ * Suscripción a novedades. Un solo campo (email) más el honeypot y el
+ * rate-limit: un correo suelto no justifica un CAPTCHA, y la trampa + el límite
+ * por conexión frenan el spam automatizado. Idempotente: reenviar el mismo
+ * correo no crea duplicados ni revela si ya estaba (no hay enumeración).
+ */
+const newsletterSchema = z.object({
+  email: z.string().trim().max(190).email(),
+  source: plainText(64).optional(),
+  attribution: z.record(z.string(), z.unknown()).optional(),
+  website: z.string().max(200).optional(),
+});
+publicRouter.post("/newsletter", formsLimiter, async (req, res) => {
+  if (isHoneypotFilled(req.body)) {
+    console.warn("[spam] honeypot activado en /newsletter");
+    return res.status(201).json({ ok: true });
+  }
+  const parsed = newsletterSchema.safeParse(req.body);
+  if (!parsed.success) {
+    throw badRequest("payload invalido", parsed.error.flatten().fieldErrors);
+  }
+  const d = parsed.data;
+  const atribucion = sanearAtribucion(d.attribution);
+  // `onConflict(email).ignore()`: si ya estaba, no falla ni duplica, y la
+  // respuesta es la misma que para un alta nueva.
+  await db("newsletter_subscribers")
+    .insert({
+      email: d.email,
+      source: d.source ?? null,
+      attribution: atribucion ? JSON.stringify(atribucion) : null,
+    })
+    .onConflict("email")
+    .ignore();
+  res.status(201).json({ ok: true });
+});
+
 const contactSchema = z.object({
   name: plainText(160).pipe(z.string().min(2, "nombre demasiado corto")),
   email: z.string().trim().max(190).email(),

@@ -28,6 +28,7 @@ const SECTIONS: { title: string; items: NavItem[] }[] = [
       { to: "/turnos", label: "Turnos", icon: "calendar-check", badge: "turnos" },
       { to: "/datos-pendientes", label: "Datos pendientes", icon: "clipboard-list" },
       { to: "/messages", label: "Mensajes", icon: "mail", badge: "msg" },
+      { to: "/newsletter", label: "Newsletter", icon: "mail-plus" },
     ],
   },
   {
