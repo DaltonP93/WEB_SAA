@@ -22,6 +22,7 @@ import type {
   CtaProps,
   StatsProps,
   LogosProps,
+  NewsletterProps,
   SpacerProps,
 } from "@sa/shared/blocks";
 
@@ -46,6 +47,7 @@ const ScheduleTable = lazy(() => import("./ScheduleTable"));
 const Cta = lazy(() => import("./Cta"));
 const Stats = lazy(() => import("./Stats"));
 const Logos = lazy(() => import("./Logos"));
+const Newsletter = lazy(() => import("./Newsletter"));
 const Spacer = lazy(() => import("./Spacer"));
 
 type BlockPropsMap = {
@@ -70,6 +72,7 @@ type BlockPropsMap = {
   cta: CtaProps;
   stats: StatsProps;
   logos: LogosProps;
+  newsletter: NewsletterProps;
   spacer: SpacerProps;
 };
 
@@ -95,6 +98,7 @@ const MAP: Record<BlockType, React.ComponentType<any>> = {
   cta: Cta,
   stats: Stats,
   logos: Logos,
+  newsletter: Newsletter,
   spacer: Spacer,
 };
 

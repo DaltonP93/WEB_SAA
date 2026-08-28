@@ -10,7 +10,9 @@ import { HttpError, badRequest, conflict, notFound } from "../http.js";
 import { instanteDesdeHoraLocal } from "../timezone.js";
 import { normalizarSeo } from "../seo.js";
 import { redirectsActivos } from "../redirects.js";
+import { filtrarPaginaPublica } from "../pages-visibilidad.js";
 import { ANALITICA_VACIA, sanearAtribucion, validarAnalitica } from "../marketing.js";
+import { CONSENT_VERSION, nuevoTokenBaja } from "../newsletter.js";
 
 export const publicRouter = Router();
 
@@ -130,12 +132,14 @@ publicRouter.get("/menus", async (_req, res) => {
 });
 
 publicRouter.get("/pages", async (_req, res) => {
-  const rows = await db("pages").where({ status: "published" }).orderBy("order").select("id", "slug", "title");
+  const rows = await filtrarPaginaPublica(db("pages"), db)
+    .orderBy("order")
+    .select("id", "slug", "title");
   res.json(rows);
 });
 
 publicRouter.get("/pages/:slug", async (req, res) => {
-  const page = await db("pages").where({ slug: req.params.slug, status: "published" }).first();
+  const page = await filtrarPaginaPublica(db("pages").where({ slug: req.params.slug }), db).first();
   if (!page) throw notFound("página no encontrada");
   const blocks = await db("blocks").where({ page_id: page.id }).orderBy("order");
   const visibleBlocks = blocks.filter((block) => shouldExposePublicBlock(page.slug, block));
@@ -647,6 +651,80 @@ publicRouter.post("/appointments", formsLimiter, async (req, res) => {
     console.error(`[appointments] no se pudo registrar la solicitud (${code})`);
     throw new HttpError(500, "no se pudo registrar la solicitud");
   }
+});
+
+/**
+ * Suscripción a novedades. Un solo campo (email) más el honeypot y el
+ * rate-limit: un correo suelto no justifica un CAPTCHA, y la trampa + el límite
+ * por conexión frenan el spam automatizado. Idempotente: reenviar el mismo
+ * correo no crea duplicados ni revela si ya estaba (no hay enumeración); si
+ * estaba dado de baja, lo reactiva.
+ *
+ * `source` admite una ruta completa (no se trunca a un valor chico). El
+ * consentimiento lo estampa el servidor —`consent_at` y `consent_version`—: el
+ * cliente no puede afirmar cuándo ni qué aceptó.
+ */
+const newsletterSchema = z.object({
+  email: z.string().trim().max(190).email(),
+  source: plainText(512).optional(),
+  attribution: z.record(z.string(), z.unknown()).optional(),
+  website: z.string().max(200).optional(),
+});
+publicRouter.post("/newsletter", formsLimiter, async (req, res) => {
+  if (isHoneypotFilled(req.body)) {
+    console.warn("[spam] honeypot activado en /newsletter");
+    return res.status(201).json({ ok: true });
+  }
+  const parsed = newsletterSchema.safeParse(req.body);
+  if (!parsed.success) {
+    throw badRequest("payload invalido", parsed.error.flatten().fieldErrors);
+  }
+  const d = parsed.data;
+  const atribucion = sanearAtribucion(d.attribution);
+  // Alta nueva o reactivación de una baja: en conflicto de email se actualiza
+  // sólo el consentimiento y el estado, conservando la atribución original
+  // (first-touch) y el token de baja ya emitido. Nunca se registra el email.
+  await db("newsletter_subscribers")
+    .insert({
+      email: d.email,
+      source: d.source ?? null,
+      attribution: atribucion ? JSON.stringify(atribucion) : null,
+      consent_at: db.fn.now(),
+      consent_version: CONSENT_VERSION,
+      active: true,
+      unsubscribed_at: null,
+      unsubscribe_token: nuevoTokenBaja(),
+    })
+    .onConflict("email")
+    // Reactivar una baja: se renueva el consentimiento y se limpia la marca de
+    // baja (`unsubscribed_at` vuelve a NULL). Se conserva la atribución
+    // first-touch y el token ya emitido.
+    .merge(["consent_at", "consent_version", "active", "unsubscribed_at"]);
+  res.status(201).json({ ok: true });
+});
+
+/**
+ * Baja pública por token opaco. No revela si el token existía (siempre 200):
+ * quien tenga el token da de baja ese correo; quien no, no aprende nada. La
+ * baja **no borra**: marca inactivo y sella `unsubscribed_at` (cuándo ocurrió),
+ * conservando la evidencia. El token no se registra en logs.
+ *
+ * **Alcance:** el endpoint queda preparado, pero el enlace de baja se le
+ * entregará a la persona recién cuando exista un proveedor de envío de correos
+ * (hoy no hay dónde incluir el enlace en un email). Hasta entonces la baja se
+ * opera desde el panel. No es todavía un flujo de baja plenamente operable de
+ * cara al público.
+ */
+const bajaSchema = z.object({ token: z.string().min(10).max(200) });
+publicRouter.post("/newsletter/baja", formsLimiter, async (req, res) => {
+  const parsed = bajaSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(200).json({ ok: true });
+  }
+  await db("newsletter_subscribers")
+    .where({ unsubscribe_token: parsed.data.token })
+    .update({ active: false, unsubscribed_at: db.fn.now() });
+  res.status(200).json({ ok: true });
 });
 
 const contactSchema = z.object({

@@ -134,6 +134,11 @@ const SCHEMAS: Record<BlockType, FieldDef[]> = {
     { key: "heading", label: "Encabezado", kind: "text" },
     { key: "defaultSpecialtyId", label: "Especialidad por defecto (id)", kind: "number" },
   ],
+  newsletter: [
+    { key: "heading", label: "Encabezado", kind: "text" },
+    { key: "text", label: "Texto", kind: "textarea" },
+    { key: "buttonLabel", label: "Texto del botón", kind: "text" },
+  ],
   contactChannels: [
     { key: "heading", label: "Encabezado", kind: "text" },
     { key: "text", label: "Texto", kind: "textarea" },

@@ -20,6 +20,7 @@ export type BlockType =
   | "cta"
   | "stats"
   | "logos"
+  | "newsletter"
   | "spacer";
 
 export interface BaseBlock<T extends BlockType, P> {
@@ -157,6 +158,17 @@ export interface AppointmentFormProps {
 }
 
 /**
+ * Bloque de suscripción a novedades. Un título, un texto y el campo de correo.
+ * El correo se guarda en `newsletter_subscribers` (captura propia, sin proveedor
+ * externo); la lista y el export están en el panel.
+ */
+export interface NewsletterProps {
+  heading?: string;
+  text?: string;
+  buttonLabel?: string;
+}
+
+/**
  * Bloque de canales de contacto.
  *
  * Los datos NO viven en el bloque: se administran en Configuración → Canales de
@@ -288,6 +300,7 @@ export type Block =
   | BaseBlock<"cta", CtaProps>
   | BaseBlock<"stats", StatsProps>
   | BaseBlock<"logos", LogosProps>
+  | BaseBlock<"newsletter", NewsletterProps>
   | BaseBlock<"spacer", SpacerProps>;
 
 export const BLOCK_REGISTRY: { type: BlockType; label: string; defaults: unknown }[] = [
@@ -324,5 +337,6 @@ export const BLOCK_REGISTRY: { type: BlockType; label: string; defaults: unknown
   { type: "cta", label: "Llamado a la accion", defaults: { title: "", ctaLabel: "Ver mas", ctaHref: "#", variant: "primary" } satisfies CtaProps },
   { type: "stats", label: "Estadisticas", defaults: { items: [] } satisfies StatsProps },
   { type: "logos", label: "Logos", defaults: { logos: [] } satisfies LogosProps },
+  { type: "newsletter", label: "Newsletter", defaults: { heading: "Recibí nuestras novedades", text: "", buttonLabel: "Suscribirme" } satisfies NewsletterProps },
   { type: "spacer", label: "Espacio", defaults: { height: 40 } satisfies SpacerProps },
 ];

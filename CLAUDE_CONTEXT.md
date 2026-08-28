@@ -2315,3 +2315,208 @@ requieren registro de app OAuth y cuentas de negocio que no existen. Esto es
 Git. De `setup-vps.sh` se editó **sólo** la línea de la CSP —a pedido explícito
 del propietario— para permitir los hosts de analítica; no se tocó nada del
 aprovisionamiento, credenciales, TLS ni despliegue.
+
+---
+
+## 18. Backlog desarrollable — cinco mejoras sin producción (PRs #21–#23)
+
+Los ítems de *alcance claro* del runbook de puesta en producción: mejoras que se
+podían construir **sin** desplegar, sin DNS ni credenciales, sin inventar. Cada
+una es migración reversible + API + panel + pruebas obligatorias + corrector, y
+salió como PR Draft independiente sobre `main`. Antes de todo, una corrección:
+el merge del PR #20 había descartado la documentación del #19 (§16 y sus
+bullets), y se reconcilió sobre `main` con el conteo real de pruebas.
+
+### 18.1 Verificación de propiedad (Search Console / Bing)
+
+`api/src/seo.ts`, dentro de la clave `seo` (`verification.google`/`bing`). El
+token se valida por **forma** (allowlist `[A-Za-z0-9_-]`, 8–100), igual criterio
+que los IDs de medición: un valor con comillas o `<>` podría romper el atributo
+`content` del `<meta>`. Dos caminos: escritura todo-o-nada (400 que dice qué
+token falla) y lectura que salva cada token válido por su cuenta. `App.tsx`
+dibuja el `<meta name="google-site-verification">` / `msvalidate.01` sólo si hay
+token. (PR #21, fusionado.)
+
+### 18.2 Redirects 301 administrables
+
+`api/src/redirects.ts` + tabla `redirects`. Las rutas viejas salen del código a
+una tabla editable desde el panel. **Garantía dura contra open redirect**: el
+destino tiene que ser una ruta interna del mismo sitio (`/algo`, nunca `//host`,
+`\host` ni `https://…`), validado al guardar, al aplicar y al cargar la caché.
+El middleware lee de una **caché en memoria** (no consulta la base por request);
+arranca con las cuatro legacy del portal —a prueba de base caída— y se refresca
+al arrancar y tras cada cambio. `legacy-redirects.ts` queda como la definición
+canónica de esa lista, que `tests/sitemap.test.ts` mantiene en sincronía con el
+front y el Nginx. (PR #22, fusionado.)
+
+### 18.3 Papelera y publicación programada de páginas
+
+`deleted_at` y `publish_at` (DATETIME, no TIMESTAMP: sin el corte de 2038) en
+`pages`. Borrar es **recuperable** (papelera); el borrado definitivo sólo sale
+de la papelera y ahí sí arrastra los bloques. `publish_at` oculta una página
+publicada hasta su fecha, decidido **al leer** (`publish_at <= NOW()`, con el
+reloj de la base), sin cron. El criterio de "página pública" —publicada, no
+borrada, no agendada— vive en `api/src/pages-visibilidad.ts` y lo comparten la
+lista pública, el detalle por slug y el sitemap, para que no diverjan.
+
+### 18.4 Historial de versiones de páginas
+
+Tabla `page_revisions`. Cada `PUT /pages/:id/blocks` archiva —en la misma
+transacción que guarda— una foto (título, estado, SEO, bloques + autor), podada
+a las últimas 30 por página. `POST …/revisions/:id/restore` aplica una versión
+y **archiva otra** (restaurar es reversible). El `slug` no se restaura: es la
+identidad y la URL. El historial se va con la página en el borrado definitivo
+(cascade).
+
+### 18.5 Newsletter propia + export de leads
+
+Tabla `newsletter_subscribers` + bloque `newsletter`. Captura de correos **sin
+proveedor externo**: `POST /public/newsletter` con honeypot + rate-limit
+(un correo suelto no justifica CAPTCHA), **idempotente** (`onConflict(email)
+.ignore()`: reenviar no duplica ni revela si ya estaba), atribución saneada por
+la allowlist de marketing, y el correo nunca va a logs. El panel lista, exporta
+CSV (celda a prueba de inyección de fórmulas) y da de baja. El bloque se coloca
+donde el editor quiera —no se fuerza el formulario en ninguna página—.
+
+### 18.6 Qué quedó afuera (decisión de producto, no se inventa)
+
+Reactivar Noticias/Blog, roles y permisos granulares, y multi-idioma / buscador
+público / constructor de formularios: cada uno necesita definir alcance (qué
+puede cada rol, qué idiomas, qué se indexa, qué campos) antes de construir. Se
+dejan explícitamente pendientes de una decisión del propietario en vez de
+inventar una.
+
+### 18.7 Ronda correctiva del PR #23 (mismo PR, se mantiene en Draft)
+
+Siete correcciones sobre lo de §18.3–§18.5, sin abrir otro PR ni tocar el
+historial Git. Reemplazan el comportamiento que describen esas subsecciones.
+
+- **Historial realmente recuperable + guardado atómico (§18.4 corregido).** El
+  problema: `PUT /pages/:id/blocks` archivaba *después* de reemplazar, así que la
+  **primera** edición de una página preexistente perdía su contenido original —lo
+  que archivaba era el nuevo—. Ahora el archivado es **antes de reemplazar**
+  (`archivarActual` corre primero dentro de la transacción), de modo que la
+  primera edición ya deja recuperable el estado original, y restaurar archiva
+  primero el estado actual (restaurar es reversible). Nuevo endpoint transaccional
+  `PUT /pages/:id/content` que recibe **metadatos + bloques** y los guarda en una
+  sola operación: valida los bloques *antes* de la transacción, y dentro hace
+  cargar-fila-viva → archivar → actualizar meta → reemplazar bloques; si algo
+  falla revierte entero (nunca metadatos nuevos con bloques a medias). La foto
+  sale de una sola lectura (título/estado/SEO/`publish_at`/bloques coherentes). El
+  Page Builder usa `/content`; `/blocks` se conserva por compatibilidad con el
+  mismo contrato. Poda a 30 intacta.
+- **Restauración segura en el panel.** `PageBuilderPage` restaura con
+  `ConfirmDialog`; si hay cambios locales sin guardar, el diálogo **advierte que
+  se descartarán**. Guardar y Restaurar quedan deshabilitados mientras una
+  operación está en curso; al terminar se refrescan página/bloques/historial y se
+  limpia `dirty`. Un guardado que la API rechaza (p. ej. la página se movió a la
+  papelera en otra pestaña) muestra un error accionable, no un clic mudo.
+- **Publicación programada desde borrador.** "Programar" desde un borrador manda
+  `status:published` + `publish_at` futuro en **una** operación; el sitio no la
+  muestra hasta la fecha (lista, detalle y sitemap), y aparece sola cuando pasa.
+  El panel distingue Borrador / Publicada / Programada y rechaza fechas pasadas
+  con aviso (para publicar ya, "Publicar").
+- **Papelera consistente en todos los endpoints.** `cargarPaginaViva` rechaza con
+  404 cualquier edición (metadatos, `/content`, `/blocks`) sobre una fila con
+  `deleted_at`. El borrado definitivo es un **DELETE condicional atómico**
+  (`whereNotNull("deleted_at").del()`, 404 si no afecta filas), sin la ventana de
+  "consultar y después borrar".
+- **Newsletter mínima operable, sin proveedor externo.** `source` alineado a la
+  ruta real (columna `varchar(512)`, sin truncar a 64); el bloque usa `useId()`
+  para que dos formularios en una página no compartan el id del input; estados de
+  carga/error/reintento en el bloque y en la bandeja. **Evidencia de
+  consentimiento**: texto de finalidad explícito, `consent_at`/`consent_version`
+  puestos por el servidor. **Baja pública** por token opaco (`unsubscribe_token`,
+  `randomBytes` base64url) que no borra la fila (marca inactivo, conserva
+  evidencia) y responde siempre 200 (sin enumeración). La bandeja pagina y busca;
+  el CSV lleva estado + consentimiento y **no** el token; ni correo ni token van a
+  logs. Mensaje de éxito preciso ("Registramos tu solicitud para recibir
+  novedades"): no afirma que exista envío automático. **No** se integró
+  Mailchimp/Brevo/Meta ni ningún proveedor: no hay cuenta ni credenciales.
+- **Cobertura DOM real del panel** (no una respuesta de API haciéndose pasar por
+  cobertura de pantalla): `tests/page-builder-panel.test.tsx` (restaurar con
+  cambios sin guardar, botones bloqueados durante la operación diferida, guardado
+  404 accionable por `/content`), `tests/pages-list-panel.test.tsx` (distinguir los
+  tres estados, programar un borrador, rechazar fecha pasada),
+  `tests/newsletter-block.test.tsx` (dos bloques con id distinto, error + reintento)
+  y `tests/newsletter-panel.test.tsx` (carga, error+reintento, paginación,
+  búsqueda, export, baja sin borrar).
+
+**Corrector — cada defecto se reintrodujo temporalmente y la prueba lo detectó
+(RED), luego se revirtió:** (1) archivar después del primer guardado → la versión
+A no queda en el historial; (2) guardado dividido que deja los metadatos a medias
+→ el título cambia pese al bloque inválido; (3) programar sin cambiar el draft →
+`status` no queda `published`; (4) permitir guardar bloques de una página en la
+papelera → 200 en vez de 404; (5) restaurar sin confirmación → no aparece el
+aviso de descarte; (6) `source` limitado a 64 → la ruta larga se trunca; (7) id
+fijo `nl-email` → los dos inputs comparten id; (8) ausencia de
+consentimiento/baja → `consent_at` nulo / la baja no marca inactivo.
+
+**Validación:** suite completa **1486/1486 en 80 archivos** (MariaDB local;
+`typecheck` limpio; `build` de API/web/admin; prerender real de `/estudios` con
+JSON-LD contra la API viva; migraciones up/down/up 33↔33 reversibles;
+`audit:prod` sin vulnerabilidades; `check:secrets` limpio; `gitleaks` sobre el
+árbol sin hallazgos). CI corre la suite contra **MySQL 8**.
+
+> **El historial Git NO está limpio.** `gitleaks` sobre el historial completo
+> sigue reportando **1 hallazgo**: `scripts/deploy/setup-vps.sh`
+> (`shell-default-credential`) introducido en el commit `9ced09d`. No se rota ni
+> se purga acá —reescribir la historia y rotar la credencial es decisión del
+> propietario del repo—. **El NO-GO de producción sigue vigente** hasta que el
+> propietario resuelva la rotación/purga.
+
+### 18.8 Segunda ronda correctiva del PR #23 (mismo PR, se mantiene en Draft)
+
+Ajustes finos sobre §18.7, sin abrir otro PR ni tocar el historial Git.
+
+- **Bandeja de newsletter sin filas anteriores accionables.** Mientras la
+  consulta cambia —paso de página, búsqueda o refetch tras una mutación— se
+  muestran las filas de la respuesta anterior (`keepPreviousData`). Ahora, con
+  `query.isFetching || query.isPlaceholderData`, la tabla se marca `aria-busy`,
+  se deshabilitan Dar de baja / Reactivar / Eliminar y Anterior / Siguiente, y se
+  indica visualmente ("· actualizando…", opacidad). Así no se muta ni se borra una
+  fila que quizá ya no corresponde a lo que se está por mostrar.
+- **Offset corregido tras mutaciones.** Si una baja, eliminación o cambio del
+  total deja el offset fuera de rango, un `useEffect` vuelve a la última página
+  válida (sólo con datos frescos, no el placeholder) en vez de mostrar una tabla
+  vacía con un rango imposible. Cubre eliminar la única fila de la última página.
+- **Semántica de publicación explícita.** *Publicar* = `published` +
+  `publish_at: NULL`; *Despublicar* = `draft` + `publish_at: NULL` (un borrador
+  que conservara una agenda vieja se re-publicaría oculto; limpiar la fecha evita
+  ese estado confuso); *Programar* = `published` + fecha futura; *Quitar
+  programación* = `publish_at: NULL` dejando `published`. La decisión de "fecha
+  futura" **vive en el backend**: nuevo `POST /admin/pages/:id/schedule` que
+  interpreta la hora de pared en `America/Asuncion` (`instanteDesdeHoraLocal`) y
+  rechaza el pasado, en vez de validar con `new Date(...)` en la zona accidental
+  del navegador. El panel manda la hora de pared cruda; la comparación contra
+  `Date.now()` es entre instantes absolutos, independiente de zonas.
+- **Restauración fiel de `publish_at`.** El snapshot guarda `publish_at` como
+  texto ISO con `Z` (de `JSON.stringify(Date)`). Escribir ese string crudo en la
+  columna `DATETIME` es frágil: con la zona del proceso distinta de UTC corre el
+  instante, y MySQL 8 estricto puede rechazar el `T`/`Z`. Se normaliza a `Date` al
+  restaurar, así el instante restaurado es idéntico al archivado (probado con la
+  zona del proceso en `America/New_York`, verificando el instante exacto y la
+  visibilidad pública antes/después de la fecha).
+- **Alcance de la baja pública, aclarado.** El token y el endpoint quedan
+  **preparados**, no descritos como un flujo de baja plenamente operable: el
+  enlace se incorporará cuando exista un proveedor de envío. El token no se expone
+  en el panel, el CSV ni los logs. El texto de consentimiento y su versión tienen
+  **una sola fuente** (`@sa/shared/consent`), consumida por el bloque público y el
+  servidor; una prueba falla si el texto visible y la versión registrada divergen.
+  Se agregó `unsubscribed_at` (puesto por el servidor al dar de baja, limpiado al
+  reactivar), incluido en la bandeja y el CSV, **nunca** el token.
+
+**Corrector:** cada defecto se reintrodujo y la prueba lo detectó (RED), luego se
+revirtió: (1) acciones habilitadas sobre el placeholder; (2) offset inválido tras
+eliminar; (3) Publicar conservando `publish_at`; (4) fecha validada en la zona del
+navegador; (5) restauración que corre/rompe `publish_at` (bajo `TZ` ≠ UTC el ISO
+crudo hace fallar el restore); (6) textos de consentimiento divergentes; (7) baja
+sin `unsubscribed_at`.
+
+**Validación:** suite completa **1497/1497 en 82 archivos** (MariaDB local;
+`typecheck` limpio; `build` de API/web/admin; prerender real de `/estudios` con
+JSON-LD contra la API viva; migraciones up/down/up 33↔33 reversibles con la
+columna `unsubscribed_at`; `audit:prod` sin vulnerabilidades; `check:secrets`
+limpio; `gitleaks` sobre el árbol sin hallazgos). CI corre la suite contra
+**MySQL 8**. El hallazgo histórico `9ced09d` **sigue vigente** (ver el aviso de
+arriba): no se rota ni se purga, y no se afirma que el historial esté limpio.

@@ -11,6 +11,7 @@ import { db, checkDatabase } from "./db.js";
 import { asyncHandler, errorHandler, withTimeout, wrapRouterAsync } from "./http.js";
 import { rutaSinValores } from "./log-seguro.js";
 import { redirectsMiddleware, cargarRedirects } from "./redirects.js";
+import { filtrarPaginaPublica } from "./pages-visibilidad.js";
 import { warnIfCaptchaMisconfigured } from "./captcha.js";
 
 export const PORT = Number(process.env.PORT ?? 4000);
@@ -133,7 +134,7 @@ export function createApp() {
     // La sección Noticias se retiró del sitio público, así que no se indexa.
     const [pages, specialties, doctors] = await withTimeout(
       Promise.all([
-        db("pages").where({ status: "published" }).select("slug", "updated_at"),
+        filtrarPaginaPublica(db("pages"), db).select("slug", "updated_at"),
         db("specialties").select("slug"),
         db("doctors").select("slug"),
       ]),
