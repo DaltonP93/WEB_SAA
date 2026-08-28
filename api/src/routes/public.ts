@@ -692,18 +692,28 @@ publicRouter.post("/newsletter", formsLimiter, async (req, res) => {
       consent_at: db.fn.now(),
       consent_version: CONSENT_VERSION,
       active: true,
+      unsubscribed_at: null,
       unsubscribe_token: nuevoTokenBaja(),
     })
     .onConflict("email")
-    .merge(["consent_at", "consent_version", "active"]);
+    // Reactivar una baja: se renueva el consentimiento y se limpia la marca de
+    // baja (`unsubscribed_at` vuelve a NULL). Se conserva la atribución
+    // first-touch y el token ya emitido.
+    .merge(["consent_at", "consent_version", "active", "unsubscribed_at"]);
   res.status(201).json({ ok: true });
 });
 
 /**
  * Baja pública por token opaco. No revela si el token existía (siempre 200):
  * quien tenga el token da de baja ese correo; quien no, no aprende nada. La
- * baja **no borra**: marca inactivo, conservando la evidencia. El token no se
- * registra en logs.
+ * baja **no borra**: marca inactivo y sella `unsubscribed_at` (cuándo ocurrió),
+ * conservando la evidencia. El token no se registra en logs.
+ *
+ * **Alcance:** el endpoint queda preparado, pero el enlace de baja se le
+ * entregará a la persona recién cuando exista un proveedor de envío de correos
+ * (hoy no hay dónde incluir el enlace en un email). Hasta entonces la baja se
+ * opera desde el panel. No es todavía un flujo de baja plenamente operable de
+ * cara al público.
  */
 const bajaSchema = z.object({ token: z.string().min(10).max(200) });
 publicRouter.post("/newsletter/baja", formsLimiter, async (req, res) => {
@@ -713,7 +723,7 @@ publicRouter.post("/newsletter/baja", formsLimiter, async (req, res) => {
   }
   await db("newsletter_subscribers")
     .where({ unsubscribe_token: parsed.data.token })
-    .update({ active: false });
+    .update({ active: false, unsubscribed_at: db.fn.now() });
   res.status(200).json({ ok: true });
 });
 

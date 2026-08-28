@@ -24,6 +24,7 @@ function serialize(row: any) {
     active: Boolean(row.active),
     consent_at: row.consent_at,
     consent_version: row.consent_version ?? null,
+    unsubscribed_at: row.unsubscribed_at ?? null,
     created_at: row.created_at,
     attribution: leerAtribucion(row.attribution),
     // `unsubscribe_token` NO se serializa: es secreto de la baja pública.
@@ -54,6 +55,7 @@ newsletterRouter.get("/export", async (_req, res) => {
     ["Fecha", (r) => formatearEnZona(r.created_at)],
     ["Email", (r) => r.email],
     ["Estado", (r) => (r.active ? "activo" : "baja")],
+    ["Baja", (r) => formatearEnZona(r.unsubscribed_at)],
     ["Consentimiento", (r) => formatearEnZona(r.consent_at)],
     ["Versión consentimiento", (r) => r.consent_version ?? ""],
     ["Origen", (r) => r.source ?? ""],
@@ -72,11 +74,19 @@ newsletterRouter.get("/export", async (_req, res) => {
   res.send(csv);
 });
 
-/** Dar de baja o reactivar desde el panel (sin borrar la fila). */
+/**
+ * Dar de baja o reactivar desde el panel (sin borrar la fila).
+ *
+ * La baja sella `unsubscribed_at` (cuándo ocurrió) igual que la baja pública;
+ * reactivar la limpia. Así el momento de la baja queda registrado venga de donde
+ * venga.
+ */
 newsletterRouter.put("/:id", async (req, res) => {
   const active = req.body?.active;
   if (typeof active !== "boolean") return res.status(400).json({ error: "active debe ser booleano" });
-  const n = await db("newsletter_subscribers").where({ id: req.params.id }).update({ active });
+  const n = await db("newsletter_subscribers")
+    .where({ id: req.params.id })
+    .update({ active, unsubscribed_at: active ? null : db.fn.now() });
   if (n === 0) return res.status(404).json({ error: "no encontrado" });
   res.json({ ok: true });
 });

@@ -2,18 +2,19 @@ import { useId, useState } from "react";
 import { CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
 import { api } from "../api";
 import type { NewsletterProps } from "@sa/shared/blocks";
+import { CONSENT_TEXT } from "@sa/shared/consent";
 import { obtenerAtribucion } from "../lib/attribution";
 
 const inputClass =
   "border rounded px-3 py-2 w-full bg-white focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition";
 
 /**
- * Finalidad declarada del consentimiento. Debe corresponder con
- * `CONSENT_VERSION` del servidor (`api/src/newsletter.ts`): si este texto cambia,
- * hay que subir esa versión.
+ * Finalidad declarada del consentimiento. Es **fuente única** en
+ * `@sa/shared/consent`, la misma que el servidor sella con `CONSENT_VERSION`: el
+ * texto que la persona lee acá no puede divergir de la versión registrada. Si el
+ * texto cambia, se sube la versión.
  */
-const PURPOSE =
-  "Usamos tu correo únicamente para enviarte novedades del Sanatorio. Podés darte de baja cuando quieras.";
+const PURPOSE = CONSENT_TEXT;
 
 /**
  * Bloque de suscripción a novedades. El correo se guarda en la captura propia

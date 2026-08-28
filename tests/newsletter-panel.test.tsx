@@ -32,7 +32,15 @@ vi.mock("../apps/admin/src/api", () => ({
       return { data: { items: filtrados.slice(offset, offset + limit), total: filtrados.length, limit, offset } };
     },
     put: async (url: string, cuerpo?: any) => { llamadas.push({ metodo: "PUT", url, cuerpo }); return { data: {} }; },
-    delete: async (url: string) => { llamadas.push({ metodo: "DELETE", url }); return { data: null }; },
+    delete: async (url: string) => {
+      llamadas.push({ metodo: "DELETE", url });
+      // Elimina de verdad del fixture, para que el `total` baje y se pueda
+      // ejercitar la corrección de offset.
+      const id = Number(url.split("/").pop());
+      const i = fixture.findIndex((s) => s.id === id);
+      if (i >= 0) fixture.splice(i, 1);
+      return { data: null };
+    },
   },
 }));
 
@@ -124,6 +132,66 @@ describe("bandeja Newsletter", () => {
     await screen.findByText("sub00@ejemplo.test");
     fireEvent.click(boton("Exportar CSV"));
     await waitFor(() => expect(llamadas.some((l) => l.url.startsWith("/admin/newsletter/export"))).toBe(true));
+  });
+
+  it("mientras cambia de página, las filas anteriores no se pueden mutar (aria-busy, acciones y paginación bloqueadas)", async () => {
+    montar();
+    await screen.findByText("sub00@ejemplo.test");
+
+    // La respuesta del offset 20 queda pendiente: se ve el placeholder (filas viejas).
+    let release!: () => void;
+    deferred = { promise: new Promise<void>((r) => (release = r)), release: () => {} };
+    fireEvent.click(boton("Siguiente"));
+
+    // sub01 está activo (sub00 está de baja en el fixture): su acción es "Dar de baja".
+    const filaVieja = (await screen.findByText("sub01@ejemplo.test")).closest("div.p-4") as HTMLElement;
+    const bajaVieja = Array.from(filaVieja.querySelectorAll("button")).find((b) => b.textContent === "Dar de baja")!;
+    await waitFor(() => expect(bajaVieja.disabled).toBe(true));
+    expect(document.querySelector('[aria-busy="true"]')).toBeTruthy();
+    expect(boton("Siguiente").disabled).toBe(true);
+    expect(boton("Anterior").disabled).toBe(true);
+
+    // Intentar mutar la fila vieja no hace nada (botón deshabilitado).
+    fireEvent.click(bajaVieja);
+    expect(llamadas.some((l) => l.metodo === "PUT")).toBe(false);
+
+    // Al liberar la respuesta, recién ahí aparecen las acciones nuevas habilitadas.
+    deferred = null;
+    release();
+    const filaNueva = (await screen.findByText("sub20@ejemplo.test")).closest("div.p-4") as HTMLElement;
+    const bajaNueva = Array.from(filaNueva.querySelectorAll("button")).find((b) => b.textContent === "Dar de baja")!;
+    await waitFor(() => expect(bajaNueva.disabled).toBe(false));
+  });
+
+  it("tras eliminar la única fila de la última página vuelve a la última página válida", async () => {
+    // 21 suscriptores: la página 2 tiene una sola fila (sub20).
+    fixture = Array.from({ length: 21 }, (_, i) => ({
+      id: i + 1,
+      email: `sub${String(i).padStart(2, "0")}@ejemplo.test`,
+      source: "/",
+      active: true,
+      consent_at: "2026-08-27T00:00:00Z",
+      consent_version: "1",
+      unsubscribed_at: null,
+      created_at: "2026-08-27T00:00:00Z",
+      attribution: null,
+    }));
+    montar();
+    await screen.findByText("sub00@ejemplo.test");
+    fireEvent.click(boton("Siguiente"));
+    const sola = await screen.findByText("sub20@ejemplo.test");
+    const fila = sola.closest("div.p-4") as HTMLElement;
+
+    // Eliminar la única fila de la página 2 (pasa por el ConfirmDialog).
+    fireEvent.click(Array.from(fila.querySelectorAll("button")).find((b) => b.textContent === "Eliminar")!);
+    const dialogo = (await screen.findByText("Eliminar suscriptor")).closest("div") as HTMLElement;
+    fireEvent.click(Array.from(dialogo.querySelectorAll("button")).find((b) => b.textContent === "Eliminar")!);
+
+    // Termina en la página 1 con las 20 filas, no en una página vacía imposible.
+    await screen.findByText("sub00@ejemplo.test");
+    await screen.findByText("sub19@ejemplo.test");
+    expect(screen.queryByText("sub20@ejemplo.test")).toBeNull();
+    expect(screen.getByText(/1–20 de 20/)).toBeTruthy();
   });
 
   it("da de baja un suscriptor activo (PUT active:false, sin borrar)", async () => {

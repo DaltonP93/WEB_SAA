@@ -20,8 +20,10 @@ import type { Knex } from "knex";
  *   que un cambio de texto no se confunda con lo aceptado antes.
  * - `active`: si sigue suscripto. La baja no borra la fila: la marca inactiva,
  *   así queda la evidencia de que estuvo y de que pidió salir.
+ * - `unsubscribed_at`: cuándo se dio de baja, **puesto por el servidor**; se
+ *   limpia (NULL) al reactivar. Conserva el momento de la baja para la evidencia.
  * - `unsubscribe_token`: token **opaco y no predecible** para la baja pública;
- *   nunca sale en el CSV ni en logs.
+ *   nunca sale en el panel, el CSV ni en logs.
  *
  * Reversible: `down()` borra la tabla.
  */
@@ -36,6 +38,7 @@ export async function up(knex: Knex): Promise<void> {
     t.timestamp("consent_at").nullable();
     t.string("consent_version", 32).nullable();
     t.boolean("active").notNullable().defaultTo(true);
+    t.timestamp("unsubscribed_at").nullable();
     t.string("unsubscribe_token", 64).notNullable().unique();
     t.timestamp("created_at").defaultTo(knex.fn.now());
   });

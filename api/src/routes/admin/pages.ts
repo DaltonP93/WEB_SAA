@@ -140,6 +140,41 @@ pagesRouter.put("/:id", async (req, res) => {
   res.json({ ok: true });
 });
 
+const scheduleSchema = z.object({ publish_at: z.string() });
+
+/**
+ * Programar la publicación: pasa la página a `published` con una fecha **futura**.
+ *
+ * La decisión de "es futura" vive acá, en el backend, no en el navegador. El
+ * `<input type="datetime-local">` manda una hora de pared sin offset; validarla
+ * con `new Date(...)` la interpretaría en la zona accidental de la máquina del
+ * editor, así que "las 10:00" podían quedar en el pasado o el futuro según dónde
+ * esté sentado. `instanteDesdeHoraLocal` la interpreta en `America/Asuncion`
+ * —la misma zona que usa el servidor para guardar `publish_at`— y la comparación
+ * contra `Date.now()` es entre instantes absolutos, independiente de zonas.
+ *
+ * "Publicar ya" es otra cosa (status published + `publish_at: null`) y va por el
+ * `PUT` de metadatos; acá una fecha pasada se rechaza.
+ */
+pagesRouter.post("/:id/schedule", async (req, res) => {
+  const parsed = scheduleSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "payload invalido" });
+  const instante = instanteDesdeHoraLocal(parsed.data.publish_at);
+  if (instante === null) return res.status(400).json({ error: "Hay que indicar una fecha para programar." });
+  if (instante === undefined) return res.status(400).json({ error: "La fecha no es válida." });
+  if (instante.getTime() <= Date.now()) {
+    return res
+      .status(400)
+      .json({ error: "La fecha de publicación tiene que ser futura. Para publicar ya, usá “Publicar”." });
+  }
+  const n = await db("pages")
+    .where({ id: req.params.id })
+    .whereNull("deleted_at")
+    .update({ status: "published", publish_at: instante, updated_at: db.fn.now() });
+  if (n === 0) return res.status(404).json({ error: "no encontrada" });
+  res.json({ ok: true });
+});
+
 /** Borrado recuperable: va a la papelera, no se pierde. */
 pagesRouter.delete("/:id", async (req, res) => {
   const n = await db("pages")
@@ -416,7 +451,13 @@ pagesRouter.post("/:id/revisions/:revId/restore", async (req, res) => {
         title: snap.title,
         status: snap.status === "published" ? "published" : "draft",
         seo: snap.seo ? JSON.stringify(snap.seo) : null,
-        publish_at: snap.publish_at ?? null,
+        // El snapshot guarda `publish_at` como texto ISO con `Z` (viene de
+        // `JSON.stringify(Date)`). Escribir ese string crudo en la columna
+        // DATETIME es frágil: MySQL 8 en modo estricto rechaza el `T`/`Z`, y una
+        // base más laxa podría reinterpretarlo y correr el instante. Se
+        // normaliza a `Date`, que el driver formatea igual que el guardado
+        // original, así el instante restaurado es idéntico al archivado.
+        publish_at: snap.publish_at ? new Date(snap.publish_at) : null,
         updated_at: trx.fn.now(),
       });
     await reemplazarBloques(trx, pageId, bloques.validados);

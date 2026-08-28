@@ -3,26 +3,24 @@ import { randomBytes } from "node:crypto";
 /**
  * Consentimiento de la suscripción a novedades.
  *
- * `CONSENT_VERSION` identifica el texto de finalidad que estaba vigente cuando la
- * persona se suscribió. Si el texto cambia, se sube la versión: así lo aceptado
- * antes no se confunde con lo aceptado después. El texto que se le muestra vive
- * en el bloque `Newsletter` del sitio; esta constante es el registro del lado del
- * servidor de qué versión estaba en efecto.
+ * El texto de finalidad y su versión son **fuente única** en
+ * `@sa/shared/consent`, consumida por el servidor (para sellar la versión) y por
+ * el bloque público (para mostrar el texto). Acá sólo se reexportan para el
+ * resto del backend; nunca se copia el literal, para que el texto que la persona
+ * lee no pueda divergir de la versión que se registra.
  */
-export const CONSENT_VERSION = "1";
-
-/**
- * Finalidad declarada (para referencia y documentación). El bloque público
- * muestra este mismo sentido; al cambiarlo hay que subir `CONSENT_VERSION`.
- */
-export const PURPOSE_TEXT =
-  "Usamos tu correo únicamente para enviarte novedades del Sanatorio Adventista de Asunción. " +
-  "Podés darte de baja en cualquier momento.";
+export { CONSENT_VERSION, CONSENT_TEXT } from "@sa/shared/consent";
 
 /**
  * Token de baja: opaco y no predecible. 24 bytes aleatorios en base64url (~32
  * caracteres). No se deriva del email ni del id, así que tener uno no permite
  * adivinar el de otro suscriptor.
+ *
+ * **Alcance actual:** el token y el endpoint de baja quedan preparados, pero el
+ * enlace de baja se le entregará a la persona recién cuando exista un proveedor
+ * de envío de correos. Todavía no es un flujo de baja plenamente operable de
+ * cara al público: hasta entonces la baja se opera desde el panel. El token no
+ * se expone en el panel, el CSV ni los logs.
  */
 export function nuevoTokenBaja(): string {
   return randomBytes(24).toString("base64url");

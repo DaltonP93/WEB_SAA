@@ -20,7 +20,21 @@ vi.mock("../apps/admin/src/api", () => ({
   api: {
     get: async (url: string) => { llamadas.push({ metodo: "GET", url }); return { data: respuestas[url] ?? [] }; },
     put: async (url: string, cuerpo?: any) => { llamadas.push({ metodo: "PUT", url, cuerpo }); return { data: {} }; },
-    post: async (url: string, cuerpo?: any) => { llamadas.push({ metodo: "POST", url, cuerpo }); return { data: {} }; },
+    post: async (url: string, cuerpo?: any) => {
+      llamadas.push({ metodo: "POST", url, cuerpo });
+      // Simula el contrato del backend `/schedule`: la decisión de "fecha futura"
+      // vive en el servidor (zona Asunción). Se rechaza el pasado de forma
+      // determinística por el año, sin depender del reloj ni de la zona del navegador.
+      if (url.endsWith("/schedule")) {
+        const anio = Number(String(cuerpo?.publish_at ?? "").slice(0, 4));
+        if (!anio || anio <= 2025) {
+          throw Object.assign(new Error("400"), {
+            response: { status: 400, data: { error: "La fecha de publicación tiene que ser futura. Para publicar ya, usá “Publicar”." } },
+          });
+        }
+      }
+      return { data: {} };
+    },
     delete: async (url: string) => { llamadas.push({ metodo: "DELETE", url }); return { data: null }; },
   },
 }));
@@ -79,29 +93,30 @@ describe("Páginas · publicación programada", () => {
     expect(within(await filaDe("A futuro")).getByText("Programada")).toBeTruthy();
   });
 
-  it("programar un borrador con fecha futura lo publica y agenda en una sola operación", async () => {
+  it("programar un borrador manda la hora de pared cruda al endpoint del backend", async () => {
     montar();
     const fila = await filaDe("En borrador");
-    // Abrir el panel de programación de esa fila.
     fireEvent.click(within(fila).getByText("Programar"));
     const input = fila.querySelector('input[type="datetime-local"]') as HTMLInputElement;
     fireEvent.change(input, { target: { value: "2099-01-01T10:00" } });
 
-    // El botón de submit (btn-primary) dentro del panel.
     const submit = Array.from(fila.querySelectorAll("button")).find(
       (b) => b.textContent === "Programar" && b.className.includes("btn-primary"),
     )!;
     fireEvent.click(submit);
 
     await waitFor(() => {
-      const put = llamadas.find((l) => l.metodo === "PUT" && l.url === "/admin/pages/1");
-      expect(put, "tuvo que llamar al PUT de la página 1").toBeTruthy();
-      expect(put!.cuerpo.status).toBe("published");
-      expect(put!.cuerpo.publish_at).toBe("2099-01-01T10:00");
+      const post = llamadas.find((l) => l.metodo === "POST" && l.url === "/admin/pages/1/schedule");
+      expect(post, "tuvo que llamar al endpoint /schedule").toBeTruthy();
+      // Manda la hora de pared TAL CUAL: no la convierte con la zona del navegador.
+      // La interpretación en zona Asunción y la decisión de "futura" son del backend.
+      expect(post!.cuerpo.publish_at).toBe("2099-01-01T10:00");
     });
+    // No usa el PUT genérico para programar.
+    expect(llamadas.some((l) => l.metodo === "PUT")).toBe(false);
   });
 
-  it("rechaza una fecha pasada con un aviso y sin llamar a la API", async () => {
+  it("una fecha pasada la rechaza el backend (zona Asunción) y se muestra el aviso", async () => {
     montar();
     const fila = await filaDe("En borrador");
     fireEvent.click(within(fila).getByText("Programar"));
@@ -113,9 +128,50 @@ describe("Páginas · publicación programada", () => {
     )!;
     fireEvent.click(submit);
 
+    // El cliente igual manda la hora cruda; es el backend el que decide y rechaza.
+    await waitFor(() => {
+      const post = llamadas.find((l) => l.metodo === "POST" && l.url === "/admin/pages/1/schedule");
+      expect(post).toBeTruthy();
+      expect(post!.cuerpo.publish_at).toBe("2000-01-01T10:00");
+    });
     await waitFor(() => expect(toastError).toHaveBeenCalled());
     expect(toastError.mock.calls[0][0]).toMatch(/futura/i);
-    // No se tocó la API.
-    expect(llamadas.some((l) => l.metodo === "PUT")).toBe(false);
+  });
+
+  it("Publicar un borrador lo publica y limpia la programación (publish_at NULL)", async () => {
+    montar();
+    const fila = await filaDe("En borrador");
+    fireEvent.click(within(fila).getByText("Publicar"));
+    await waitFor(() => {
+      const put = llamadas.find((l) => l.metodo === "PUT" && l.url === "/admin/pages/1");
+      expect(put).toBeTruthy();
+      expect(put!.cuerpo.status).toBe("published");
+      expect(put!.cuerpo.publish_at).toBeNull();
+    });
+  });
+
+  it("Despublicar una publicada la pasa a borrador y limpia la programación", async () => {
+    montar();
+    const fila = await filaDe("Ya publicada");
+    fireEvent.click(within(fila).getByText("Despublicar"));
+    await waitFor(() => {
+      const put = llamadas.find((l) => l.metodo === "PUT" && l.url === "/admin/pages/2");
+      expect(put).toBeTruthy();
+      expect(put!.cuerpo.status).toBe("draft");
+      expect(put!.cuerpo.publish_at).toBeNull();
+    });
+  });
+
+  it("Quitar programación deja la página publicada ya (publish_at NULL, sin tocar el status)", async () => {
+    montar();
+    const fila = await filaDe("A futuro"); // programada (published + publish_at futuro)
+    fireEvent.click(within(fila).getByText("Programar")); // abre el panel con "Quitar programación"
+    fireEvent.click(within(fila).getByText("Quitar programación"));
+    await waitFor(() => {
+      const put = llamadas.find((l) => l.metodo === "PUT" && l.url === "/admin/pages/3");
+      expect(put).toBeTruthy();
+      expect(put!.cuerpo.publish_at).toBeNull();
+      expect(put!.cuerpo.status).toBeUndefined(); // no cambia el estado
+    });
   });
 });

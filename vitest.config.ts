@@ -11,6 +11,7 @@ export default defineConfig({
       // el matcher es por prefijo.
       "@sa/shared/blocks": path.resolve(__dirname, "shared/types/blocks.ts"),
       "@sa/shared/block-schemas": path.resolve(__dirname, "shared/types/block-schemas.ts"),
+      "@sa/shared/consent": path.resolve(__dirname, "shared/types/consent.ts"),
       "@sa/shared/embed-hosts": path.resolve(__dirname, "shared/types/embed-hosts.ts"),
       "@sa/shared/institutional-red": path.resolve(__dirname, "shared/types/institutional-red.ts"),
       "@sa/shared/contact-values": path.resolve(__dirname, "shared/types/contact-values.ts"),

@@ -2464,3 +2464,59 @@ JSON-LD contra la API viva; migraciones up/down/up 33↔33 reversibles;
 > se purga acá —reescribir la historia y rotar la credencial es decisión del
 > propietario del repo—. **El NO-GO de producción sigue vigente** hasta que el
 > propietario resuelva la rotación/purga.
+
+### 18.8 Segunda ronda correctiva del PR #23 (mismo PR, se mantiene en Draft)
+
+Ajustes finos sobre §18.7, sin abrir otro PR ni tocar el historial Git.
+
+- **Bandeja de newsletter sin filas anteriores accionables.** Mientras la
+  consulta cambia —paso de página, búsqueda o refetch tras una mutación— se
+  muestran las filas de la respuesta anterior (`keepPreviousData`). Ahora, con
+  `query.isFetching || query.isPlaceholderData`, la tabla se marca `aria-busy`,
+  se deshabilitan Dar de baja / Reactivar / Eliminar y Anterior / Siguiente, y se
+  indica visualmente ("· actualizando…", opacidad). Así no se muta ni se borra una
+  fila que quizá ya no corresponde a lo que se está por mostrar.
+- **Offset corregido tras mutaciones.** Si una baja, eliminación o cambio del
+  total deja el offset fuera de rango, un `useEffect` vuelve a la última página
+  válida (sólo con datos frescos, no el placeholder) en vez de mostrar una tabla
+  vacía con un rango imposible. Cubre eliminar la única fila de la última página.
+- **Semántica de publicación explícita.** *Publicar* = `published` +
+  `publish_at: NULL`; *Despublicar* = `draft` + `publish_at: NULL` (un borrador
+  que conservara una agenda vieja se re-publicaría oculto; limpiar la fecha evita
+  ese estado confuso); *Programar* = `published` + fecha futura; *Quitar
+  programación* = `publish_at: NULL` dejando `published`. La decisión de "fecha
+  futura" **vive en el backend**: nuevo `POST /admin/pages/:id/schedule` que
+  interpreta la hora de pared en `America/Asuncion` (`instanteDesdeHoraLocal`) y
+  rechaza el pasado, en vez de validar con `new Date(...)` en la zona accidental
+  del navegador. El panel manda la hora de pared cruda; la comparación contra
+  `Date.now()` es entre instantes absolutos, independiente de zonas.
+- **Restauración fiel de `publish_at`.** El snapshot guarda `publish_at` como
+  texto ISO con `Z` (de `JSON.stringify(Date)`). Escribir ese string crudo en la
+  columna `DATETIME` es frágil: con la zona del proceso distinta de UTC corre el
+  instante, y MySQL 8 estricto puede rechazar el `T`/`Z`. Se normaliza a `Date` al
+  restaurar, así el instante restaurado es idéntico al archivado (probado con la
+  zona del proceso en `America/New_York`, verificando el instante exacto y la
+  visibilidad pública antes/después de la fecha).
+- **Alcance de la baja pública, aclarado.** El token y el endpoint quedan
+  **preparados**, no descritos como un flujo de baja plenamente operable: el
+  enlace se incorporará cuando exista un proveedor de envío. El token no se expone
+  en el panel, el CSV ni los logs. El texto de consentimiento y su versión tienen
+  **una sola fuente** (`@sa/shared/consent`), consumida por el bloque público y el
+  servidor; una prueba falla si el texto visible y la versión registrada divergen.
+  Se agregó `unsubscribed_at` (puesto por el servidor al dar de baja, limpiado al
+  reactivar), incluido en la bandeja y el CSV, **nunca** el token.
+
+**Corrector:** cada defecto se reintrodujo y la prueba lo detectó (RED), luego se
+revirtió: (1) acciones habilitadas sobre el placeholder; (2) offset inválido tras
+eliminar; (3) Publicar conservando `publish_at`; (4) fecha validada en la zona del
+navegador; (5) restauración que corre/rompe `publish_at` (bajo `TZ` ≠ UTC el ISO
+crudo hace fallar el restore); (6) textos de consentimiento divergentes; (7) baja
+sin `unsubscribed_at`.
+
+**Validación:** suite completa **1497/1497 en 82 archivos** (MariaDB local;
+`typecheck` limpio; `build` de API/web/admin; prerender real de `/estudios` con
+JSON-LD contra la API viva; migraciones up/down/up 33↔33 reversibles con la
+columna `unsubscribed_at`; `audit:prod` sin vulnerabilidades; `check:secrets`
+limpio; `gitleaks` sobre el árbol sin hallazgos). CI corre la suite contra
+**MySQL 8**. El hallazgo histórico `9ced09d` **sigue vigente** (ver el aviso de
+arriba): no se rota ni se purga, y no se afirma que el historial esté limpio.

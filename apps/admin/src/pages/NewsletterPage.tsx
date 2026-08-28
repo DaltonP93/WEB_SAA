@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { api } from "../api";
@@ -11,6 +11,7 @@ interface Suscriptor {
   active: boolean;
   consent_at: string | null;
   consent_version: string | null;
+  unsubscribed_at: string | null;
   created_at: string;
   attribution: { utm_source?: string; utm_campaign?: string } | null;
 }
@@ -84,8 +85,27 @@ export default function NewsletterPage() {
 
   const data = query.data;
   const total = data?.total ?? 0;
-  const desde = total === 0 ? 0 : offset + 1;
+  const items = data?.items ?? [];
+
+  // Mientras la consulta cambia —paso de página, búsqueda, o refetch tras una
+  // mutación— las filas visibles son las de la respuesta ANTERIOR (keepPreviousData).
+  // Actuar sobre ellas mutaría o borraría una fila que quizás ya no corresponde a
+  // lo que se está por mostrar. Con `cambiando` se bloquean acciones y paginación
+  // hasta que llegan los datos nuevos.
+  const cambiando = query.isFetching || query.isPlaceholderData;
+
+  // Corrección de offset: si una baja, eliminación o cambio del total dejó el
+  // offset fuera de rango, se vuelve a la última página válida en vez de mostrar
+  // una tabla vacía con un rango imposible. Sólo con datos frescos (no el
+  // placeholder), para no reaccionar a la respuesta vieja.
+  useEffect(() => {
+    if (!data || query.isPlaceholderData) return;
+    const ultimaPagina = total === 0 ? 0 : Math.floor((total - 1) / LIMIT) * LIMIT;
+    if (offset > ultimaPagina) setOffset(ultimaPagina);
+  }, [data, query.isPlaceholderData, total, offset]);
+
   const hasta = Math.min(offset + LIMIT, total);
+  const desde = total === 0 ? 0 : Math.min(offset + 1, hasta);
 
   return (
     <div>
@@ -114,11 +134,14 @@ export default function NewsletterPage() {
         </div>
       ) : (
         <>
-          <div className="card divide-y">
-            {(data?.items ?? []).length === 0 && (
+          <div
+            className={`card divide-y transition-opacity ${cambiando ? "opacity-60" : ""}`}
+            aria-busy={cambiando}
+          >
+            {items.length === 0 && (
               <div className="p-4 text-gray-500">{q ? "Sin resultados para esa búsqueda." : "Todavía no hay suscriptores."}</div>
             )}
-            {(data?.items ?? []).map((s) => (
+            {items.map((s) => (
               <div key={s.id} className="p-4 flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <div className="font-medium flex items-center gap-2">
@@ -130,27 +153,31 @@ export default function NewsletterPage() {
                   <div className="text-xs text-gray-500 truncate">
                     Alta {fecha(s.created_at)}
                     {s.consent_at ? ` · consintió ${fecha(s.consent_at)}${s.consent_version ? ` (v${s.consent_version})` : ""}` : ""}
+                    {!s.active && s.unsubscribed_at ? ` · baja ${fecha(s.unsubscribed_at)}` : ""}
                     {s.source ? ` · desde ${s.source}` : ""}
                     {s.attribution?.utm_campaign ? ` · campaña ${s.attribution.utm_campaign}` : ""}
                   </div>
                 </div>
                 <div className="flex gap-2 shrink-0">
-                  <button className="btn-secondary" onClick={() => cambiarEstado.mutate(s)}>
+                  <button className="btn-secondary" disabled={cambiando} onClick={() => cambiarEstado.mutate(s)}>
                     {s.active ? "Dar de baja" : "Reactivar"}
                   </button>
-                  <button className="btn-danger" onClick={() => askDelete(s)}>Eliminar</button>
+                  <button className="btn-danger" disabled={cambiando} onClick={() => askDelete(s)}>Eliminar</button>
                 </div>
               </div>
             ))}
           </div>
 
           <div className="flex items-center justify-between mt-3 text-sm text-gray-600">
-            <span>{total === 0 ? "0 suscriptores" : `${desde}–${hasta} de ${total}`}</span>
+            <span>
+              {total === 0 ? "0 suscriptores" : `${desde}–${hasta} de ${total}`}
+              {cambiando && <span className="ml-2 text-gray-400">· actualizando…</span>}
+            </span>
             <div className="flex gap-2">
-              <button className="btn-secondary" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - LIMIT))}>
+              <button className="btn-secondary" disabled={cambiando || offset === 0} onClick={() => setOffset(Math.max(0, offset - LIMIT))}>
                 Anterior
               </button>
-              <button className="btn-secondary" disabled={hasta >= total} onClick={() => setOffset(offset + LIMIT)}>
+              <button className="btn-secondary" disabled={cambiando || hasta >= total} onClick={() => setOffset(offset + LIMIT)}>
                 Siguiente
               </button>
             </div>

@@ -112,13 +112,17 @@ describeDb("newsletter: captura con consentimiento", () => {
       body: JSON.stringify({ token: fila.unsubscribe_token }),
     });
     expect(baja.status).toBe(200);
-    expect(Boolean((await db("newsletter_subscribers").where({ id: fila.id }).first()).active)).toBe(false);
+    const trasBaja = await db("newsletter_subscribers").where({ id: fila.id }).first();
+    expect(Boolean(trasBaja.active)).toBe(false);
+    expect(trasBaja.unsubscribed_at, "la baja registra cuándo ocurrió").toBeTruthy();
 
-    // Reenviar el correo lo reactiva, sin duplicar.
+    // Reenviar el correo lo reactiva, sin duplicar, y limpia la marca de baja.
     await suscribir({ email: "vuelve@ejemplo.test" });
     const n = await db("newsletter_subscribers").where({ email: "vuelve@ejemplo.test" }).count<{ c: number }[]>({ c: "*" });
     expect(Number(n[0].c)).toBe(1);
-    expect(Boolean((await db("newsletter_subscribers").where({ id: fila.id }).first()).active)).toBe(true);
+    const trasReactivar = await db("newsletter_subscribers").where({ id: fila.id }).first();
+    expect(Boolean(trasReactivar.active)).toBe(true);
+    expect(trasReactivar.unsubscribed_at, "reactivar limpia la marca de baja").toBeNull();
   });
 
   it("un token de baja inválido no cambia nada y responde 200 (sin enumeración)", async () => {
@@ -145,6 +149,8 @@ describeDb("newsletter: captura con consentimiento", () => {
     expect(p1.items.length).toBe(20);
     expect(p1.total).toBeGreaterThanOrEqual(25);
     expect(JSON.stringify(p1)).not.toContain("unsubscribe_token");
+    // La bandeja expone el estado de la baja, nunca el token.
+    expect(p1.items[0]).toHaveProperty("unsubscribed_at");
     const p2 = await bandeja("?limit=20&offset=20");
     expect(p2.items.length).toBeGreaterThan(0);
     // Búsqueda por email.
@@ -157,6 +163,7 @@ describeDb("newsletter: captura con consentimiento", () => {
     const fila = await db("newsletter_subscribers").where({ email: "Lector@Ejemplo.Test" }).first();
     const csv = await (await fetch(`${baseUrl}/api/admin/newsletter/export`, { headers: auth() })).text();
     expect(csv).toContain("Estado");
+    expect(csv).toContain("Baja"); // columna con la fecha de baja
     expect(csv).toContain("Consentimiento");
     expect(csv).toContain("Lector@Ejemplo.Test");
     expect(csv).not.toContain(fila.unsubscribe_token);
@@ -171,8 +178,21 @@ describeDb("newsletter: captura con consentimiento", () => {
       body: JSON.stringify({ active: false }),
     });
     expect(off.status).toBe(200);
-    expect(Boolean((await db("newsletter_subscribers").where({ id: fila.id }).first()).active)).toBe(false);
-    expect(await db("newsletter_subscribers").where({ id: fila.id }).first()).toBeTruthy(); // no se borró
+    const trasOff = await db("newsletter_subscribers").where({ id: fila.id }).first();
+    expect(Boolean(trasOff.active)).toBe(false);
+    expect(trasOff.unsubscribed_at, "la baja del panel también registra cuándo").toBeTruthy();
+    expect(trasOff).toBeTruthy(); // no se borró
+
+    // Reactivar desde el panel limpia la marca de baja.
+    const on = await fetch(`${baseUrl}/api/admin/newsletter/${fila.id}`, {
+      method: "PUT",
+      headers: auth(),
+      body: JSON.stringify({ active: true }),
+    });
+    expect(on.status).toBe(200);
+    const trasOn = await db("newsletter_subscribers").where({ id: fila.id }).first();
+    expect(Boolean(trasOn.active)).toBe(true);
+    expect(trasOn.unsubscribed_at).toBeNull();
   });
 
   it("ni el correo ni el token aparecen en los logs", async () => {

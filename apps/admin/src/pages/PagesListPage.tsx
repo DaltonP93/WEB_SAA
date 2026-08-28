@@ -66,37 +66,42 @@ export default function PagesListPage() {
     onSuccess: () => { toast.success("Eliminada definitivamente"); refetchAll(); },
     onError: () => toast.error("Error al eliminar"),
   });
-  const toggleStatus = useMutation({
-    mutationFn: async (p: any) => (await api.put(`/admin/pages/${p.id}`, { status: p.status === "published" ? "draft" : "published" })).data,
-    onSuccess: (_d, p: any) => { toast.success(p.status === "published" ? "Despublicada" : "Publicada"); refetchAll(); },
-    onError: () => toast.error("Error al cambiar estado"),
+  // Semántica explícita de publicación (documentada en CLAUDE_CONTEXT §18.7):
+  //  - Publicar: published + publish_at NULL → visible ya, sin agenda pendiente.
+  //  - Despublicar: draft + publish_at NULL. Un borrador que conservara una
+  //    agenda vieja se re-publicaría oculto al volver a publicar; limpiar la
+  //    fecha evita ese estado confuso.
+  //  - Programar: published + fecha futura, decidido en el backend (zona
+  //    Asunción, no la del navegador).
+  //  - Quitar programación: publish_at NULL dejando published → visible ya.
+  const publicarYa = useMutation({
+    mutationFn: async (p: any) => (await api.put(`/admin/pages/${p.id}`, { status: "published", publish_at: null })).data,
+    onSuccess: () => { toast.success("Publicada"); refetchAll(); },
+    onError: () => toast.error("Error al publicar"),
   });
-  const agendar = useMutation({
-    mutationFn: async (v: { id: number; publish_at: string | null; status?: "published" | "draft" }) =>
-      (await api.put(`/admin/pages/${v.id}`, {
-        publish_at: v.publish_at,
-        ...(v.status ? { status: v.status } : {}),
-      })).data,
-    onSuccess: () => { toast.success("Programación actualizada"); setProgramando(null); setCuando(""); refetchAll(); },
+  const despublicar = useMutation({
+    mutationFn: async (p: any) => (await api.put(`/admin/pages/${p.id}`, { status: "draft", publish_at: null })).data,
+    onSuccess: () => { toast.success("Despublicada"); refetchAll(); },
+    onError: () => toast.error("Error al despublicar"),
+  });
+  const programarMut = useMutation({
+    // La validación de "fecha futura" la hace el backend en zona Asunción, no el
+    // navegador: el endpoint `/schedule` interpreta la hora de pared y rechaza el
+    // pasado. Acá sólo se envía lo que eligió el editor.
+    mutationFn: async (v: { id: number; publish_at: string }) =>
+      (await api.post(`/admin/pages/${v.id}/schedule`, { publish_at: v.publish_at })).data,
+    onSuccess: () => { toast.success("Programada"); setProgramando(null); setCuando(""); refetchAll(); },
     onError: (e: any) => toast.error(e?.response?.data?.error ?? "Error al programar"),
   });
+  const quitarProg = useMutation({
+    mutationFn: async (p: any) => (await api.put(`/admin/pages/${p.id}`, { publish_at: null })).data,
+    onSuccess: () => { toast.success("Programación quitada"); refetchAll(); },
+    onError: () => toast.error("Error al quitar la programación"),
+  });
 
-  /**
-   * Programar desde el panel: publica la página y le pone la fecha en una sola
-   * operación (aunque estuviera en borrador). Antes exige una fecha futura: una
-   * fecha pasada publicaría de inmediato, que no es "programar".
-   */
-  function programar(p: any) {
-    const t = new Date(cuando).getTime();
-    if (isNaN(t)) {
-      toast.error("Elegí una fecha y hora válidas.");
-      return;
-    }
-    if (t <= Date.now()) {
-      toast.error("La fecha de publicación tiene que ser futura. Para publicar ya, usá “Publicar”.");
-      return;
-    }
-    agendar.mutate({ id: p.id, publish_at: cuando, status: "published" });
+  function enviarProgramacion(p: any) {
+    if (!cuando) return;
+    programarMut.mutate({ id: p.id, publish_at: cuando });
   }
 
   async function askDelete(p: any) {
@@ -170,7 +175,11 @@ export default function PagesListPage() {
                   </div>
                 </div>
                 <div className="flex gap-2">
-                  <button onClick={() => toggleStatus.mutate(p)} className="btn-secondary" title="Cambiar estado">
+                  <button
+                    onClick={() => (p.status === "published" ? despublicar : publicarYa).mutate(p)}
+                    className="btn-secondary"
+                    title="Cambiar estado"
+                  >
                     {p.status === "published" ? "Despublicar" : "Publicar"}
                   </button>
                   <button onClick={() => { setProgramando(programando === p.id ? null : p.id); setCuando(""); }} className="btn-secondary">
@@ -186,11 +195,11 @@ export default function PagesListPage() {
                     <label className="label">Publicar a partir de (hora de Asunción)</label>
                     <input type="datetime-local" className="input" value={cuando} onChange={(e) => setCuando(e.target.value)} />
                   </div>
-                  <button className="btn-primary" disabled={!cuando || agendar.isPending} onClick={() => programar(p)}>
+                  <button className="btn-primary" disabled={!cuando || programarMut.isPending} onClick={() => enviarProgramacion(p)}>
                     Programar
                   </button>
                   {p.publish_at && (
-                    <button className="btn-secondary" disabled={agendar.isPending} onClick={() => agendar.mutate({ id: p.id, publish_at: null })}>
+                    <button className="btn-secondary" disabled={quitarProg.isPending} onClick={() => quitarProg.mutate(p)}>
                       Quitar programación
                     </button>
                   )}
