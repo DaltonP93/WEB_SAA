@@ -9,6 +9,7 @@ import { BLOCK_REGISTRY, type BlockType } from "../../../../shared/types/blocks"
 import { api } from "../api";
 import BlockPropsEditor from "../components/BlockPropsEditor";
 import { useUnsavedGuard } from "../hooks/useUnsavedGuard";
+import { useConfirm } from "../components/ConfirmDialog";
 
 interface BlockDraft { _key: string; type: BlockType; props: any; }
 
@@ -49,11 +50,22 @@ export default function PageBuilderPage() {
     }
   }, [q.data]);
 
-  const saveMeta = useMutation({
-    mutationFn: async () => (await api.put(`/admin/pages/${pageId}`, page)).data,
-  });
-  const saveBlocks = useMutation({
-    mutationFn: async () => (await api.put(`/admin/pages/${pageId}/blocks`, { blocks: blocks.map(({ type, props }) => ({ type, props })) })).data,
+  const confirm = useConfirm();
+
+  // Guardado atómico: metadatos + bloques en una sola operación. Antes iban en
+  // dos llamadas (meta y bloques por separado), lo que dejaba fotos intermedias
+  // inconsistentes y estado a medias si la segunda fallaba.
+  const guardar = useMutation({
+    mutationFn: async () =>
+      (
+        await api.put(`/admin/pages/${pageId}/content`, {
+          title: page.title,
+          slug: page.slug,
+          status: page.status,
+          seo: page.seo,
+          blocks: blocks.map(({ type, props }) => ({ type, props })),
+        })
+      ).data,
   });
 
   const [verHistorial, setVerHistorial] = useState(false);
@@ -66,25 +78,44 @@ export default function PageBuilderPage() {
     mutationFn: async (revId: number) => (await api.post(`/admin/pages/${pageId}/revisions/${revId}/restore`)).data,
     onSuccess: () => {
       toast.success("Versión restaurada");
+      // Refrescar página, bloques e historial: el `useEffect` sobre `q.data`
+      // recarga `page`/`blocks` y limpia `dirty` al llegar los datos nuevos.
       qc.invalidateQueries({ queryKey: ["adm-page", pageId] });
       qc.invalidateQueries({ queryKey: ["adm-page-rev", pageId] });
     },
-    onError: () => toast.error("No se pudo restaurar"),
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? "No se pudo restaurar. Intentá de nuevo."),
   });
 
-  useUnsavedGuard(dirty && !saveMeta.isPending && !saveBlocks.isPending);
+  const opPendiente = guardar.isPending || restaurar.isPending;
+
+  useUnsavedGuard(dirty && !opPendiente);
 
   async function saveAll() {
     try {
-      await saveMeta.mutateAsync();
-      await saveBlocks.mutateAsync();
+      await guardar.mutateAsync();
       setDirty(false);
       toast.success("Guardado");
       qc.invalidateQueries({ queryKey: ["adm-page", pageId] });
+      qc.invalidateQueries({ queryKey: ["adm-page-rev", pageId] });
     } catch (err: any) {
       const block = err?.response?.data?.block;
-      toast.error(block ? `Bloque ${block.index + 1}: revisar campos` : "Error al guardar");
+      const apiError = err?.response?.data?.error;
+      toast.error(block ? `Bloque ${block.index + 1}: revisar campos` : (apiError ?? "Error al guardar"));
     }
+  }
+
+  async function pedirRestaurar(r: any) {
+    if (opPendiente) return;
+    const message = dirty
+      ? "Tenés cambios sin guardar en esta página. Restaurar esta versión los descartará. ¿Continuar?"
+      : "Se reemplaza el contenido actual por esta versión. El estado actual queda guardado en el historial, así que podés deshacerlo.";
+    const ok = await confirm({
+      title: "Restaurar versión",
+      message,
+      confirmLabel: "Restaurar",
+      danger: dirty,
+    });
+    if (ok) restaurar.mutate(r.id);
   }
 
   function addBlock(type: BlockType) {
@@ -112,7 +143,9 @@ export default function PageBuilderPage() {
         <div className="flex gap-2">
           <a href={`${previewBase.replace(/\/$/, "")}/${page.slug === "home" ? "" : page.slug}`} target="_blank" rel="noreferrer" className="btn-secondary">Ver en sitio</a>
           <button onClick={() => setVerHistorial((v) => !v)} className="btn-secondary">Historial</button>
-          <button onClick={saveAll} className="btn-primary btn-lg">Guardar</button>
+          <button onClick={saveAll} disabled={opPendiente} className="btn-primary btn-lg disabled:opacity-50">
+            {guardar.isPending ? "Guardando…" : "Guardar"}
+          </button>
         </div>
       </div>
 
@@ -134,7 +167,7 @@ export default function PageBuilderPage() {
                   <span className="font-medium">{r.created_at ? new Date(r.created_at).toLocaleString() : `#${r.id}`}</span>
                   <span className="text-gray-500"> · {r.blockCount} bloque{r.blockCount === 1 ? "" : "s"}{r.author ? ` · ${r.author}` : ""}</span>
                 </div>
-                <button className="btn-secondary" disabled={restaurar.isPending} onClick={() => restaurar.mutate(r.id)}>
+                <button className="btn-secondary disabled:opacity-50" disabled={opPendiente} onClick={() => pedirRestaurar(r)}>
                   Restaurar
                 </button>
               </div>

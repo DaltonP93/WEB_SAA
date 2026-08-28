@@ -395,11 +395,14 @@ Los 25 puntos acordados con el cliente están implementados. Lo estructural:
   - Toggle publicar/despublicar inline en `PagesListPage` y `NewsListPage`.
   - `LucideIcon.tsx` — renderiza iconos [lucide](https://lucide.dev/icons/) por nombre kebab-case (`heart-pulse`). Usa `lucide-react/dynamicIconImports` + `React.lazy` + `Suspense` (⚠️ en lucide-react 0.460 **no existe** el subpath `lucide-react/dynamic`). `isIconName()` valida antes de renderizar. El helper `IconBadge` de `EntityManager` muestra el icono si el valor es un nombre lucide válido, y si no cae al emoji tal cual — antes el nombre se imprimía como texto crudo y se superponía a los títulos.
 
-✅ **Tests automatizados**: `pnpm test` (vitest) — **1467 pruebas en 76 archivos**
-tras el backlog desarrollable (verificación Search Console, redirects 301
+✅ **Tests automatizados**: `pnpm test` (vitest) — **1486 pruebas en 80 archivos**
+tras la ronda correctiva del PR #23 (historial realmente recuperable con guardado
+atómico `/content`, restauración con confirmación en el panel, publicación
+programada desde borrador, papelera consistente en todos los endpoints, y
+newsletter con consentimiento + baja pública por token), sobre el backlog
+desarrollable (**1467 en 76**: verificación Search Console, redirects 301
 administrables, papelera + publicación programada, historial de versiones y
-captura de newsletter), sobre la reconciliación de SVG/PDF+Biopsias+Usuarios y
-marketing (**1413 en 69**). Las que necesitan base real se activan con
+captura de newsletter). Las que necesitan base real se activan con
 `TEST_DATABASE=1` y se saltan solas si no está. CI corre la suite completa contra
 MySQL 8. El smoke testing manual del Agente 3 **complementa** la suite, no la
 reemplaza: lo que se puede afirmar con una prueba, se afirma con una prueba.

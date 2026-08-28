@@ -12,6 +12,7 @@ import { normalizarSeo } from "../seo.js";
 import { redirectsActivos } from "../redirects.js";
 import { filtrarPaginaPublica } from "../pages-visibilidad.js";
 import { ANALITICA_VACIA, sanearAtribucion, validarAnalitica } from "../marketing.js";
+import { CONSENT_VERSION, nuevoTokenBaja } from "../newsletter.js";
 
 export const publicRouter = Router();
 
@@ -656,11 +657,16 @@ publicRouter.post("/appointments", formsLimiter, async (req, res) => {
  * Suscripción a novedades. Un solo campo (email) más el honeypot y el
  * rate-limit: un correo suelto no justifica un CAPTCHA, y la trampa + el límite
  * por conexión frenan el spam automatizado. Idempotente: reenviar el mismo
- * correo no crea duplicados ni revela si ya estaba (no hay enumeración).
+ * correo no crea duplicados ni revela si ya estaba (no hay enumeración); si
+ * estaba dado de baja, lo reactiva.
+ *
+ * `source` admite una ruta completa (no se trunca a un valor chico). El
+ * consentimiento lo estampa el servidor —`consent_at` y `consent_version`—: el
+ * cliente no puede afirmar cuándo ni qué aceptó.
  */
 const newsletterSchema = z.object({
   email: z.string().trim().max(190).email(),
-  source: plainText(64).optional(),
+  source: plainText(512).optional(),
   attribution: z.record(z.string(), z.unknown()).optional(),
   website: z.string().max(200).optional(),
 });
@@ -675,17 +681,40 @@ publicRouter.post("/newsletter", formsLimiter, async (req, res) => {
   }
   const d = parsed.data;
   const atribucion = sanearAtribucion(d.attribution);
-  // `onConflict(email).ignore()`: si ya estaba, no falla ni duplica, y la
-  // respuesta es la misma que para un alta nueva.
+  // Alta nueva o reactivación de una baja: en conflicto de email se actualiza
+  // sólo el consentimiento y el estado, conservando la atribución original
+  // (first-touch) y el token de baja ya emitido. Nunca se registra el email.
   await db("newsletter_subscribers")
     .insert({
       email: d.email,
       source: d.source ?? null,
       attribution: atribucion ? JSON.stringify(atribucion) : null,
+      consent_at: db.fn.now(),
+      consent_version: CONSENT_VERSION,
+      active: true,
+      unsubscribe_token: nuevoTokenBaja(),
     })
     .onConflict("email")
-    .ignore();
+    .merge(["consent_at", "consent_version", "active"]);
   res.status(201).json({ ok: true });
+});
+
+/**
+ * Baja pública por token opaco. No revela si el token existía (siempre 200):
+ * quien tenga el token da de baja ese correo; quien no, no aprende nada. La
+ * baja **no borra**: marca inactivo, conservando la evidencia. El token no se
+ * registra en logs.
+ */
+const bajaSchema = z.object({ token: z.string().min(10).max(200) });
+publicRouter.post("/newsletter/baja", formsLimiter, async (req, res) => {
+  const parsed = bajaSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(200).json({ ok: true });
+  }
+  await db("newsletter_subscribers")
+    .where({ unsubscribe_token: parsed.data.token })
+    .update({ active: false });
+  res.status(200).json({ ok: true });
 });
 
 const contactSchema = z.object({

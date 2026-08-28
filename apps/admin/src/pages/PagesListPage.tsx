@@ -18,6 +18,12 @@ function estaAgendada(p: any): boolean {
   return !isNaN(t) && t > Date.now();
 }
 
+/** Tres estados distinguibles: borrador, publicada, o programada al futuro. */
+function etiquetaEstado(p: any): "Borrador" | "Publicada" | "Programada" {
+  if (p.status !== "published") return "Borrador";
+  return estaAgendada(p) ? "Programada" : "Publicada";
+}
+
 export default function PagesListPage() {
   const qc = useQueryClient();
   const confirm = useConfirm();
@@ -66,11 +72,32 @@ export default function PagesListPage() {
     onError: () => toast.error("Error al cambiar estado"),
   });
   const agendar = useMutation({
-    mutationFn: async (v: { id: number; publish_at: string | null }) =>
-      (await api.put(`/admin/pages/${v.id}`, { publish_at: v.publish_at })).data,
+    mutationFn: async (v: { id: number; publish_at: string | null; status?: "published" | "draft" }) =>
+      (await api.put(`/admin/pages/${v.id}`, {
+        publish_at: v.publish_at,
+        ...(v.status ? { status: v.status } : {}),
+      })).data,
     onSuccess: () => { toast.success("Programación actualizada"); setProgramando(null); setCuando(""); refetchAll(); },
     onError: (e: any) => toast.error(e?.response?.data?.error ?? "Error al programar"),
   });
+
+  /**
+   * Programar desde el panel: publica la página y le pone la fecha en una sola
+   * operación (aunque estuviera en borrador). Antes exige una fecha futura: una
+   * fecha pasada publicaría de inmediato, que no es "programar".
+   */
+  function programar(p: any) {
+    const t = new Date(cuando).getTime();
+    if (isNaN(t)) {
+      toast.error("Elegí una fecha y hora válidas.");
+      return;
+    }
+    if (t <= Date.now()) {
+      toast.error("La fecha de publicación tiene que ser futura. Para publicar ya, usá “Publicar”.");
+      return;
+    }
+    agendar.mutate({ id: p.id, publish_at: cuando, status: "published" });
+  }
 
   async function askDelete(p: any) {
     if (await confirm({ title: "Mover a la papelera", message: `¿Mover "${p.title}" a la papelera? Se puede restaurar después.`, confirmLabel: "Mover a papelera", danger: true })) {
@@ -127,8 +154,19 @@ export default function PagesListPage() {
                 <div>
                   <div className="font-semibold">{p.title}</div>
                   <div className="text-xs text-gray-500">
-                    /{p.slug} · <span className={p.status === "published" ? "text-green-700" : "text-gray-500"}>{p.status}</span>
-                    {estaAgendada(p) && <span className="ml-2 text-amber-700">· programada para {fecha(p.publish_at)}</span>}
+                    /{p.slug} ·{" "}
+                    <span
+                      className={
+                        etiquetaEstado(p) === "Publicada"
+                          ? "text-green-700"
+                          : etiquetaEstado(p) === "Programada"
+                            ? "text-amber-700"
+                            : "text-gray-500"
+                      }
+                    >
+                      {etiquetaEstado(p)}
+                    </span>
+                    {estaAgendada(p) && <span className="ml-2 text-amber-700">· desde {fecha(p.publish_at)}</span>}
                   </div>
                 </div>
                 <div className="flex gap-2">
@@ -148,11 +186,11 @@ export default function PagesListPage() {
                     <label className="label">Publicar a partir de (hora de Asunción)</label>
                     <input type="datetime-local" className="input" value={cuando} onChange={(e) => setCuando(e.target.value)} />
                   </div>
-                  <button className="btn-primary" disabled={!cuando} onClick={() => agendar.mutate({ id: p.id, publish_at: cuando })}>
+                  <button className="btn-primary" disabled={!cuando || agendar.isPending} onClick={() => programar(p)}>
                     Programar
                   </button>
                   {p.publish_at && (
-                    <button className="btn-secondary" onClick={() => agendar.mutate({ id: p.id, publish_at: null })}>
+                    <button className="btn-secondary" disabled={agendar.isPending} onClick={() => agendar.mutate({ id: p.id, publish_at: null })}>
                       Quitar programación
                     </button>
                   )}

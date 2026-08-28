@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
 import { api } from "../api";
 import type { NewsletterProps } from "@sa/shared/blocks";
@@ -8,15 +8,28 @@ const inputClass =
   "border rounded px-3 py-2 w-full bg-white focus:border-primary focus:ring-2 focus:ring-primary/20 focus:outline-none transition";
 
 /**
- * Bloque de suscripcion a novedades. Un campo de correo que se guarda en la
- * captura propia (`/public/newsletter`). El honeypot (`website`) frena bots;
- * la atribucion viaja como en las demas conversiones —dato de primera parte—.
+ * Finalidad declarada del consentimiento. Debe corresponder con
+ * `CONSENT_VERSION` del servidor (`api/src/newsletter.ts`): si este texto cambia,
+ * hay que subir esa versión.
+ */
+const PURPOSE =
+  "Usamos tu correo únicamente para enviarte novedades del Sanatorio. Podés darte de baja cuando quieras.";
+
+/**
+ * Bloque de suscripción a novedades. El correo se guarda en la captura propia
+ * (`/public/newsletter`); el honeypot (`website`) frena bots y la atribución
+ * viaja como en las demás conversiones. Cada instancia usa `useId()` para que
+ * dos bloques en la misma página no compartan el id del input.
+ *
+ * Mensaje de éxito **preciso**: registra la solicitud. No afirma que ya existe
+ * un envío automático —no lo hay hasta que se conecte un proveedor—.
  */
 export default function Newsletter({
   heading = "Recibí nuestras novedades",
   text = "",
   buttonLabel = "Suscribirme",
 }: NewsletterProps) {
+  const emailId = useId();
   const [email, setEmail] = useState("");
   const [website, setWebsite] = useState(""); // honeypot: invisible para personas
   const [state, setState] = useState<"idle" | "loading" | "ok" | "error">("idle");
@@ -42,23 +55,24 @@ export default function Newsletter({
     <section className="container-x section-y-md">
       <div className="max-w-xl">
         <h2 className="text-2xl font-bold mb-2 text-primary">{heading}</h2>
-        {text && <p className="text-gray-600 mb-4">{text}</p>}
+        {text && <p className="text-gray-600 mb-2">{text}</p>}
         {state === "ok" ? (
           <p className="text-green-700 inline-flex items-center gap-2">
             <CheckCircle2 className="w-4 h-4" />
-            ¡Listo! Vas a recibir nuestras novedades.
+            ¡Listo! Registramos tu solicitud para recibir novedades.
           </p>
         ) : (
           <form onSubmit={submit} className="flex flex-col sm:flex-row gap-3">
-            <label htmlFor="nl-email" className="sr-only">Correo electrónico</label>
+            <label htmlFor={emailId} className="sr-only">Correo electrónico</label>
             <input
-              id="nl-email"
+              id={emailId}
               type="email"
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="tu@correo.com"
               className={inputClass}
+              disabled={state === "loading"}
             />
             {/* Honeypot: fuera de la vista y del foco. */}
             <input
@@ -75,16 +89,17 @@ export default function Newsletter({
               className="btn-primary inline-flex items-center gap-2 disabled:opacity-50 whitespace-nowrap"
             >
               {state === "loading" ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-              {buttonLabel}
+              {state === "error" ? "Reintentar" : buttonLabel}
             </button>
           </form>
         )}
         {state === "error" && (
           <p role="alert" className="text-amber-700 inline-flex items-center gap-2 mt-2">
             <AlertCircle className="w-4 h-4" />
-            No pudimos registrar tu correo. Intentá nuevamente.
+            No pudimos registrar tu correo. Revisá la dirección e intentá de nuevo.
           </p>
         )}
+        {state !== "ok" && <p className="text-xs text-gray-500 mt-2">{PURPOSE}</p>}
       </div>
     </section>
   );

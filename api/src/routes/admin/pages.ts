@@ -5,6 +5,7 @@ import { db } from "../../db.js";
 import { sanitizeHtml, sanitizeMapEmbed, safeLinkHref } from "../../html.js";
 import { validateBlockProps } from "../../block-validation.js";
 import { instanteDesdeHoraLocal } from "../../timezone.js";
+import { notFound } from "../../http.js";
 
 export const pagesRouter = Router();
 
@@ -39,15 +40,19 @@ pagesRouter.get("/:id", async (req, res) => {
   });
 });
 
+const seoSchema = z
+  .object({
+    title: z.string().max(70).optional().or(z.literal("")),
+    description: z.string().max(170).optional().or(z.literal("")),
+    ogImage: z.string().max(500).optional().or(z.literal("")),
+  })
+  .strip();
+
 const pageSchema = z.object({
   slug: z.string().trim().min(1).max(191).regex(/^[a-z0-9-]+$/),
   title: z.string().trim().min(1).max(255),
   status: z.enum(["draft", "published"]).optional(),
-  seo: z.object({
-    title: z.string().max(70).optional().or(z.literal("")),
-    description: z.string().max(170).optional().or(z.literal("")),
-    ogImage: z.string().max(500).optional().or(z.literal("")),
-  }).strip().optional(),
+  seo: seoSchema.optional(),
   order: z.number().int().optional(),
   // Se acepta como texto y se interpreta abajo en la zona institucional; el
   // esquema sólo comprueba que sea texto o nulo (vaciar el agendamiento).
@@ -90,20 +95,46 @@ pagesRouter.post("/", async (req, res) => {
   res.status(201).json({ id });
 });
 
+/**
+ * Construye el patch de metadatos desde un payload parcial. Resuelve `publish_at`
+ * en la zona institucional. Lanza 400 si la fecha vino como texto no-fecha.
+ */
+function construirMetaPatch(p: {
+  title?: string;
+  slug?: string;
+  status?: "draft" | "published";
+  seo?: unknown;
+  order?: number;
+  publish_at?: string | null;
+}): Record<string, unknown> {
+  const patch: Record<string, unknown> = {};
+  if (p.title !== undefined) patch.title = p.title;
+  if (p.slug !== undefined) patch.slug = p.slug;
+  if (p.status !== undefined) patch.status = p.status;
+  if (p.order !== undefined) patch.order = p.order;
+  if (p.seo !== undefined) patch.seo = p.seo ? JSON.stringify(p.seo) : null;
+  if ("publish_at" in p) {
+    const r = resolverPublishAt(p.publish_at ?? null);
+    if ("invalido" in r) throw new PublishAtInvalido();
+    patch.publish_at = r.set;
+  }
+  return patch;
+}
+
+class PublishAtInvalido extends Error {}
+
 pagesRouter.put("/:id", async (req, res) => {
   const parsed = pageSchema.partial().safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "payload invalido", issues: parsed.error.issues });
-  const p = parsed.data;
-  const patch: any = { ...p };
-  if (p.seo !== undefined) patch.seo = JSON.stringify(p.seo);
-  // `publish_at` sólo se toca si vino la clave: ausente = no cambia; ""/null =
-  // se desagenda; texto de fecha = se agenda; texto no-fecha = 400.
-  if ("publish_at" in p) {
-    const r = resolverPublishAt(p.publish_at ?? null);
-    if ("invalido" in r) return res.status(400).json({ error: "publish_at no es una fecha válida" });
-    patch.publish_at = r.set;
+  let patch: Record<string, unknown>;
+  try {
+    patch = construirMetaPatch(parsed.data);
+  } catch (e) {
+    if (e instanceof PublishAtInvalido) return res.status(400).json({ error: "publish_at no es una fecha válida" });
+    throw e;
   }
   patch.updated_at = db.fn.now();
+  // La papelera es intocable desde la edición: `whereNull(deleted_at)`.
   const n = await db("pages").where({ id: req.params.id }).whereNull("deleted_at").update(patch);
   if (n === 0) return res.status(404).json({ error: "no encontrada" });
   res.json({ ok: true });
@@ -130,16 +161,18 @@ pagesRouter.post("/:id/restore", async (req, res) => {
 });
 
 /**
- * Borrado definitivo: sólo desde la papelera, y esto sí es irreversible (se
- * lleva los bloques por cascade). Exigir que ya esté en la papelera evita
- * destruir una página viva de un solo click.
+ * Borrado definitivo: **un solo DELETE condicional atómico** sobre una fila que
+ * siga en la papelera. Sin "consultar y después borrar" —esa ventana permitía
+ * que la página se restaurara entre medio y se destruyera igual—. Si nada
+ * coincide (no existe o no está en la papelera), 404.
  */
 pagesRouter.delete("/:id/definitivo", async (req, res) => {
-  const fila = await db("pages").where({ id: req.params.id }).whereNotNull("deleted_at").first();
-  if (!fila) return res.status(404).json({ error: "no está en la papelera" });
-  await db("pages").where({ id: req.params.id }).del();
+  const n = await db("pages").where({ id: req.params.id }).whereNotNull("deleted_at").del();
+  if (n === 0) return res.status(404).json({ error: "no está en la papelera" });
   res.status(204).end();
 });
+
+// ------------------------------------------------------ historial de versiones
 
 /** JSON de columna: MariaDB lo devuelve como string, MySQL 8 ya parseado. */
 function parseJson(value: unknown): unknown {
@@ -155,12 +188,20 @@ function parseJson(value: unknown): unknown {
 const MAX_REVISIONES = 30;
 
 /**
- * Archiva una foto del estado actual de la página (título, estado, SEO y
- * bloques) y poda las versiones que exceden el tope. Corre dentro de la misma
- * transacción que guardó, para que la versión archivada coincida exactamente
- * con lo que quedó.
+ * Archiva una foto del estado **actual** de la página —título, slug, estado,
+ * SEO, `publish_at` y bloques— y poda las versiones que exceden el tope.
+ *
+ * Se llama **antes** de reemplazar contenido, no después. Ésa es la corrección
+ * central: con "archivar después" la primera edición de una página existente
+ * pisaba su contenido original y recién archivaba el nuevo, así que lo viejo se
+ * perdía. Archivando el estado actual antes de tocarlo, la versión anterior
+ * siempre queda recuperable, incluida la primera edición.
+ *
+ * La foto es completa y consistente: sale de una sola lectura de la fila y sus
+ * bloques dentro de la misma transacción, así que nunca mezcla metadatos nuevos
+ * con bloques viejos.
  */
-async function archivarRevision(trx: Knex.Transaction, pageId: number, userId?: number): Promise<void> {
+async function archivarActual(trx: Knex.Transaction, pageId: number, userId?: number): Promise<void> {
   const page = await trx("pages").where({ id: pageId }).first();
   if (!page) return;
   const blocks = await trx("blocks").where({ page_id: pageId }).orderBy("order").select("type", "props", "order");
@@ -169,6 +210,7 @@ async function archivarRevision(trx: Knex.Transaction, pageId: number, userId?: 
     slug: page.slug,
     status: page.status,
     seo: parseJson(page.seo) ?? null,
+    publish_at: page.publish_at ?? null,
     blocks: blocks.map((b) => ({ type: b.type, props: parseJson(b.props), order: b.order })),
   };
   await trx("page_revisions").insert({
@@ -187,6 +229,104 @@ async function archivarRevision(trx: Knex.Transaction, pageId: number, userId?: 
   }
 }
 
+interface BloqueValido {
+  type: string;
+  props: unknown;
+}
+interface BloqueInvalido {
+  ok: false;
+  index: number;
+  type: string;
+  error: unknown;
+}
+
+/** Valida y sanea la lista de bloques; devuelve los válidos o el primero roto. */
+function validarBloques(
+  raw: { type: string; props?: unknown }[],
+): { ok: true; validados: BloqueValido[] } | { ok: false; invalido: BloqueInvalido } {
+  const validados: BloqueValido[] = [];
+  for (let index = 0; index < raw.length; index++) {
+    const b = raw[index];
+    const result = validateBlockProps(b.type, sanitizeBlockProps(b.props));
+    if (!result.success) {
+      return { ok: false, invalido: { ok: false, index, type: b.type, error: result.error } };
+    }
+    validados.push({ type: b.type, props: result.data });
+  }
+  return { ok: true, validados };
+}
+
+/** Reemplaza todos los bloques de la página por los validados, en orden. */
+async function reemplazarBloques(
+  trx: Knex.Transaction,
+  pageId: number,
+  validados: BloqueValido[],
+): Promise<void> {
+  await trx("blocks").where({ page_id: pageId }).del();
+  for (let i = 0; i < validados.length; i++) {
+    await trx("blocks").insert({
+      page_id: pageId,
+      type: validados[i].type,
+      props: JSON.stringify(validados[i].props),
+      order: i,
+    });
+  }
+}
+
+/** Carga la fila viva (no borrada) o lanza 404. Bloquea con `FOR UPDATE`. */
+async function cargarPaginaViva(trx: Knex.Transaction, pageId: number) {
+  const page = await trx("pages").where({ id: pageId }).forUpdate().first();
+  if (!page || page.deleted_at != null) throw notFound("no encontrada");
+  return page;
+}
+
+const contentSchema = z.object({
+  title: z.string().trim().min(1).max(255).optional(),
+  slug: z.string().trim().min(1).max(191).regex(/^[a-z0-9-]+$/).optional(),
+  status: z.enum(["draft", "published"]).optional(),
+  seo: seoSchema.optional(),
+  publish_at: z.string().nullable().optional(),
+  blocks: z.array(z.object({ type: z.string(), props: z.unknown() })).max(80),
+});
+
+/**
+ * Guardado atómico completo de la página: metadatos + bloques en **una sola
+ * operación**. Es lo que usa el Page Builder, para no partir el guardado en dos
+ * llamadas (metadatos por un lado, bloques por otro) que dejaban fotos
+ * intermedias inconsistentes y estado a medias si la segunda fallaba.
+ *
+ * Orden dentro de la transacción: cargar la fila viva (404 si no está o está en
+ * la papelera) → **archivar el estado anterior** → aplicar metadatos → reemplazar
+ * bloques. Si algo falla, la transacción revierte entera: nunca quedan metadatos
+ * actualizados con bloques a medias.
+ */
+pagesRouter.put("/:id/content", async (req, res) => {
+  const pageId = Number(req.params.id);
+  const parsed = contentSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "payload invalido", issues: parsed.error.issues });
+
+  const bloques = validarBloques(parsed.data.blocks);
+  if (!bloques.ok) return res.status(400).json({ error: "bloque invalido", block: bloques.invalido });
+
+  let metaPatch: Record<string, unknown>;
+  try {
+    metaPatch = construirMetaPatch(parsed.data);
+  } catch (e) {
+    if (e instanceof PublishAtInvalido) return res.status(400).json({ error: "publish_at no es una fecha válida" });
+    throw e;
+  }
+
+  await db.transaction(async (trx) => {
+    await cargarPaginaViva(trx, pageId);
+    await archivarActual(trx, pageId, req.user?.id);
+    await trx("pages")
+      .where({ id: pageId })
+      .update({ ...metaPatch, updated_at: trx.fn.now() });
+    await reemplazarBloques(trx, pageId, bloques.validados);
+  });
+  res.json({ ok: true });
+});
+
 const blocksReplaceSchema = z.object({
   blocks: z.array(
     z.object({
@@ -196,42 +336,31 @@ const blocksReplaceSchema = z.object({
   ).max(80),
 });
 
+/**
+ * Guardado de sólo bloques. Se conserva por compatibilidad; el Page Builder usa
+ * `/content`. Aplica el mismo contrato de historial: archiva el estado anterior
+ * antes de reemplazar, respeta la papelera y es atómico.
+ */
 pagesRouter.put("/:id/blocks", async (req, res) => {
   const pageId = Number(req.params.id);
   const parsed = blocksReplaceSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "payload invalido" });
-  const blocks = parsed.data.blocks.map((b, index) => {
-    const result = validateBlockProps(b.type, sanitizeBlockProps(b.props));
-    if (!result.success) return { ok: false as const, index, type: b.type, error: result.error };
-    return { ok: true as const, type: b.type, props: result.data };
-  });
-  const invalid = blocks.find((b) => !b.ok);
-  if (invalid) return res.status(400).json({ error: "bloque invalido", block: invalid });
+  const bloques = validarBloques(parsed.data.blocks);
+  if (!bloques.ok) return res.status(400).json({ error: "bloque invalido", block: bloques.invalido });
   await db.transaction(async (trx) => {
-    await trx("blocks").where({ page_id: pageId }).del();
-    for (let i = 0; i < blocks.length; i++) {
-      const b = blocks[i];
-      if (!b.ok) continue;
-      await trx("blocks").insert({
-        page_id: pageId,
-        type: b.type,
-        props: JSON.stringify(b.props),
-        order: i,
-      });
-    }
+    await cargarPaginaViva(trx, pageId);
+    await archivarActual(trx, pageId, req.user?.id);
+    await reemplazarBloques(trx, pageId, bloques.validados);
     await trx("pages").where({ id: pageId }).update({ updated_at: trx.fn.now() });
-    // Cada guardado deja una versión en el historial, con lo que quedó recién
-    // escrito y quién lo guardó.
-    await archivarRevision(trx, pageId, req.user?.id);
   });
   res.json({ ok: true });
 });
 
-/** Historial de versiones de una página (más nueva primero). */
+/** Historial de versiones de una página (más nueva primero). 404 si está en la papelera. */
 pagesRouter.get("/:id/revisions", async (req, res) => {
   const pageId = Number(req.params.id);
   const page = await db("pages").where({ id: pageId }).first();
-  if (!page) return res.status(404).json({ error: "no encontrada" });
+  if (!page || page.deleted_at != null) return res.status(404).json({ error: "no encontrada" });
   const rows = await db("page_revisions as r")
     .leftJoin("users as u", "u.id", "r.created_by")
     .where("r.page_id", pageId)
@@ -252,8 +381,10 @@ pagesRouter.get("/:id/revisions", async (req, res) => {
 });
 
 /**
- * Restaura una versión: aplica su título, estado, SEO y bloques como el estado
- * actual, y archiva una versión nueva (así restaurar también se puede deshacer).
+ * Restaura una versión: aplica su título, estado, SEO, `publish_at` y bloques
+ * como estado actual. **Archiva primero el estado actual**, de modo que restaurar
+ * también se pueda deshacer (queda como una versión más). Atómico y con guarda
+ * de papelera.
  *
  * El `slug` NO se restaura: es la identidad y la URL de la página. Cambiarlo al
  * volver a una versión vieja rompería enlaces y podría chocar con otra página.
@@ -266,25 +397,29 @@ pagesRouter.post("/:id/revisions/:revId/restore", async (req, res) => {
   const snap = parseJson(rev.snapshot) as any;
   if (!snap || typeof snap !== "object") return res.status(422).json({ error: "versión ilegible" });
 
-  const bloques: any[] = Array.isArray(snap.blocks) ? snap.blocks : [];
+  const brutos: { type: string; props: unknown }[] = Array.isArray(snap.blocks)
+    ? snap.blocks.map((b: any) => ({ type: String(b?.type), props: b?.props ?? {} }))
+    : [];
+  const bloques = validarBloques(brutos);
+  // Una versión archivada ya pasó por validación al guardarse; si aun así trae
+  // un bloque ilegible (fila editada a mano), se rechaza en vez de escribir basura.
+  if (!bloques.ok) return res.status(422).json({ error: "versión con un bloque ilegible" });
+
   await db.transaction(async (trx) => {
-    await trx("pages").where({ id: pageId }).update({
-      title: snap.title,
-      status: snap.status === "published" ? "published" : "draft",
-      seo: snap.seo ? JSON.stringify(snap.seo) : null,
-      updated_at: trx.fn.now(),
-    });
-    await trx("blocks").where({ page_id: pageId }).del();
-    for (let i = 0; i < bloques.length; i++) {
-      const b = bloques[i];
-      await trx("blocks").insert({
-        page_id: pageId,
-        type: String(b.type),
-        props: JSON.stringify(b.props ?? {}),
-        order: i,
+    await cargarPaginaViva(trx, pageId);
+    // Primero se archiva lo que hay ahora: así deshacer la restauración es volver
+    // a esta versión recién creada.
+    await archivarActual(trx, pageId, req.user?.id);
+    await trx("pages")
+      .where({ id: pageId })
+      .update({
+        title: snap.title,
+        status: snap.status === "published" ? "published" : "draft",
+        seo: snap.seo ? JSON.stringify(snap.seo) : null,
+        publish_at: snap.publish_at ?? null,
+        updated_at: trx.fn.now(),
       });
-    }
-    await archivarRevision(trx, pageId, req.user?.id);
+    await reemplazarBloques(trx, pageId, bloques.validados);
   });
   res.json({ ok: true });
 });

@@ -2385,3 +2385,82 @@ público / constructor de formularios: cada uno necesita definir alcance (qué
 puede cada rol, qué idiomas, qué se indexa, qué campos) antes de construir. Se
 dejan explícitamente pendientes de una decisión del propietario en vez de
 inventar una.
+
+### 18.7 Ronda correctiva del PR #23 (mismo PR, se mantiene en Draft)
+
+Siete correcciones sobre lo de §18.3–§18.5, sin abrir otro PR ni tocar el
+historial Git. Reemplazan el comportamiento que describen esas subsecciones.
+
+- **Historial realmente recuperable + guardado atómico (§18.4 corregido).** El
+  problema: `PUT /pages/:id/blocks` archivaba *después* de reemplazar, así que la
+  **primera** edición de una página preexistente perdía su contenido original —lo
+  que archivaba era el nuevo—. Ahora el archivado es **antes de reemplazar**
+  (`archivarActual` corre primero dentro de la transacción), de modo que la
+  primera edición ya deja recuperable el estado original, y restaurar archiva
+  primero el estado actual (restaurar es reversible). Nuevo endpoint transaccional
+  `PUT /pages/:id/content` que recibe **metadatos + bloques** y los guarda en una
+  sola operación: valida los bloques *antes* de la transacción, y dentro hace
+  cargar-fila-viva → archivar → actualizar meta → reemplazar bloques; si algo
+  falla revierte entero (nunca metadatos nuevos con bloques a medias). La foto
+  sale de una sola lectura (título/estado/SEO/`publish_at`/bloques coherentes). El
+  Page Builder usa `/content`; `/blocks` se conserva por compatibilidad con el
+  mismo contrato. Poda a 30 intacta.
+- **Restauración segura en el panel.** `PageBuilderPage` restaura con
+  `ConfirmDialog`; si hay cambios locales sin guardar, el diálogo **advierte que
+  se descartarán**. Guardar y Restaurar quedan deshabilitados mientras una
+  operación está en curso; al terminar se refrescan página/bloques/historial y se
+  limpia `dirty`. Un guardado que la API rechaza (p. ej. la página se movió a la
+  papelera en otra pestaña) muestra un error accionable, no un clic mudo.
+- **Publicación programada desde borrador.** "Programar" desde un borrador manda
+  `status:published` + `publish_at` futuro en **una** operación; el sitio no la
+  muestra hasta la fecha (lista, detalle y sitemap), y aparece sola cuando pasa.
+  El panel distingue Borrador / Publicada / Programada y rechaza fechas pasadas
+  con aviso (para publicar ya, "Publicar").
+- **Papelera consistente en todos los endpoints.** `cargarPaginaViva` rechaza con
+  404 cualquier edición (metadatos, `/content`, `/blocks`) sobre una fila con
+  `deleted_at`. El borrado definitivo es un **DELETE condicional atómico**
+  (`whereNotNull("deleted_at").del()`, 404 si no afecta filas), sin la ventana de
+  "consultar y después borrar".
+- **Newsletter mínima operable, sin proveedor externo.** `source` alineado a la
+  ruta real (columna `varchar(512)`, sin truncar a 64); el bloque usa `useId()`
+  para que dos formularios en una página no compartan el id del input; estados de
+  carga/error/reintento en el bloque y en la bandeja. **Evidencia de
+  consentimiento**: texto de finalidad explícito, `consent_at`/`consent_version`
+  puestos por el servidor. **Baja pública** por token opaco (`unsubscribe_token`,
+  `randomBytes` base64url) que no borra la fila (marca inactivo, conserva
+  evidencia) y responde siempre 200 (sin enumeración). La bandeja pagina y busca;
+  el CSV lleva estado + consentimiento y **no** el token; ni correo ni token van a
+  logs. Mensaje de éxito preciso ("Registramos tu solicitud para recibir
+  novedades"): no afirma que exista envío automático. **No** se integró
+  Mailchimp/Brevo/Meta ni ningún proveedor: no hay cuenta ni credenciales.
+- **Cobertura DOM real del panel** (no una respuesta de API haciéndose pasar por
+  cobertura de pantalla): `tests/page-builder-panel.test.tsx` (restaurar con
+  cambios sin guardar, botones bloqueados durante la operación diferida, guardado
+  404 accionable por `/content`), `tests/pages-list-panel.test.tsx` (distinguir los
+  tres estados, programar un borrador, rechazar fecha pasada),
+  `tests/newsletter-block.test.tsx` (dos bloques con id distinto, error + reintento)
+  y `tests/newsletter-panel.test.tsx` (carga, error+reintento, paginación,
+  búsqueda, export, baja sin borrar).
+
+**Corrector — cada defecto se reintrodujo temporalmente y la prueba lo detectó
+(RED), luego se revirtió:** (1) archivar después del primer guardado → la versión
+A no queda en el historial; (2) guardado dividido que deja los metadatos a medias
+→ el título cambia pese al bloque inválido; (3) programar sin cambiar el draft →
+`status` no queda `published`; (4) permitir guardar bloques de una página en la
+papelera → 200 en vez de 404; (5) restaurar sin confirmación → no aparece el
+aviso de descarte; (6) `source` limitado a 64 → la ruta larga se trunca; (7) id
+fijo `nl-email` → los dos inputs comparten id; (8) ausencia de
+consentimiento/baja → `consent_at` nulo / la baja no marca inactivo.
+
+**Validación:** suite completa **1486/1486 en 80 archivos** (MariaDB local;
+`typecheck` limpio; `build` de API/web/admin; prerender real de `/estudios` con
+JSON-LD contra la API viva; migraciones up/down/up 33↔33 reversibles;
+`audit:prod` sin vulnerabilidades; `check:secrets` limpio; `gitleaks` sobre el
+árbol sin hallazgos). CI corre la suite contra **MySQL 8**.
+
+> **El historial Git NO está limpio.** `gitleaks` sobre el historial completo
+> sigue reportando **1 hallazgo**: `scripts/deploy/setup-vps.sh`
+> (`shell-default-credential`) introducido en el commit `9ced09d`. No se rota ni
+> se purga acá —reescribir la historia y rotar la credencial es decisión del
+> propietario del repo—. **El NO-GO de producción sigue vigente** hasta que el
+> propietario resuelva la rotación/purga.

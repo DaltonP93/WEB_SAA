@@ -9,6 +9,7 @@ import {
   closeServer,
   createTestDatabase,
   dropTestDatabase,
+  jsonColumn,
   migrateLatest,
   runSeeds,
 } from "./helpers/db";
@@ -182,5 +183,74 @@ describeDb("paginas: papelera y programacion", () => {
       body: JSON.stringify({ title: "nuevo" }),
     });
     expect(res.status).toBe(404);
+  });
+
+  it("con una pestaña abierta: mover a la papelera y luego guardar bloques → 404 y contenido intacto", async () => {
+    const id = await crearPagina("pestania-abierta-demo", "draft");
+    // Estado inicial guardado (simula la pestaña del Page Builder ya cargada).
+    const inicial = await fetch(`${baseUrl}/api/admin/pages/${id}/content`, {
+      method: "PUT",
+      headers: auth(),
+      body: JSON.stringify({ blocks: [{ type: "spacer", props: { height: 15 } }] }),
+    });
+    expect(inicial.status).toBe(200);
+
+    // Desde otra pestaña la mandan a la papelera.
+    await fetch(`${baseUrl}/api/admin/pages/${id}`, { method: "DELETE", headers: auth() });
+
+    // La pestaña vieja intenta guardar: tanto /content como /blocks responden 404.
+    const guardarContent = await fetch(`${baseUrl}/api/admin/pages/${id}/content`, {
+      method: "PUT",
+      headers: auth(),
+      body: JSON.stringify({ blocks: [{ type: "spacer", props: { height: 99 } }] }),
+    });
+    expect(guardarContent.status).toBe(404);
+    const guardarBloques = await fetch(`${baseUrl}/api/admin/pages/${id}/blocks`, {
+      method: "PUT",
+      headers: auth(),
+      body: JSON.stringify({ blocks: [{ type: "spacer", props: { height: 99 } }] }),
+    });
+    expect(guardarBloques.status).toBe(404);
+
+    // El contenido no se tocó: sigue el bloque de height 15.
+    const bloques = await db("blocks").where({ page_id: id }).orderBy("order");
+    expect(bloques.length).toBe(1);
+    expect(jsonColumn<any>(bloques[0].props).height).toBe(15);
+  });
+
+  it("programar desde BORRADOR: publicada + fecha futura en una operación, oculta hasta la fecha", async () => {
+    const id = await crearPagina("programar-borrador-demo", "draft");
+    // Programar en una sola operación: pasa a published con publish_at futuro.
+    const prog = await fetch(`${baseUrl}/api/admin/pages/${id}`, {
+      method: "PUT",
+      headers: auth(),
+      body: JSON.stringify({ status: "published", publish_at: "2099-01-01T00:00" }),
+    });
+    expect(prog.status, await prog.clone().text()).toBe(200);
+
+    // La fila quedó published + agendada, pero el sitio no la muestra todavía.
+    const fila = await db("pages").where({ id }).first();
+    expect(fila.status).toBe("published");
+    expect(fila.publish_at).toBeTruthy();
+    expect((await publicList()).some((p) => p.slug === "programar-borrador-demo")).toBe(false);
+    expect((await publicDetail("programar-borrador-demo")).status).toBe(404);
+    const sitemap = await (await fetch(`${baseUrl}/sitemap.xml`)).text();
+    expect(sitemap).not.toContain("/programar-borrador-demo");
+
+    // Cuando la fecha ya pasó, aparece sola (mismo status published).
+    await fetch(`${baseUrl}/api/admin/pages/${id}`, {
+      method: "PUT",
+      headers: auth(),
+      body: JSON.stringify({ publish_at: "2000-01-01T00:00" }),
+    });
+    expect((await publicList()).some((p) => p.slug === "programar-borrador-demo")).toBe(true);
+
+    // Despublicar la mantiene fuera del sitio (vuelve a borrador).
+    await fetch(`${baseUrl}/api/admin/pages/${id}`, {
+      method: "PUT",
+      headers: auth(),
+      body: JSON.stringify({ status: "draft" }),
+    });
+    expect((await publicList()).some((p) => p.slug === "programar-borrador-demo")).toBe(false);
   });
 });

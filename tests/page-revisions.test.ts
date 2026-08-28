@@ -9,16 +9,19 @@ import {
   closeServer,
   createTestDatabase,
   dropTestDatabase,
+  jsonColumn,
   migrateLatest,
   runSeeds,
 } from "./helpers/db";
 
 /**
- * Historial de versiones de paginas, de punta a punta.
+ * Historial realmente recuperable, con guardado atómico completo.
  *
- * Cada guardado de bloques archiva una version; se puede listar y restaurar una
- * anterior; restaurar tambien queda archivado (es reversible); y el historial
- * no crece sin techo.
+ * El contrato corregido: `PUT /pages/:id/content` archiva el estado ANTERIOR
+ * antes de reemplazar, así la primera edición de una página existente ya deja
+ * recuperable su contenido original. Restaurar archiva primero el estado actual,
+ * de modo que restaurar se pueda deshacer. La foto es completa (título, estado,
+ * SEO, publish_at, bloques) y consistente, y nada queda a medias si algo falla.
  *
  *   TEST_DATABASE=1 pnpm test tests/page-revisions.test.ts
  */
@@ -26,7 +29,7 @@ import {
 const DB_NAME = `${process.env.TEST_DB_NAME ?? "sanatorio_test"}_rev`;
 const describeDb = DB_TESTS_ENABLED ? describe : describe.skip;
 
-describeDb("paginas: historial de versiones", () => {
+describeDb("paginas: historial realmente recuperable", () => {
   let db: Knex;
   let server: Server;
   let baseUrl = "";
@@ -43,16 +46,34 @@ describeDb("paginas: historial de versiones", () => {
     expect(res.status, await res.clone().text()).toBe(201);
     return (await res.json()).id as number;
   }
-  async function guardarBloques(id: number, blocks: any[]) {
-    const res = await fetch(`${baseUrl}/api/admin/pages/${id}/blocks`, {
+  /** Guardado atómico completo (metadatos + bloques). */
+  function guardar(id: number, body: any) {
+    return fetch(`${baseUrl}/api/admin/pages/${id}/content`, {
       method: "PUT",
       headers: auth(),
-      body: JSON.stringify({ blocks }),
+      body: JSON.stringify(body),
     });
-    expect(res.status, await res.clone().text()).toBe(200);
   }
   const listar = async (id: number) =>
     (await (await fetch(`${baseUrl}/api/admin/pages/${id}/revisions`, { headers: auth() })).json()) as any[];
+  const verPagina = async (id: number) =>
+    (await (await fetch(`${baseUrl}/api/admin/pages/${id}`, { headers: auth() })).json()) as any;
+
+  const contenidoA = {
+    title: "Versión A",
+    status: "draft" as const,
+    seo: { title: "seg A", description: "desc A" },
+    blocks: [{ type: "spacer", props: { height: 11 } }],
+  };
+  const contenidoB = {
+    title: "Versión B",
+    status: "published" as const,
+    seo: { title: "seg B", description: "desc B" },
+    blocks: [
+      { type: "spacer", props: { height: 21 } },
+      { type: "spacer", props: { height: 22 } },
+    ],
+  };
 
   beforeAll(async () => {
     db = await createTestDatabase(DB_NAME);
@@ -85,76 +106,141 @@ describeDb("paginas: historial de versiones", () => {
     await dropTestDatabase(DB_NAME);
   });
 
-  it("cada guardado archiva una versión, con autor y conteo de bloques", async () => {
-    const id = await crearPagina("hist-demo");
-    await guardarBloques(id, [{ type: "spacer", props: { height: 10 } }]);
-    await guardarBloques(id, [
-      { type: "spacer", props: { height: 20 } },
-      { type: "spacer", props: { height: 30 } },
-    ]);
+  it("página preexistente con contenido A → primer guardado B → restaurar A vuelve a A", async () => {
+    const id = await crearPagina("recuperable-demo");
+    // La página YA tiene contenido A, puesto **sin pasar por el archivado**
+    // (simula contenido preexistente: de antes de esta feature, o de una vía
+    // que no archiva). No hay ninguna revisión todavía.
+    await db("pages")
+      .where({ id })
+      .update({ title: "Versión A", status: "draft", seo: JSON.stringify({ title: "seg A", description: "desc A" }) });
+    await db("blocks").insert({ page_id: id, type: "spacer", props: JSON.stringify({ height: 11 }), order: 0 });
+    expect((await db("page_revisions").where({ page_id: id })).length).toBe(0);
 
+    // Primera edición de la página existente vía el endpoint: pasa a B. Con
+    // "archivar después" el contenido A se perdería acá; con "archivar antes"
+    // queda archivado.
+    expect((await guardar(id, contenidoB)).status).toBe(200);
+
+    // El contenido original A quedó archivado y es recuperable.
     const revs = await listar(id);
-    expect(revs.length).toBe(2);
-    // Más nueva primero: la v2 tiene 2 bloques, la v1 tiene 1.
-    expect(revs[0].blockCount).toBe(2);
-    expect(revs[1].blockCount).toBe(1);
-    // El autor es el admin sembrado.
-    expect(revs[0].author).toBeTruthy();
-  });
+    const revA = revs.find((r) => r.title === "Versión A");
+    expect(revA, "la versión A tiene que estar en el historial").toBeTruthy();
+    expect(revA.blockCount).toBe(1);
 
-  it("restaurar una versión anterior vuelve a esos bloques y queda archivado", async () => {
-    const id = await crearPagina("restore-demo");
-    await guardarBloques(id, [{ type: "spacer", props: { height: 10 } }]);
-    await guardarBloques(id, [
-      { type: "spacer", props: { height: 20 } },
-      { type: "spacer", props: { height: 30 } },
-    ]);
-
-    const revs = await listar(id);
-    const vieja = revs.find((r) => r.blockCount === 1); // la primera versión
-    expect(vieja).toBeTruthy();
-
-    const res = await fetch(`${baseUrl}/api/admin/pages/${id}/revisions/${vieja.id}/restore`, {
+    const restaurar = await fetch(`${baseUrl}/api/admin/pages/${id}/revisions/${revA.id}/restore`, {
       method: "POST",
       headers: auth(),
     });
-    expect(res.status, await res.clone().text()).toBe(200);
+    expect(restaurar.status, await restaurar.clone().text()).toBe(200);
 
-    // Los bloques actuales son los de la versión vieja (un solo Hero).
-    const bloques = await db("blocks").where({ page_id: id }).orderBy("order");
-    expect(bloques.length).toBe(1);
-    expect(bloques[0].type).toBe("spacer");
-
-    // Restaurar también dejó una versión nueva: ahora hay 3.
-    expect((await listar(id)).length).toBe(3);
+    const page = await verPagina(id);
+    expect(page.title).toBe("Versión A");
+    expect(page.status).toBe("draft");
+    expect(jsonColumn<any>(page.seo).title).toBe("seg A");
+    expect(page.blocks.length).toBe(1);
+    expect(jsonColumn<any>(page.blocks[0].props).height).toBe(11);
   });
 
-  it("restaurar una versión que no existe es 404", async () => {
-    const id = await crearPagina("rev404-demo");
-    await guardarBloques(id, [{ type: "spacer", props: { height: 10 } }]);
-    const res = await fetch(`${baseUrl}/api/admin/pages/${id}/revisions/999999/restore`, {
-      method: "POST",
-      headers: auth(),
+  it("restaurar A y luego restaurar B otra vez (restaurar es reversible)", async () => {
+    const id = await crearPagina("reversible-demo");
+    await guardar(id, contenidoA);
+    await guardar(id, contenidoB); // current = B
+
+    const revs1 = await listar(id);
+    const revA = revs1.find((r) => r.title === "Versión A");
+    // Restaurar A: archiva primero el estado actual (B), así B queda recuperable.
+    await fetch(`${baseUrl}/api/admin/pages/${id}/revisions/${revA.id}/restore`, { method: "POST", headers: auth() });
+    expect((await verPagina(id)).title).toBe("Versión A");
+
+    const revs2 = await listar(id);
+    const revB = revs2.find((r) => r.title === "Versión B");
+    expect(revB, "restaurar A tuvo que archivar B").toBeTruthy();
+    await fetch(`${baseUrl}/api/admin/pages/${id}/revisions/${revB.id}/restore`, { method: "POST", headers: auth() });
+    const page = await verPagina(id);
+    expect(page.title).toBe("Versión B");
+    expect(page.status).toBe("published");
+    expect(page.blocks.length).toBe(2);
+  });
+
+  it("un bloque inválido no deja los metadatos actualizados a medias", async () => {
+    const id = await crearPagina("atomico-demo");
+    await guardar(id, contenidoA); // title = "Versión A"
+    const antes = await verPagina(id);
+
+    const res = await guardar(id, {
+      title: "NO DEBE QUEDAR",
+      status: "published",
+      blocks: [{ type: "tipo-inexistente", props: {} }],
     });
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(400);
+
+    const despues = await verPagina(id);
+    expect(despues.title).toBe(antes.title); // el título no cambió
+    expect(despues.status).toBe(antes.status);
+    expect(despues.blocks.length).toBe(1); // los bloques tampoco
   });
 
-  it("el historial no crece sin techo (se poda al máximo)", async () => {
+  it("el snapshot conserva título, estado, SEO y propiedades anidadas de los bloques", async () => {
+    const id = await crearPagina("snapshot-demo");
+    await guardar(id, {
+      title: "Con anidados",
+      status: "published",
+      seo: { title: "seo-t", description: "seo-d", ogImage: "/uploads/o.png" },
+      blocks: [{ type: "spacer", props: { height: 42 } }],
+    });
+    // Segundo guardado para que el primero quede archivado.
+    await guardar(id, { title: "Otro", blocks: [] });
+
+    const rev = (await listar(id)).find((r) => r.title === "Con anidados");
+    expect(rev).toBeTruthy();
+    const fila = await db("page_revisions").where({ id: rev.id }).first();
+    const snap = jsonColumn<any>(fila.snapshot);
+    expect(snap.title).toBe("Con anidados");
+    expect(snap.status).toBe("published");
+    expect(snap.seo).toEqual({ title: "seo-t", description: "seo-d", ogImage: "/uploads/o.png" });
+    expect(snap.blocks[0].props.height).toBe(42);
+  });
+
+  it("el historial se poda al máximo de 30", async () => {
     const id = await crearPagina("poda-demo");
-    // 33 guardados: por encima del tope de 30.
     for (let i = 0; i < 33; i++) {
-      await guardarBloques(id, [{ type: "spacer", props: { height: (i % 200) + 1 } }]);
+      await guardar(id, { title: `v${i}`, blocks: [{ type: "spacer", props: { height: (i % 200) + 1 } }] });
     }
     const total = await db("page_revisions").where({ page_id: id }).count<{ c: number }[]>({ c: "*" });
     expect(Number(total[0].c)).toBe(30);
   });
 
-  it("borrar la página definitivamente se lleva su historial (cascade)", async () => {
-    const id = await crearPagina("hist-cascade-demo");
-    await guardarBloques(id, [{ type: "spacer", props: { height: 10 } }]);
+  it("guardar en una página inexistente o en la papelera es 404 y no la modifica", async () => {
+    // Inexistente.
+    expect((await guardar(999999, contenidoA)).status).toBe(404);
+
+    // En la papelera: no se toca.
+    const id = await crearPagina("papelera-content-demo");
+    await guardar(id, contenidoA);
+    const antes = await verPagina(id);
+    await fetch(`${baseUrl}/api/admin/pages/${id}`, { method: "DELETE", headers: auth() }); // a la papelera
+    const res = await guardar(id, { title: "NO", blocks: [] });
+    expect(res.status).toBe(404);
+    // El contenido guardado sigue intacto (title de A, 1 bloque).
+    const fila = await db("pages").where({ id }).first();
+    expect(fila.title).toBe(antes.title);
+    expect((await db("blocks").where({ page_id: id })).length).toBe(1);
+  });
+
+  it("restaurar una versión que no existe es 404; el borrado definitivo se lleva el historial", async () => {
+    const id = await crearPagina("rev404-cascade-demo");
+    await guardar(id, contenidoA);
+    await guardar(id, contenidoB);
     expect(await db("page_revisions").where({ page_id: id }).first()).toBeTruthy();
 
-    await fetch(`${baseUrl}/api/admin/pages/${id}`, { method: "DELETE", headers: auth() }); // papelera
+    const noExiste = await fetch(`${baseUrl}/api/admin/pages/${id}/revisions/999999/restore`, {
+      method: "POST",
+      headers: auth(),
+    });
+    expect(noExiste.status).toBe(404);
+
+    await fetch(`${baseUrl}/api/admin/pages/${id}`, { method: "DELETE", headers: auth() });
     await fetch(`${baseUrl}/api/admin/pages/${id}/definitivo`, { method: "DELETE", headers: auth() });
     expect(await db("page_revisions").where({ page_id: id }).first()).toBeFalsy();
   });
