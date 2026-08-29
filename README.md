@@ -14,6 +14,15 @@
 
 ---
 
+## 📍 Estado actual y pendientes
+
+El estado canónico del proyecto —funcionalidades terminadas, validación, pendientes,
+bloqueos de producción y checklist de go-live— está en
+[**docs/ESTADO-PROYECTO.md**](docs/ESTADO-PROYECTO.md).
+
+Debe actualizarse en el mismo PR de todo cambio sustancial y confirmarse otra vez
+después del merge.
+
 ## ✨ Features
 
 - **Sitio público** SPA con páginas dinámicas armadas a partir de **21 tipos de bloques** renderizables (Hero, Cards, Slider, Acordeón, Galería, Grid de médicos/especialidades/servicios/estudios, Mapa, Video, Formularios de contacto y turno, Canales de contacto (WhatsApp/tel/email), Redes sociales, CTA, Stats, Logos, etc.).
