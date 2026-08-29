@@ -1,10 +1,10 @@
 # WEB_SAA — Estado completo posterior al merge y pendientes
 
 **Repositorio:** [DaltonP93/WEB_SAA](https://github.com/DaltonP93/WEB_SAA)  
-**Fecha de verificación:** 28 de agosto de 2026  
+**Fecha de verificación:** 29 de agosto de 2026  
 **Rama verificada:** `main`  
-**HEAD de `main`:** `f398fed11e9030fa7955e7f6bd8d3426739bfe28`  
-**Último cambio fusionado:** [PR #23](https://github.com/DaltonP93/WEB_SAA/pull/23), cuyo HEAD era `26c70abde2b26aa5476b254766353a55f56d5948`
+**HEAD de `main`:** `94e2e0ee4fc9c762d54c9d0f10bad3d6ff7cd19a`  
+**Último cambio fusionado:** [PR #24](https://github.com/DaltonP93/WEB_SAA/pull/24) (sólo documentación: este archivo), sobre [PR #23](https://github.com/DaltonP93/WEB_SAA/pull/23), cuyo HEAD era `26c70abde2b26aa5476b254766353a55f56d5948` (merge de #23 en `main`: `f398fed11e9030fa7955e7f6bd8d3426739bfe28`)
 
 > **Documento canónico y vivo.** Este archivo debe actualizarse en toda ronda
 > que cambie funcionalidades, migraciones, seguridad, despliegue, conteo de
@@ -35,15 +35,16 @@ Sin embargo, el proyecto todavía está en **NO-GO para producción** por un sec
 
 | Comprobación | Resultado |
 |---|---|
-| PR #23 | Fusionado el 28/08/2026 |
-| Merge commit | `f398fed11e9030fa7955e7f6bd8d3426739bfe28` |
-| `main` actual | `f398fed11e9030fa7955e7f6bd8d3426739bfe28` |
-| CI posterior al merge | **Success** |
+| PR #23 (código) | Fusionado el 28/08/2026 · merge commit `f398fed11e9030fa7955e7f6bd8d3426739bfe28` |
+| PR #24 (docs: este archivo) | Fusionado el 29/08/2026 · merge commit `94e2e0ee4fc9c762d54c9d0f10bad3d6ff7cd19a` |
+| `main` actual | `94e2e0ee4fc9c762d54c9d0f10bad3d6ff7cd19a` |
+| CI posterior al merge (`f398fed`, run #61) | **Success** |
+| CI posterior al merge (`94e2e0e`, run #63) | **Success** |
 | Conflictos | Ninguno |
-| Reviews registradas en PR #23 | **0** |
+| Reviews registradas en PR #23 / #24 | **0** |
 | Deploy automático | No existe |
 
-El PR #23 fue fusionado sin una review registrada. Los checks automáticos estaban verdes, pero una suite verde no equivale a una revisión humana. La documentación del proyecto también registra que los PR #16, #17 y #18 se fusionaron sin review.
+Los PR #23 y #24 se fusionaron sin una review registrada. Los checks automáticos estaban verdes, pero una suite verde no equivale a una revisión humana. La documentación del proyecto también registra que los PR #16, #17 y #18 se fusionaron sin review. PR #24 fue sólo documentación (este archivo): no cambió código, migraciones ni pruebas.
 
 ---
 
@@ -59,6 +60,7 @@ El PR #23 fue fusionado sin una review registrada. Los checks automáticos estab
 | [#21](https://github.com/DaltonP93/WEB_SAA/pull/21) | Reconciliación documental y verificación Search Console/Bing | Fusionado |
 | [#22](https://github.com/DaltonP93/WEB_SAA/pull/22) | Redirects 301 administrables | Fusionado |
 | [#23](https://github.com/DaltonP93/WEB_SAA/pull/23) | Papelera, publicación programada, revisiones, newsletter y dos rondas correctivas | Fusionado |
+| [#24](https://github.com/DaltonP93/WEB_SAA/pull/24) | Documentación viva: estado ejecutivo, pendientes y go-live post PR #23 (`docs/ESTADO-PROYECTO.md`) | Fusionado |
 
 ---
 
@@ -196,7 +198,7 @@ El PR #23 fue fusionado sin una review registrada. Los checks automáticos estab
 
 ## 5. Validación actual de `main`
 
-El workflow posterior al merge fue ejecutado sobre `f398fed` y terminó en **success**.
+El workflow posterior al merge terminó en **success** tanto sobre `f398fed` (PR #23, código; run #61) como sobre el `main` actual `94e2e0e` (PR #24, sólo documentación; run #63). Las cifras de código y pruebas de abajo corresponden a `f398fed` y siguen vigentes en `94e2e0e`, porque PR #24 no tocó código ni pruebas.
 
 | Check | Resultado |
 |---|---|
@@ -420,8 +422,8 @@ La siguiente etapa no es otra ronda amplia de desarrollo. Es una ronda controlad
 
 ## 12. Fuentes verificadas
 
-- `main` y merge del PR #23 en GitHub.
-- CI post-merge sobre `f398fed11e9030fa7955e7f6bd8d3426739bfe28`.
+- `main` y merges de los PR #23 y #24 en GitHub.
+- CI post-merge sobre `f398fed11e9030fa7955e7f6bd8d3426739bfe28` (PR #23, run #61) y sobre `94e2e0ee4fc9c762d54c9d0f10bad3d6ff7cd19a` (PR #24, run #63): ambos **success**.
 - `CLAUDE_CONTEXT.md`, secciones 14–18.8.
 - `AGENTS.md`.
 - `README.md`.
