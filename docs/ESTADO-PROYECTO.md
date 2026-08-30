@@ -444,7 +444,25 @@ PR. Como mínimo:
 3. agregar los nuevos pendientes o decisiones del propietario;
 4. actualizar el conteo real de pruebas y los checks ejecutados;
 5. mantener explícitos los bloqueos de producción y seguridad;
-6. después del merge, sustituir el HEAD de `main` y registrar el CI post-merge.
+6. al comenzar el siguiente PR sustantivo, registrar el PR anterior
+   fusionado, sustituir el HEAD de `main` y registrar su CI post-merge.
+
+### Cierre post-merge sin ciclos documentales
+
+No se abrirá un PR exclusivamente para registrar el merge de otro PR
+exclusivamente documental.
+
+Después de fusionar un PR documental, el nuevo HEAD de `main`, su CI y ese PR
+se registrarán al comienzo del siguiente PR sustantivo.
+
+Todo PR que cambie código, contratos, migraciones, seguridad, despliegue,
+pruebas o funcionalidades debe actualizar `docs/ESTADO-PROYECTO.md`
+dentro del mismo PR.
+
+Un PR sustantivo es aquel que modifica código, configuración, migraciones,
+seguridad, despliegue, pruebas o funcionalidades del producto. Una corrección
+puramente documental no debe generar otra corrección documental sólo para
+registrar su propio merge.
 
 `CLAUDE_CONTEXT.md` conserva el historial técnico detallado de cada ronda;
 `docs/ESTADO-PROYECTO.md` es la vista ejecutiva y operativa vigente. Si ambos
