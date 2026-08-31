@@ -2,17 +2,20 @@
 # ============================================================================
 # Bootstrap deploy para Sanatorio Adventista V2 — VPS Ubuntu 22/24
 #
-# Uso (como root):
-#   curl -fsSL https://raw.githubusercontent.com/DaltonP93/WEB_SAA/main/scripts/deploy/setup-vps.sh | bash
+# Uso seguro (como root, desde un commit aprobado de main):
+#   APPROVED_SHA=<sha-aprobado>
+#   curl -fsSLo /tmp/setup-vps.sh \
+#     "https://raw.githubusercontent.com/DaltonP93/WEB_SAA/$APPROVED_SHA/scripts/deploy/setup-vps.sh"
+#   bash -n /tmp/setup-vps.sh
+#   DEPLOY_TO="$APPROVED_SHA" bash /tmp/setup-vps.sh
 #
-# O bajando el script primero:
-#   wget https://raw.githubusercontent.com/DaltonP93/WEB_SAA/main/scripts/deploy/setup-vps.sh
-#   chmod +x setup-vps.sh
-#   ./setup-vps.sh
+# No ejecutar con `curl | bash`: impide revisar el script y sigue un HEAD
+# móvil. El procedimiento completo está en docs/PREPRODUCCION-Y-GO-LIVE.md.
 #
 # Variables opcionales:
 #   REPO_URL   repo a clonar (default: DaltonP93/WEB_SAA)
-#   DOMAIN     dominio para HTTPS con Let's Encrypt. Sin dominio el panel
+#   DEPLOY_TO  SHA aprobado de main. Si se omite, usa origin/$BRANCH.
+#   DOMAIN     dominio para HTTPS con Let's Encrypt.
 #              Sin dominio el panel /admin NO se publica: el login viajaría
 #              en texto plano y eso no tiene excepción en este proyecto.
 #   ADMIN_EMAIL / ADMIN_PASS  credenciales del superadmin sembrado. Si no se
@@ -30,6 +33,7 @@ set -euo pipefail
 REPO_URL="${REPO_URL:-https://github.com/DaltonP93/WEB_SAA.git}"
 APP_DIR="${APP_DIR:-/var/www/sanatorio}"
 BRANCH="${BRANCH:-main}"
+DEPLOY_TO="${DEPLOY_TO:-}"
 
 DB_NAME="sanatorio"
 DB_USER="sanatorio"
@@ -79,6 +83,12 @@ die()  { echo -e "\033[1;31mERROR:\033[0m $*" >&2; exit 1; }
 
 [ "$(id -u)" -eq 0 ] || die "Este script necesita root. Probá: sudo bash $0"
 
+# DB_PASS se interpola dentro de SQL y de api/.env. El generado cumple esta
+# allowlist; un valor aportado por el operador no puede cambiar la sentencia,
+# inyectar otra línea ni ser tan corto que parezca una credencial de ejemplo.
+[[ "$DB_PASS" =~ ^[A-Za-z0-9._:@%+=,-]{16,128}$ ]] \
+  || die "DB_PASS debe tener 16-128 caracteres de la allowlist segura; generá otra credencial fuera del comando."
+
 # --- 1. Sistema -----------------------------------------------------------
 log "1/9  Actualizando sistema"
 export DEBIAN_FRONTEND=noninteractive
@@ -116,11 +126,19 @@ if [ -d "$APP_DIR/.git" ]; then
   cd "$APP_DIR"
   git fetch origin
   git checkout "$BRANCH"
-  git reset --hard "origin/${BRANCH}"
 else
   git clone --branch "$BRANCH" "$REPO_URL" "$APP_DIR"
   cd "$APP_DIR"
+  git fetch origin
 fi
+
+TARGET_REF="${DEPLOY_TO:-origin/${BRANCH}}"
+TARGET_SHA="$(git rev-parse --verify "${TARGET_REF}^{commit}")" \
+  || die "DEPLOY_TO no identifica un commit disponible: ${TARGET_REF}"
+git merge-base --is-ancestor "$TARGET_SHA" "origin/${BRANCH}" \
+  || die "DEPLOY_TO no pertenece a origin/${BRANCH}: se rechaza una versión no aprobada."
+git reset --hard "$TARGET_SHA"
+log "    versión fijada: ${TARGET_SHA}"
 
 # --- 6. Instalar dependencias ---------------------------------------------
 log "6/9  Instalando dependencias"
@@ -356,10 +374,13 @@ pm2 save
 # Auto-start al reboot
 pm2 startup systemd -u root --hp /root 2>&1 | grep -E "^sudo " | bash || true
 
-ufw --force enable >/dev/null 2>&1 || true
-ufw allow OpenSSH >/dev/null 2>&1 || true
-ufw allow 80/tcp  >/dev/null 2>&1 || true
-ufw allow 443/tcp >/dev/null 2>&1 || true
+# Abrir SSH antes de habilitar UFW: hacerlo al revés puede cortar la sesión que
+# está ejecutando el bootstrap. Ningún fallo se oculta; una regla incierta es
+# motivo para abortar antes del health check.
+ufw allow OpenSSH >/dev/null
+ufw allow 80/tcp  >/dev/null
+ufw allow 443/tcp >/dev/null
+ufw --force enable >/dev/null
 
 # --- Health check ---------------------------------------------------------
 sleep 2

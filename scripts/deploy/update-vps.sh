@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Update deploy — actualiza el VPS a la última versión del repo
-# Pulla cambios, corre migrations nuevas si hay, rebuild y reinicia PM2.
+# Update deploy — actualiza el VPS a un commit aprobado de main.
+# Resuelve DEPLOY_TO (o el HEAD remoto si no se pasa), corre migraciones nuevas,
+# rebuild y reinicia PM2.
 # NO resembra la DB (no pisa contenido editado desde el admin).
 #
-# Uso (como root, en el VPS):
-#   bash /var/www/sanatorio/scripts/deploy/update-vps.sh
+# Uso seguro (como root, en el VPS):
+#   DEPLOY_TO=<sha-aprobado> bash /var/www/sanatorio/scripts/deploy/update-vps.sh
 #
 # Este script sólo va HACIA ADELANTE. La vuelta atrás vive en
 # scripts/deploy/rollback-vps.sh, que es el único que la hace en el orden que
@@ -19,6 +20,7 @@ set -euo pipefail
 
 APP_DIR="${APP_DIR:-/var/www/sanatorio}"
 BRANCH="${BRANCH:-main}"
+DEPLOY_TO="${DEPLOY_TO:-}"
 
 log() { echo -e "\033[1;34m==>\033[0m $*"; }
 die() { echo -e "\033[1;31mERROR:\033[0m $*" >&2; exit 1; }
@@ -71,12 +73,19 @@ trap 'rm -f "${DEPLOY_SELF_COPY:-}"' EXIT
 
 cd "$APP_DIR"
 
-log "1/6  git pull (rama ${BRANCH})"
+log "1/6  Resolver versión aprobada (rama ${BRANCH})"
 PREVIOUS_SHA="$(git rev-parse HEAD)"
 git fetch origin
+TARGET_REF="${DEPLOY_TO:-origin/${BRANCH}}"
+TARGET_SHA="$(git rev-parse --verify "${TARGET_REF}^{commit}")" \
+  || die "DEPLOY_TO no identifica un commit disponible: ${TARGET_REF}"
+git merge-base --is-ancestor "$TARGET_SHA" "origin/${BRANCH}" \
+  || die "DEPLOY_TO no pertenece a origin/${BRANCH}: se rechaza una versión no aprobada."
+git merge-base --is-ancestor "$PREVIOUS_SHA" "$TARGET_SHA" \
+  || die "DEPLOY_TO implicaría retroceder o cambiar de historia. Usá rollback-vps.sh."
 git checkout "$BRANCH"
-git reset --hard "origin/${BRANCH}"
-log "    versión anterior: ${PREVIOUS_SHA} · versión nueva: $(git rev-parse HEAD)"
+git reset --hard "$TARGET_SHA"
+log "    versión anterior: ${PREVIOUS_SHA} · versión aprobada: ${TARGET_SHA}"
 
 # ¿El propio update-vps.sh cambió en este pull? Se compara la copia con la que
 # arrancó el deploy —el contenido de ANTES del reset— contra el archivo que
@@ -111,27 +120,21 @@ DB_NAME_ENV="$(grep -E '^DB_NAME=' "$APP_DIR/api/.env" | cut -d= -f2- || echo sa
 DB_USER_ENV="$(grep -E '^DB_USER=' "$APP_DIR/api/.env" | cut -d= -f2- || echo sanatorio)"
 if MYSQL_PWD="$(grep -E '^DB_PASS=' "$APP_DIR/api/.env" | cut -d= -f2-)" \
    mysqldump -u"$DB_USER_ENV" "$DB_NAME_ENV" 2>/dev/null | gzip > "$BACKUP_FILE"; then
-  log "    backup en ${BACKUP_FILE}"
-  # Conservar sólo los 10 más recientes
+  if ! gzip -t "$BACKUP_FILE"; then
+    rm -f "$BACKUP_FILE"
+    die "el backup se creó pero gzip no puede leerlo: se aborta antes de migrar."
+  fi
+  log "    backup verificado en ${BACKUP_FILE}"
+  # Conservar sólo los 10 más recientes después de verificar el nuevo.
   ls -1t "$BACKUP_DIR"/*.sql.gz 2>/dev/null | tail -n +11 | xargs -r rm -f
 else
-  # Sin backup no se migra. Las migraciones tocan contenido que el sanatorio
-  # editó desde el panel; si algo sale mal y no hay backup, no hay vuelta
-  # atrás. Se aborta ANTES de migrar, con el deploy anterior intacto.
+  # Sin backup válido no se migra. No existe bypass: un update planificado que
+  # no puede respaldar la base no cumple el contrato de producción.
   rm -f "$BACKUP_FILE"
   echo "" >&2
   echo "  Causas habituales: credenciales de api/.env desactualizadas," >&2
   echo "  mysqldump no instalado, o disco lleno en ${BACKUP_DIR}." >&2
-  echo "  Verificalo con:" >&2
-  echo "    MYSQL_PWD=\"\$(grep -E '^DB_PASS=' $APP_DIR/api/.env | cut -d= -f2-)\" \\" >&2
-  echo "      mysqldump -u${DB_USER_ENV} ${DB_NAME_ENV} > /dev/null" >&2
-  echo "  Si el backup no es posible y aceptás el riesgo:" >&2
-  echo "    SKIP_DB_BACKUP=1 bash \$0" >&2
-  if [ "${SKIP_DB_BACKUP:-0}" = "1" ]; then
-    echo -e "\033[1;33m⚠\033[0m SKIP_DB_BACKUP=1: se migra SIN backup, bajo tu responsabilidad." >&2
-  else
-    die "no se pudo generar el backup de la DB: se aborta antes de migrar (nada quedó a medias)."
-  fi
+  die "no se pudo generar el backup de la DB: se aborta antes de migrar."
 fi
 
 log "4/6  Migraciones de DB (idempotente)"

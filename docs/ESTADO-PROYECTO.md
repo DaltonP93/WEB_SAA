@@ -1,10 +1,10 @@
 # WEB_SAA — Estado completo posterior al merge y pendientes
 
 **Repositorio:** [DaltonP93/WEB_SAA](https://github.com/DaltonP93/WEB_SAA)  
-**Fecha de verificación:** 29 de agosto de 2026  
+**Fecha de verificación:** 31 de agosto de 2026  
 **Rama verificada:** `main`  
-**HEAD de `main`:** `94e2e0ee4fc9c762d54c9d0f10bad3d6ff7cd19a`  
-**Último cambio fusionado:** [PR #24](https://github.com/DaltonP93/WEB_SAA/pull/24) (sólo documentación: este archivo), sobre [PR #23](https://github.com/DaltonP93/WEB_SAA/pull/23), cuyo HEAD era `26c70abde2b26aa5476b254766353a55f56d5948` (merge de #23 en `main`: `f398fed11e9030fa7955e7f6bd8d3426739bfe28`)
+**HEAD de `main`:** `fd49743a27543a5cd0c12e2839b6ba9760484d33`  
+**Último cambio fusionado:** [PR #25](https://github.com/DaltonP93/WEB_SAA/pull/25) (regla anti-ciclo y cierre documental), merge `fd49743a27543a5cd0c12e2839b6ba9760484d33`, sobre PR #24 y el código del PR #23
 
 > **Documento canónico y vivo.** Este archivo debe actualizarse en toda ronda
 > que cambie funcionalidades, migraciones, seguridad, despliegue, conteo de
@@ -17,7 +17,7 @@
 
 El sitio público, el panel administrativo tipo CMS, el Page Builder, la biblioteca multimedia, los turnos, mensajes, usuarios, SEO, analítica, atribución, redirects, publicación programada, papelera, revisiones y newsletter básica ya están desarrollados y fusionados en `main`.
 
-El CI posterior al merge terminó correctamente sobre `f398fed`:
+El CI posterior a los merges terminó correctamente sobre `f398fed` (código) y `fd49743a` (PR #25, run #66):
 
 - **Typecheck, builds y pruebas:** correcto.
 - **1497 pruebas en 82 archivos**, ejecutadas contra MySQL 8: correctas.
@@ -25,7 +25,7 @@ El CI posterior al merge terminó correctamente sobre `f398fed`:
 - **Auditoría de dependencias:** sin vulnerabilidades altas o críticas de producción.
 - **Árbol Git actual:** sin secretos detectados.
 
-Sin embargo, el proyecto todavía está en **NO-GO para producción** por un secreto presente en el historial Git y por tareas de configuración, contenido y puesta en marcha que dependen del propietario y del sanatorio.
+Sin embargo, el proyecto todavía está en **NO-GO para producción**: las credenciales históricas no fueron rotadas/purgadas y aún faltan gobierno de `main`, dominio, infraestructura, backups/restores, monitoreo, variables y contenido confirmados. El inventario sensible se mantiene fuera del repositorio público.
 
 > El merge no produjo un despliegue. El workflow del repositorio valida código, pero no ejecuta SSH, rsync, migraciones ni reinicios sobre el VPS.
 
@@ -37,9 +37,11 @@ Sin embargo, el proyecto todavía está en **NO-GO para producción** por un sec
 |---|---|
 | PR #23 (código) | Fusionado el 28/08/2026 · merge commit `f398fed11e9030fa7955e7f6bd8d3426739bfe28` |
 | PR #24 (docs: este archivo) | Fusionado el 29/08/2026 · merge commit `94e2e0ee4fc9c762d54c9d0f10bad3d6ff7cd19a` |
-| `main` actual | `94e2e0ee4fc9c762d54c9d0f10bad3d6ff7cd19a` |
+| PR #25 (regla anti-ciclo/cierre docs) | Fusionado el 30/08/2026 · merge commit `fd49743a27543a5cd0c12e2839b6ba9760484d33` |
+| `main` actual | `fd49743a27543a5cd0c12e2839b6ba9760484d33` |
 | CI posterior al merge (`f398fed`, run #61) | **Success** |
 | CI posterior al merge (`94e2e0e`, run #63) | **Success** |
+| CI posterior al merge (`fd49743a`, run #66) | **Success (3/3)** |
 | Conflictos | Ninguno |
 | Reviews registradas en PR #23 / #24 | **0** |
 | Deploy automático | No existe |
@@ -61,6 +63,7 @@ Los PR #23 y #24 se fusionaron sin una review registrada. Los checks automático
 | [#22](https://github.com/DaltonP93/WEB_SAA/pull/22) | Redirects 301 administrables | Fusionado |
 | [#23](https://github.com/DaltonP93/WEB_SAA/pull/23) | Papelera, publicación programada, revisiones, newsletter y dos rondas correctivas | Fusionado |
 | [#24](https://github.com/DaltonP93/WEB_SAA/pull/24) | Documentación viva: estado ejecutivo, pendientes y go-live post PR #23 (`docs/ESTADO-PROYECTO.md`) | Fusionado |
+| [#25](https://github.com/DaltonP93/WEB_SAA/pull/25) | Cierre documental y regla para evitar cadenas infinitas de PRs sólo documentales | Fusionado |
 
 ---
 
@@ -198,7 +201,7 @@ Los PR #23 y #24 se fusionaron sin una review registrada. Los checks automático
 
 ## 5. Validación actual de `main`
 
-El workflow posterior al merge terminó en **success** tanto sobre `f398fed` (PR #23, código; run #61) como sobre el `main` actual `94e2e0e` (PR #24, sólo documentación; run #63). Las cifras de código y pruebas de abajo corresponden a `f398fed` y siguen vigentes en `94e2e0e`, porque PR #24 no tocó código ni pruebas.
+El workflow posterior al merge terminó en **success** sobre el `main` actual `fd49743a` (PR #25; run #66). La auditoría sustantiva de preproducción del PR #26 quedó verificada sobre el HEAD funcional `7eb570c` (run #68): typecheck, los tres builds, la suite MySQL 8, el prerender real, secretos y dependencias terminaron correctamente. El commit posterior que sólo cierra este documento debe conservar esos mismos checks verdes dentro del mismo PR.
 
 | Check | Resultado |
 |---|---|
@@ -206,13 +209,14 @@ El workflow posterior al merge terminó en **success** tanto sobre `f398fed` (PR
 | Build API | OK |
 | Build web | OK |
 | Build admin | OK |
-| Suite MySQL 8 | **1497/1497 en 82 archivos** |
+| Suite MySQL 8 de `main@fd49743a` | **1497/1497 en 82 archivos** |
+| Suite MySQL 8 del PR #26 (`7eb570c`) | **1516/1516 en 84 archivos** |
 | Migraciones | Incluidas en la suite |
 | Prerender con API y base reales | OK |
 | Auditoría high/critical de producción | OK |
 | `check-secrets` del árbol | OK |
 | `gitleaks` del árbol actual | Sin hallazgos |
-| `gitleaks` del historial | **1 hallazgo conocido** |
+| `gitleaks` del historial | **Incidente abierto; inventario exacto privado** |
 
 ---
 
@@ -220,13 +224,7 @@ El workflow posterior al merge terminó en **success** tanto sobre `f398fed` (PR
 
 ### 6.1 Resolver el secreto histórico — bloqueo NO-GO
 
-El historial contiene un valor detectado por `gitleaks`:
-
-- Commit: `9ced09df45fcaeb63f9e10be9219401faab6434d`
-- Archivo: `scripts/deploy/setup-vps.sh`
-- Regla: `shell-default-credential`
-
-El árbol actual está limpio, pero el secreto sigue recuperable desde el historial. Antes del deploy se debe:
+El historial contiene material que debe tratarse como credencial comprometida. El inventario exacto —commits, rutas, alcance y rotaciones— es sensible y se conserva en el acta privada, no en este repositorio público. El árbol actual está limpio, pero esos antecedentes siguen recuperables desde Git. Un único hallazgo de una herramienta no demuestra que el inventario histórico esté completo. Antes del deploy se debe:
 
 1. Confirmar dónde se utilizó esa credencial.
 2. Rotarla en todos los entornos donde pudiera seguir vigente.
@@ -385,9 +383,12 @@ Estos ítems no bloquean el funcionamiento básico del sitio, pero todavía no e
 
 | Decisión | Prioridad |
 |---|---|
-| Rotar y purgar el secreto de `9ced09d` | **Bloqueante** |
+| Rotar todos los accesos del inventario privado y purgar el historial | **Bloqueante** |
+| Proteger `main` con ruleset, review y 3 checks requeridos | **Bloqueante** |
 | Confirmar dominio definitivo | **Bloqueante** |
-| Confirmar VPS y acceso SSH | **Bloqueante** |
+| Confirmar capacidad, aislamiento y acceso SSH por llave | **Bloqueante** |
+| Demostrar backup+restore externo de DB y uploads | **Bloqueante** |
+| Configurar monitoreo y alertas | **Bloqueante** |
 | Aprobar contenido definitivo y Biopsias | Alta |
 | Crear claves CAPTCHA | Alta |
 | Definir IDs de analítica | Media |
@@ -406,7 +407,13 @@ Estos ítems no bloquean el funcionamiento básico del sitio, pero todavía no e
 
 ### Despliegue inmediato a producción
 
-**NO-GO.** Primero deben resolverse el secreto histórico, dominio/DNS/HTTPS, variables del entorno, acceso al VPS, backups y contenido real.
+**NO-GO.** Primero deben cerrarse credenciales e historial, protección de
+`main`, dominio/DNS/HTTPS, capacidad y aislamiento, variables, acceso SSH por
+llave, backups/restores de DB+uploads, monitoreo y contenido real.
+
+Procedimientos:
+[`docs/PREPRODUCCION-Y-GO-LIVE.md`](PREPRODUCCION-Y-GO-LIVE.md) y
+[`docs/SEGURIDAD-SECRETO-HISTORICO.md`](SEGURIDAD-SECRETO-HISTORICO.md).
 
 ### Próxima acción concreta
 
@@ -423,7 +430,7 @@ La siguiente etapa no es otra ronda amplia de desarrollo. Es una ronda controlad
 ## 12. Fuentes verificadas
 
 - `main` y merges de los PR #23 y #24 en GitHub.
-- CI post-merge sobre `f398fed11e9030fa7955e7f6bd8d3426739bfe28` (PR #23, run #61) y sobre `94e2e0ee4fc9c762d54c9d0f10bad3d6ff7cd19a` (PR #24, run #63): ambos **success**.
+- CI post-merge sobre `f398fed11e9030fa7955e7f6bd8d3426739bfe28` (run #61), `94e2e0ee4fc9c762d54c9d0f10bad3d6ff7cd19a` (run #63) y `fd49743a27543a5cd0c12e2839b6ba9760484d33` (PR #25, run #66): **success**.
 - `CLAUDE_CONTEXT.md`, secciones 14–18.8.
 - `AGENTS.md`.
 - `README.md`.
@@ -431,10 +438,64 @@ La siguiente etapa no es otra ronda amplia de desarrollo. Es una ronda controlad
 - `docs/CARGA-DE-DATOS.md`.
 - `.github/workflows/ci.yml`.
 - `api/.env.example` y `.env.deploy.example`.
+- PR #26, auditoría de scripts y prerrequisitos de infraestructura.
+- CI del PR #26 sobre `7eb570ccc36ff8859555e54087a7dc9f7ecaebdb` (run #68): **success (3/3)**.
+- `docs/PREPRODUCCION-Y-GO-LIVE.md` y `docs/SEGURIDAD-SECRETO-HISTORICO.md`.
 
 ---
 
-## 13. Regla de mantenimiento para próximas rondas
+## 13. Auditoría de preproducción — PR #26
+
+**PR:** [#26](https://github.com/DaltonP93/WEB_SAA/pull/26) (Draft)  
+**Rama:** `codex/preproduccion-seguridad-infraestructura`  
+**Base:** `main@fd49743a27543a5cd0c12e2839b6ba9760484d33`  
+**HEAD funcional probado:** `7eb570ccc36ff8859555e54087a7dc9f7ecaebdb`  
+**Alcance:** auditoría y blindaje de scripts de preproducción, despliegue y prerrequisitos; sin acceso ni cambios en producción.
+
+### 13.1 Terminado
+
+- runbook público y saneado de preproducción/go-live;
+- procedimiento seguro de rotación/purga, sin valores ni inventario sensible;
+- despliegue fijable a un SHA aprobado mediante `DEPLOY_TO`;
+- backup de base obligatorio y verificado con `gzip -t` antes de migrar;
+- UFW permite SSH/HTTP/HTTPS antes de habilitarse y ya no oculta fallos;
+- timeout SSH local fail-closed con salida 124, sin quedar bloqueado esperando;
+- contrato explícito de `UPLOAD_STAGING_DIR`, fuera de uploads y en el mismo filesystem;
+- ejemplos de entorno y guía de despliegue reconciliados con el contrato efectivo;
+- 14 pruebas nuevas de regresión para los contratos anteriores;
+- Actions del workflow fijadas a commits inmutables y gitleaks verificado por SHA-256 antes de extraer;
+- 2 pruebas nuevas que bloquean referencias flotantes y artefactos sin integridad.
+
+No se agregaron migraciones ni dependencias. No se cambiaron datos, DNS, credenciales, infraestructura ni el historial Git.
+
+### 13.2 Validación
+
+| Check sobre `7eb570c` | Resultado |
+|---|---|
+| Typecheck API/web/admin | OK |
+| Build API/web/admin | OK |
+| Suite MySQL 8 | **1516/1516 en 84 archivos** |
+| Prerender real con API y base | OK |
+| Auditoría de dependencias | OK |
+| Secretos del árbol e historial según política actual | Job OK; incidente histórico sigue abierto |
+| CI run #68 (blindaje de deploy) | **3/3 success** |
+| Cadena de suministro (HEAD posterior) | Actions por SHA + gitleaks SHA-256; CI obligatoria |
+
+**Corrector:** el primer HEAD de la ronda falló en CI por una sintaxis inválida del bootstrap. La prueba nueva de `bash -n` detectó el defecto; se corrigió y la corrida siguiente quedó verde. El fallo no llegó a `main` ni a un servidor.
+
+### 13.3 Auditoría de infraestructura
+
+La auditoría confirmó que `main` no tiene branch protection ni rulesets activos. Tampoco hay evidencia versionada suficiente para declarar cerrados dominio/DNS/TLS, capacidad y aislamiento, acceso SSH nominal, restore externo de DB+uploads, monitoreo/alertas, contenido final ni guardia operativa. La cadena de suministro del workflow queda fijada en este PR; sus futuras actualizaciones deben pasar por otro PR revisado y CI verde.
+
+### 13.4 Veredicto y siguiente acción
+
+- **Código, CI y documentación de preproducción:** GO para revisión del PR #26.
+- **Producción:** **NO-GO** hasta cerrar los bloqueantes externos y el incidente histórico.
+- **Siguiente acción recomendada:** revisión registrada del PR #26, mantener los tres checks verdes y, tras fusionarlo, completar privadamente protección de `main`, rotación/purga, infraestructura, backups/restores, monitoreo y dominio antes de autorizar una ventana de preproducción.
+
+---
+
+## 14. Regla de mantenimiento para próximas rondas
 
 En cada trabajo sustancial se debe actualizar este documento antes de cerrar el
 PR. Como mínimo:

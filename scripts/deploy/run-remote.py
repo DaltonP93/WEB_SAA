@@ -29,6 +29,7 @@ chan.get_pty()
 chan.exec_command(cmd)
 
 start = time.time()
+timed_out = False
 while True:
     if chan.recv_ready():
         data = chan.recv(8192)
@@ -43,9 +44,22 @@ while True:
     if chan.exit_status_ready() and not chan.recv_ready() and not chan.recv_stderr_ready():
         break
     if time.time() - start > 1500:  # 25min hard timeout
-        print("\n>>> timeout 25min", flush=True)
+        timed_out = True
+        print(
+            "\n>>> timeout local de 25min. El comando remoto puede seguir "
+            "ejecutándose; verificá su estado antes de reintentar.",
+            file=sys.stderr,
+            flush=True,
+        )
         break
     time.sleep(0.15)
+
+if timed_out:
+    # No llamar recv_exit_status(): si el remoto sigue vivo, bloquearía para
+    # siempre y convertiría el timeout en una espera sin límite.
+    chan.close()
+    client.close()
+    sys.exit(124)
 
 exit_code = chan.recv_exit_status()
 print("=" * 70, flush=True)
