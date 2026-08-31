@@ -158,9 +158,9 @@ describe("el script ya no tiene el camino de rollback", () => {
 
   it("no queda ningún git reset a ROLLBACK_TO", () => {
     expect(fuente).not.toMatch(/git\s+reset\s+--hard\s+"?\$\{?ROLLBACK_TO/);
-    // El único reset que queda es al HEAD del remoto: hacia adelante.
+    // El único reset que queda usa el SHA ya validado como avance de main.
     const resets = fuente.match(/git\s+reset\s+--hard\s+\S+/g) ?? [];
-    expect(resets).toEqual(['git reset --hard "origin/${BRANCH}"']);
+    expect(resets).toEqual(['git reset --hard "$TARGET_SHA"']);
   });
 
   it("el encabezado no propone usar este script para volver atrás", () => {

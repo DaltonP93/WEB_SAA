@@ -1,10 +1,10 @@
 # WEB_SAA — Estado completo posterior al merge y pendientes
 
 **Repositorio:** [DaltonP93/WEB_SAA](https://github.com/DaltonP93/WEB_SAA)  
-**Fecha de verificación:** 29 de agosto de 2026  
+**Fecha de verificación:** 31 de agosto de 2026  
 **Rama verificada:** `main`  
-**HEAD de `main`:** `94e2e0ee4fc9c762d54c9d0f10bad3d6ff7cd19a`  
-**Último cambio fusionado:** [PR #24](https://github.com/DaltonP93/WEB_SAA/pull/24) (sólo documentación: este archivo), sobre [PR #23](https://github.com/DaltonP93/WEB_SAA/pull/23), cuyo HEAD era `26c70abde2b26aa5476b254766353a55f56d5948` (merge de #23 en `main`: `f398fed11e9030fa7955e7f6bd8d3426739bfe28`)
+**HEAD de `main`:** `fd49743a27543a5cd0c12e2839b6ba9760484d33`  
+**Último cambio fusionado:** [PR #25](https://github.com/DaltonP93/WEB_SAA/pull/25) (regla anti-ciclo y cierre documental), merge `fd49743a27543a5cd0c12e2839b6ba9760484d33`, sobre PR #24 y el código del PR #23
 
 > **Documento canónico y vivo.** Este archivo debe actualizarse en toda ronda
 > que cambie funcionalidades, migraciones, seguridad, despliegue, conteo de
@@ -17,7 +17,7 @@
 
 El sitio público, el panel administrativo tipo CMS, el Page Builder, la biblioteca multimedia, los turnos, mensajes, usuarios, SEO, analítica, atribución, redirects, publicación programada, papelera, revisiones y newsletter básica ya están desarrollados y fusionados en `main`.
 
-El CI posterior al merge terminó correctamente sobre `f398fed`:
+El CI posterior a los merges terminó correctamente sobre `f398fed` (código) y `fd49743a` (PR #25, run #66):
 
 - **Typecheck, builds y pruebas:** correcto.
 - **1497 pruebas en 82 archivos**, ejecutadas contra MySQL 8: correctas.
@@ -25,7 +25,7 @@ El CI posterior al merge terminó correctamente sobre `f398fed`:
 - **Auditoría de dependencias:** sin vulnerabilidades altas o críticas de producción.
 - **Árbol Git actual:** sin secretos detectados.
 
-Sin embargo, el proyecto todavía está en **NO-GO para producción** por un secreto presente en el historial Git y por tareas de configuración, contenido y puesta en marcha que dependen del propietario y del sanatorio.
+Sin embargo, el proyecto todavía está en **NO-GO para producción**: las credenciales históricas no fueron rotadas/purgadas y aún faltan gobierno de `main`, dominio, infraestructura, backups/restores, monitoreo, variables y contenido confirmados. El inventario sensible se mantiene fuera del repositorio público.
 
 > El merge no produjo un despliegue. El workflow del repositorio valida código, pero no ejecuta SSH, rsync, migraciones ni reinicios sobre el VPS.
 
@@ -37,9 +37,11 @@ Sin embargo, el proyecto todavía está en **NO-GO para producción** por un sec
 |---|---|
 | PR #23 (código) | Fusionado el 28/08/2026 · merge commit `f398fed11e9030fa7955e7f6bd8d3426739bfe28` |
 | PR #24 (docs: este archivo) | Fusionado el 29/08/2026 · merge commit `94e2e0ee4fc9c762d54c9d0f10bad3d6ff7cd19a` |
-| `main` actual | `94e2e0ee4fc9c762d54c9d0f10bad3d6ff7cd19a` |
+| PR #25 (regla anti-ciclo/cierre docs) | Fusionado el 30/08/2026 · merge commit `fd49743a27543a5cd0c12e2839b6ba9760484d33` |
+| `main` actual | `fd49743a27543a5cd0c12e2839b6ba9760484d33` |
 | CI posterior al merge (`f398fed`, run #61) | **Success** |
 | CI posterior al merge (`94e2e0e`, run #63) | **Success** |
+| CI posterior al merge (`fd49743a`, run #66) | **Success (3/3)** |
 | Conflictos | Ninguno |
 | Reviews registradas en PR #23 / #24 | **0** |
 | Deploy automático | No existe |
@@ -61,6 +63,7 @@ Los PR #23 y #24 se fusionaron sin una review registrada. Los checks automático
 | [#22](https://github.com/DaltonP93/WEB_SAA/pull/22) | Redirects 301 administrables | Fusionado |
 | [#23](https://github.com/DaltonP93/WEB_SAA/pull/23) | Papelera, publicación programada, revisiones, newsletter y dos rondas correctivas | Fusionado |
 | [#24](https://github.com/DaltonP93/WEB_SAA/pull/24) | Documentación viva: estado ejecutivo, pendientes y go-live post PR #23 (`docs/ESTADO-PROYECTO.md`) | Fusionado |
+| [#25](https://github.com/DaltonP93/WEB_SAA/pull/25) | Cierre documental y regla para evitar cadenas infinitas de PRs sólo documentales | Fusionado |
 
 ---
 
@@ -385,9 +388,12 @@ Estos ítems no bloquean el funcionamiento básico del sitio, pero todavía no e
 
 | Decisión | Prioridad |
 |---|---|
-| Rotar y purgar el secreto de `9ced09d` | **Bloqueante** |
+| Rotar todos los accesos del inventario privado y purgar el historial | **Bloqueante** |
+| Proteger `main` con ruleset, review y 3 checks requeridos | **Bloqueante** |
 | Confirmar dominio definitivo | **Bloqueante** |
-| Confirmar VPS y acceso SSH | **Bloqueante** |
+| Confirmar capacidad, aislamiento y acceso SSH por llave | **Bloqueante** |
+| Demostrar backup+restore externo de DB y uploads | **Bloqueante** |
+| Configurar monitoreo y alertas | **Bloqueante** |
 | Aprobar contenido definitivo y Biopsias | Alta |
 | Crear claves CAPTCHA | Alta |
 | Definir IDs de analítica | Media |
@@ -406,7 +412,13 @@ Estos ítems no bloquean el funcionamiento básico del sitio, pero todavía no e
 
 ### Despliegue inmediato a producción
 
-**NO-GO.** Primero deben resolverse el secreto histórico, dominio/DNS/HTTPS, variables del entorno, acceso al VPS, backups y contenido real.
+**NO-GO.** Primero deben cerrarse credenciales e historial, protección de
+`main`, dominio/DNS/HTTPS, capacidad y aislamiento, variables, acceso SSH por
+llave, backups/restores de DB+uploads, monitoreo y contenido real.
+
+Procedimientos:
+[`docs/PREPRODUCCION-Y-GO-LIVE.md`](PREPRODUCCION-Y-GO-LIVE.md) y
+[`docs/SEGURIDAD-SECRETO-HISTORICO.md`](SEGURIDAD-SECRETO-HISTORICO.md).
 
 ### Próxima acción concreta
 
@@ -423,7 +435,7 @@ La siguiente etapa no es otra ronda amplia de desarrollo. Es una ronda controlad
 ## 12. Fuentes verificadas
 
 - `main` y merges de los PR #23 y #24 en GitHub.
-- CI post-merge sobre `f398fed11e9030fa7955e7f6bd8d3426739bfe28` (PR #23, run #61) y sobre `94e2e0ee4fc9c762d54c9d0f10bad3d6ff7cd19a` (PR #24, run #63): ambos **success**.
+- CI post-merge sobre `f398fed11e9030fa7955e7f6bd8d3426739bfe28` (run #61), `94e2e0ee4fc9c762d54c9d0f10bad3d6ff7cd19a` (run #63) y `fd49743a27543a5cd0c12e2839b6ba9760484d33` (PR #25, run #66): **success**.
 - `CLAUDE_CONTEXT.md`, secciones 14–18.8.
 - `AGENTS.md`.
 - `README.md`.
@@ -434,7 +446,31 @@ La siguiente etapa no es otra ronda amplia de desarrollo. Es una ronda controlad
 
 ---
 
-## 13. Regla de mantenimiento para próximas rondas
+## 13. Auditoría de preproducción — ronda sustantiva en curso
+
+**Rama:** `codex/preproduccion-seguridad-infraestructura`  
+**Base:** `main@fd49743a`  
+**PR/SHA:** se completan dentro de este mismo PR después de crear el commit y
+verificar CI.
+
+Terminado en código/documentación:
+
+- runbook público y saneado de preproducción/go-live;
+- procedimiento de rotación/purga sin valores ni inventario sensible;
+- deploy fijable por `DEPLOY_TO`;
+- backup obligatorio y validado con `gzip -t`;
+- reglas UFW antes de habilitar firewall;
+- timeout SSH fail-closed con código 124;
+- contrato explícito de `UPLOAD_STAGING_DIR`;
+- pruebas de regresión de estos contratos.
+
+Pendientes externos: cerrar el incidente histórico según el inventario privado,
+proteger `main`, confirmar dominio/infraestructura, probar restore de
+DB+uploads y configurar monitoreo. Ninguno se declara resuelto por el runbook.
+
+---
+
+## 14. Regla de mantenimiento para próximas rondas
 
 En cada trabajo sustancial se debe actualizar este documento antes de cerrar el
 PR. Como mínimo:

@@ -2,14 +2,23 @@
 
 Guía para llevar el proyecto desde local al servidor propio del usuario.
 
+> **No es una autorización de producción.** Antes de ejecutar esta guía se debe
+> completar [PREPRODUCCION-Y-GO-LIVE.md](PREPRODUCCION-Y-GO-LIVE.md) y cerrar
+> [SEGURIDAD-SECRETO-HISTORICO.md](SEGURIDAD-SECRETO-HISTORICO.md).
+> `sitio.example` es un marcador: el dominio definitivo todavía requiere
+> confirmación del propietario.
+
 ## Prerrequisitos en el servidor
 
+- Ubuntu 22.04/24.04, al menos 2 vCPU, 4 GB de RAM y 30 GB libres
 - Node 20 LTS, pnpm 9
-- MySQL 8 (o MariaDB 10.6+)
-- Nginx
-- PM2 (`npm i -g pm2`)
-- Dominio apuntando al servidor (A record)
-- Certificado SSL (Let's Encrypt con certbot)
+- MySQL 8 (producción validada en CI contra MySQL; MariaDB queda sólo para local)
+- Nginx y PM2 (`npm i -g pm2`)
+- dominio confirmado apuntando al servidor y estrategia apex/`www`
+- certificado SSL (Let's Encrypt con certbot) y renovación ensayada
+- llaves SSH nominales; autenticación por contraseña deshabilitada
+- backup externo y restauración ensayada de MySQL **y** uploads
+- ruleset de `main` con revisión y los tres checks requeridos
 
 ## 1. Configurar MySQL
 
@@ -33,7 +42,7 @@ Configurar `api/.env`:
 
 ```bash
 cp api/.env.example api/.env
-# editar: DB_*, JWT_SECRET (cambiar!), CORS_ORIGINS=https://sanatorioadventista.com.py
+# editar: DB_*, JWT_SECRET (cambiar!), CORS_ORIGINS=https://sitio.example
 nano api/.env
 ```
 
@@ -84,16 +93,16 @@ pm2 startup  # seguir instrucciones
 ```nginx
 server {
   listen 80;
-  server_name sanatorioadventista.com.py www.sanatorioadventista.com.py;
+  server_name sitio.example www.sitio.example;
   return 301 https://$host$request_uri;
 }
 
 server {
   listen 443 ssl http2;
-  server_name sanatorioadventista.com.py www.sanatorioadventista.com.py;
+  server_name sitio.example www.sitio.example;
 
-  ssl_certificate     /etc/letsencrypt/live/sanatorioadventista.com.py/fullchain.pem;
-  ssl_certificate_key /etc/letsencrypt/live/sanatorioadventista.com.py/privkey.pem;
+  ssl_certificate     /etc/letsencrypt/live/sitio.example/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/sitio.example/privkey.pem;
 
   client_max_body_size 20M;
 
@@ -138,7 +147,7 @@ nginx -t && systemctl reload nginx
 
 ```bash
 apt install certbot python3-certbot-nginx
-certbot --nginx -d sanatorioadventista.com.py -d www.sanatorioadventista.com.py
+certbot --nginx -d sitio.example -d www.sitio.example
 ```
 
 ## 6. Backups
@@ -157,26 +166,34 @@ Todo el ciclo está en `scripts/deploy/update-vps.sh`, que además saca un backu
 de la base antes de migrar y falla si el health check no da 200:
 
 ```bash
+# SHA exacto que fue revisado y pasó CI en main
+APPROVED_SHA=<sha-aprobado>
+
 # Desde tu máquina (credenciales en .env.deploy, ver .env.deploy.example)
-python scripts/deploy/run-remote.py "bash /var/www/sanatorio/scripts/deploy/update-vps.sh"
+python scripts/deploy/run-remote.py \
+  "DEPLOY_TO=$APPROVED_SHA bash /var/www/sanatorio/scripts/deploy/update-vps.sh"
 
 # O directamente en el servidor
-bash /var/www/sanatorio/scripts/deploy/update-vps.sh
+DEPLOY_TO="$APPROVED_SHA" \
+  bash /var/www/sanatorio/scripts/deploy/update-vps.sh
 ```
 
 Pasos que ejecuta:
 
 0. Requisito: **Node 20+**. Las migraciones corren con `tsx` (dependencia del
    workspace), así que no dependen de que Node sepa cargar TypeScript.
-1. `git fetch` + `reset --hard origin/main`. **Sólo va hacia adelante**: si se le
-   pasa `ROLLBACK_TO`, el script aborta antes de tocar nada (código 2) y remite a
-   `rollback-vps.sh`. Ver [Rollback](#rollback).
+1. `git fetch`, resolución de `DEPLOY_TO` y `reset --hard` al SHA exacto.
+   Verifica que el commit pertenezca a `origin/main` y sea avance desde la
+   versión instalada. Sin `DEPLOY_TO` conserva compatibilidad usando el HEAD
+   remoto, pero el procedimiento de producción exige un SHA. Si se pasa
+   `ROLLBACK_TO`, aborta antes de tocar nada (código 2) y remite a
+   `rollback-vps.sh`.
 2. `pnpm install --frozen-lockfile` — **sin fallback**: si el lockfile no
    coincide, el deploy se detiene en vez de instalar otra cosa.
-3. `mysqldump | gzip` a `/var/www/sanatorio/.db-backups/` (guarda los 10 últimos).
-   **Si el backup falla, el deploy se aborta antes de migrar**: las migraciones
-   tocan contenido editado desde el panel y sin backup no habría vuelta atrás.
-   Para forzarlo igual (bajo tu responsabilidad): `SKIP_DB_BACKUP=1`.
+3. `mysqldump | gzip` a `/var/www/sanatorio/.db-backups/` (guarda los 10
+   últimos) y validación inmediata con `gzip -t`.
+   **Si crear o leer el backup falla, el deploy se aborta antes de migrar.**
+   Ya no existe un bypass para migrar sin respaldo.
 4. `pnpm db:migrate`.
 5. Builds de api, web (con prerender SEO) y admin.
 6. Reload de Nginx + restart de PM2 (`sanatorio-api`).
@@ -207,9 +224,9 @@ script **recupera** el estado anterior —restaura el backup, vuelve al SHA que
 estaba, reconstruye y reinicia— en vez de dejar el servidor mezclado.
 
 La prevalidación del paso 1 necesita disco y tiempo para un `node_modules`
-aparte. En un servidor justo de espacio se puede omitir con
-`SKIP_PREVALIDACION=1`, a cambio de que un build roto se descubra recién con la
-base ya revertida (ahí entra la recuperación).
+aparte. El script conserva `SKIP_PREVALIDACION=1` como escape de incidente,
+pero **no se acepta en una ventana planificada de producción**: si no hay disco
+para prevalidar, el host no cumple los prerrequisitos y el despliegue es NO-GO.
 
 Códigos de salida de `rollback-vps.sh`:
 
@@ -304,9 +321,9 @@ credenciales ni datos de conexión.
 
 ## 8. Verificación post-deploy
 
-- [ ] `https://sanatorioadventista.com.py/` carga el home
-- [ ] `https://sanatorioadventista.com.py/admin/` muestra el login
-- [ ] `https://sanatorioadventista.com.py/api/health` devuelve `{ok:true}`
+- [ ] `https://sitio.example/` carga el home
+- [ ] `https://sitio.example/admin/` muestra el login
+- [ ] `https://sitio.example/api/health` devuelve `{ok:true}`
 - [ ] Cambiar la contraseña del admin sembrado y crear usuarios reales
 - [ ] Borrar `/var/www/sanatorio/.deploy-credentials` después de leerlo
 - [ ] Subir el logo definitivo y configurar branding completo
@@ -337,6 +354,8 @@ credenciales ni datos de conexión.
 | `CAPTCHA_PROVIDER` | opcional: `turnstile` o `recaptcha`; vacío = verificación desactivada |
 | `CAPTCHA_SITE_KEY` | clave pública del proveedor; la usa el widget del formulario |
 | `CAPTCHA_SECRET_KEY` | clave secreta; sólo la usa la API para validar el token |
-| `CORS_ORIGINS` | `https://sanatorioadventista.com.py` |
-| `PUBLIC_BASE_URL` | `https://sanatorioadventista.com.py` |
+| `CORS_ORIGINS` | `https://sitio.example` (sólo orígenes confirmados) |
+| `PUBLIC_BASE_URL` | `https://sitio.example` |
+| `PUBLIC_SITE_URL` | `https://sitio.example` (canonical, sitemap y prerender; nunca la IP) |
 | `UPLOAD_DIR` | `/var/www/sanatorio/api/uploads` |
+| `UPLOAD_STAGING_DIR` | `/var/www/sanatorio/api/.uploads-staging`, fuera de uploads y en el mismo filesystem |

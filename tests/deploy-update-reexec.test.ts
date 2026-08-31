@@ -265,7 +265,7 @@ describe("el script corre desde una copia, no desde el archivo que el reset rees
     // El orden importa: si la copia se sacara después del `git reset`, volvería
     // a compararse el archivo nuevo contra sí mismo.
     const copia = SCRIPT_REAL.indexOf('cat "$0" > "$DEPLOY_SELF_COPY"');
-    const reset = SCRIPT_REAL.indexOf('git reset --hard "origin/${BRANCH}"');
+    const reset = SCRIPT_REAL.indexOf('git reset --hard "$TARGET_SHA"');
     const comparacion = SCRIPT_REAL.indexOf('HASH_EN_USO="$(sha256sum "$DEPLOY_SELF_COPY"');
     expect(copia).toBeGreaterThan(-1);
     expect(copia).toBeLessThan(reset);
