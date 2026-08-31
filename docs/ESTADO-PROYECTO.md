@@ -201,7 +201,7 @@ Los PR #23 y #24 se fusionaron sin una review registrada. Los checks automático
 
 ## 5. Validación actual de `main`
 
-El workflow posterior al merge terminó en **success** tanto sobre `f398fed` (PR #23, código; run #61) como sobre el `main` actual `94e2e0e` (PR #24, sólo documentación; run #63). Las cifras de código y pruebas de abajo corresponden a `f398fed` y siguen vigentes en `94e2e0e`, porque PR #24 no tocó código ni pruebas.
+El workflow posterior al merge terminó en **success** sobre el `main` actual `fd49743a` (PR #25; run #66). La auditoría sustantiva de preproducción del PR #26 quedó verificada sobre el HEAD funcional `7eb570c` (run #68): typecheck, los tres builds, la suite MySQL 8, el prerender real, secretos y dependencias terminaron correctamente. El commit posterior que sólo cierra este documento debe conservar esos mismos checks verdes dentro del mismo PR.
 
 | Check | Resultado |
 |---|---|
@@ -209,13 +209,14 @@ El workflow posterior al merge terminó en **success** tanto sobre `f398fed` (PR
 | Build API | OK |
 | Build web | OK |
 | Build admin | OK |
-| Suite MySQL 8 | **1497/1497 en 82 archivos** |
+| Suite MySQL 8 de `main@fd49743a` | **1497/1497 en 82 archivos** |
+| Suite MySQL 8 del PR #26 (`7eb570c`) | **1514/1514 en 83 archivos** |
 | Migraciones | Incluidas en la suite |
 | Prerender con API y base reales | OK |
 | Auditoría high/critical de producción | OK |
 | `check-secrets` del árbol | OK |
 | `gitleaks` del árbol actual | Sin hallazgos |
-| `gitleaks` del historial | **1 hallazgo conocido** |
+| `gitleaks` del historial | **Incidente abierto; inventario exacto privado** |
 
 ---
 
@@ -223,13 +224,7 @@ El workflow posterior al merge terminó en **success** tanto sobre `f398fed` (PR
 
 ### 6.1 Resolver el secreto histórico — bloqueo NO-GO
 
-El historial contiene un valor detectado por `gitleaks`:
-
-- Commit: `9ced09df45fcaeb63f9e10be9219401faab6434d`
-- Archivo: `scripts/deploy/setup-vps.sh`
-- Regla: `shell-default-credential`
-
-El árbol actual está limpio, pero el secreto sigue recuperable desde el historial. Antes del deploy se debe:
+El historial contiene material que debe tratarse como credencial comprometida. El inventario exacto —commits, rutas, alcance y rotaciones— es sensible y se conserva en el acta privada, no en este repositorio público. El árbol actual está limpio, pero esos antecedentes siguen recuperables desde Git. Un único hallazgo de una herramienta no demuestra que el inventario histórico esté completo. Antes del deploy se debe:
 
 1. Confirmar dónde se utilizó esa credencial.
 2. Rotarla en todos los entornos donde pudiera seguir vigente.
@@ -443,30 +438,57 @@ La siguiente etapa no es otra ronda amplia de desarrollo. Es una ronda controlad
 - `docs/CARGA-DE-DATOS.md`.
 - `.github/workflows/ci.yml`.
 - `api/.env.example` y `.env.deploy.example`.
+- PR #26, auditoría de scripts y prerrequisitos de infraestructura.
+- CI del PR #26 sobre `7eb570ccc36ff8859555e54087a7dc9f7ecaebdb` (run #68): **success (3/3)**.
+- `docs/PREPRODUCCION-Y-GO-LIVE.md` y `docs/SEGURIDAD-SECRETO-HISTORICO.md`.
 
 ---
 
-## 13. Auditoría de preproducción — ronda sustantiva en curso
+## 13. Auditoría de preproducción — PR #26
 
+**PR:** [#26](https://github.com/DaltonP93/WEB_SAA/pull/26) (Draft)  
 **Rama:** `codex/preproduccion-seguridad-infraestructura`  
-**Base:** `main@fd49743a`  
-**PR/SHA:** se completan dentro de este mismo PR después de crear el commit y
-verificar CI.
+**Base:** `main@fd49743a27543a5cd0c12e2839b6ba9760484d33`  
+**HEAD funcional probado:** `7eb570ccc36ff8859555e54087a7dc9f7ecaebdb`  
+**Alcance:** auditoría y blindaje de scripts de preproducción, despliegue y prerrequisitos; sin acceso ni cambios en producción.
 
-Terminado en código/documentación:
+### 13.1 Terminado
 
 - runbook público y saneado de preproducción/go-live;
-- procedimiento de rotación/purga sin valores ni inventario sensible;
-- deploy fijable por `DEPLOY_TO`;
-- backup obligatorio y validado con `gzip -t`;
-- reglas UFW antes de habilitar firewall;
-- timeout SSH fail-closed con código 124;
-- contrato explícito de `UPLOAD_STAGING_DIR`;
-- pruebas de regresión de estos contratos.
+- procedimiento seguro de rotación/purga, sin valores ni inventario sensible;
+- despliegue fijable a un SHA aprobado mediante `DEPLOY_TO`;
+- backup de base obligatorio y verificado con `gzip -t` antes de migrar;
+- UFW permite SSH/HTTP/HTTPS antes de habilitarse y ya no oculta fallos;
+- timeout SSH local fail-closed con salida 124, sin quedar bloqueado esperando;
+- contrato explícito de `UPLOAD_STAGING_DIR`, fuera de uploads y en el mismo filesystem;
+- ejemplos de entorno y guía de despliegue reconciliados con el contrato efectivo;
+- 14 pruebas nuevas de regresión para los contratos anteriores.
 
-Pendientes externos: cerrar el incidente histórico según el inventario privado,
-proteger `main`, confirmar dominio/infraestructura, probar restore de
-DB+uploads y configurar monitoreo. Ninguno se declara resuelto por el runbook.
+No se agregaron migraciones ni dependencias. No se cambiaron datos, DNS, credenciales, infraestructura ni el historial Git.
+
+### 13.2 Validación
+
+| Check sobre `7eb570c` | Resultado |
+|---|---|
+| Typecheck API/web/admin | OK |
+| Build API/web/admin | OK |
+| Suite MySQL 8 | **1514/1514 en 83 archivos** |
+| Prerender real con API y base | OK |
+| Auditoría de dependencias | OK |
+| Secretos del árbol e historial según política actual | Job OK; incidente histórico sigue abierto |
+| CI run #68 | **3/3 success** |
+
+**Corrector:** el primer HEAD de la ronda falló en CI por una sintaxis inválida del bootstrap. La prueba nueva de `bash -n` detectó el defecto; se corrigió y la corrida siguiente quedó verde. El fallo no llegó a `main` ni a un servidor.
+
+### 13.3 Auditoría de infraestructura
+
+La auditoría confirmó que `main` no tiene branch protection ni rulesets activos. Tampoco hay evidencia versionada suficiente para declarar cerrados dominio/DNS/TLS, capacidad y aislamiento, acceso SSH nominal, restore externo de DB+uploads, monitoreo/alertas, contenido final ni guardia operativa. La cadena de suministro aún debe fijar Actions por digest y validar por checksum/firma el binario de gitleaks.
+
+### 13.4 Veredicto y siguiente acción
+
+- **Código, CI y documentación de preproducción:** GO para revisión del PR #26.
+- **Producción:** **NO-GO** hasta cerrar los bloqueantes externos y el incidente histórico.
+- **Siguiente acción recomendada:** revisión registrada del PR #26, mantener los tres checks verdes y, tras fusionarlo, completar privadamente protección de `main`, rotación/purga, infraestructura, backups/restores, monitoreo y dominio antes de autorizar una ventana de preproducción.
 
 ---
 
