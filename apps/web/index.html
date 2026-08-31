@@ -11,7 +11,15 @@
          Meta Pixel). Sin un ID configurado y sin consentimiento no se carga
          ningún script que los use. Tienen que coincidir con la CSP de Nginx en
          scripts/deploy/setup-vps.sh. -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self' https://challenges.cloudflare.com https://www.google.com https://www.gstatic.com https://www.googletagmanager.com https://connect.facebook.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https:; connect-src 'self' https://challenges.cloudflare.com https://www.googletagmanager.com https://www.google-analytics.com https://analytics.google.com https://region1.google-analytics.com https://connect.facebook.net https://www.facebook.com; form-action 'self'; frame-src https://www.youtube.com https://www.youtube-nocookie.com https://player.vimeo.com https://www.google.com https://google.com https://maps.google.com https://www.google.com.py https://google.com.py https://challenges.cloudflare.com; upgrade-insecure-requests" />
+    <!-- SIN `upgrade-insecure-requests` a propósito. Mientras el sitio se sirva
+         por IP sobre http (no hay dominio ni certificado válido todavía), esa
+         directiva reescribe a https TODOS los assets propios —que son rutas
+         relativas— y el navegador los rechaza con ERR_CERT_COMMON_NAME_INVALID:
+         la página queda en blanco. No aporta nada acá: no hay una sola
+         referencia http:// en el árbol, los terceros ya son https y, cuando
+         haya dominio + Let's Encrypt, los assets relativos serán https solos.
+         Reintroducirla sólo tiene sentido junto con HSTS y dominio propio. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self' https://challenges.cloudflare.com https://www.google.com https://www.gstatic.com https://www.googletagmanager.com https://connect.facebook.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https:; connect-src 'self' https://challenges.cloudflare.com https://www.googletagmanager.com https://www.google-analytics.com https://analytics.google.com https://region1.google-analytics.com https://connect.facebook.net https://www.facebook.com; form-action 'self'; frame-src https://www.youtube.com https://www.youtube-nocookie.com https://player.vimeo.com https://www.google.com https://google.com https://maps.google.com https://www.google.com.py https://google.com.py https://challenges.cloudflare.com" />
     <meta name="referrer" content="strict-origin-when-cross-origin" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#005587" />
