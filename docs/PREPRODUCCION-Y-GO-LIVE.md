@@ -39,6 +39,7 @@ de gobierno del repositorio. No se accedió al servidor ni a credenciales.
 | ENV-01 | `UPLOAD_STAGING_DIR` queda explícito, fuera de uploads |
 | DOC-01 | dominio de ejemplos reemplazado por `sitio.example` |
 | DOC-02 | variables de rutas no consumidas retiradas del ejemplo de deploy |
+| SUP-01 | Actions fijadas por commit y gitleaks validado por SHA-256 antes de extraer |
 
 ### Pendientes que no resuelve el código
 
@@ -50,7 +51,6 @@ de gobierno del repositorio. No se accedió al servidor ni a credenciales.
 | DNS/TLS | confirmar dominio, apex/`www`, TTL, certificado y renovación |
 | Backups | destino externo y restore ensayado de DB+uploads |
 | Operación | monitoreo, alertas, logs, guardia y umbrales |
-| Supply chain | pin de actions y checksum/firma del binario de gitleaks |
 
 ## 3. Matriz de prerrequisitos
 
@@ -90,6 +90,7 @@ Configurar en `main`:
 - sin bypass habitual de administradores;
 - sin borrado ni force-push salvo la ventana coordinada de purga;
 - secret scanning y push protection si están disponibles.
+- actualizar los commits fijados de Actions y el checksum de gitleaks únicamente mediante PR revisado y CI verde.
 
 El escaneo histórico puede ser informativo durante el incidente. Un job verde
 no equivale por sí solo a historia limpia: se debe leer su resumen.

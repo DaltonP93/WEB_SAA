@@ -210,7 +210,7 @@ El workflow posterior al merge terminó en **success** sobre el `main` actual `f
 | Build web | OK |
 | Build admin | OK |
 | Suite MySQL 8 de `main@fd49743a` | **1497/1497 en 82 archivos** |
-| Suite MySQL 8 del PR #26 (`7eb570c`) | **1514/1514 en 83 archivos** |
+| Suite MySQL 8 del PR #26 (`7eb570c`) | **1516/1516 en 84 archivos** |
 | Migraciones | Incluidas en la suite |
 | Prerender con API y base reales | OK |
 | Auditoría high/critical de producción | OK |
@@ -462,7 +462,9 @@ La siguiente etapa no es otra ronda amplia de desarrollo. Es una ronda controlad
 - timeout SSH local fail-closed con salida 124, sin quedar bloqueado esperando;
 - contrato explícito de `UPLOAD_STAGING_DIR`, fuera de uploads y en el mismo filesystem;
 - ejemplos de entorno y guía de despliegue reconciliados con el contrato efectivo;
-- 14 pruebas nuevas de regresión para los contratos anteriores.
+- 14 pruebas nuevas de regresión para los contratos anteriores;
+- Actions del workflow fijadas a commits inmutables y gitleaks verificado por SHA-256 antes de extraer;
+- 2 pruebas nuevas que bloquean referencias flotantes y artefactos sin integridad.
 
 No se agregaron migraciones ni dependencias. No se cambiaron datos, DNS, credenciales, infraestructura ni el historial Git.
 
@@ -472,17 +474,18 @@ No se agregaron migraciones ni dependencias. No se cambiaron datos, DNS, credenc
 |---|---|
 | Typecheck API/web/admin | OK |
 | Build API/web/admin | OK |
-| Suite MySQL 8 | **1514/1514 en 83 archivos** |
+| Suite MySQL 8 | **1516/1516 en 84 archivos** |
 | Prerender real con API y base | OK |
 | Auditoría de dependencias | OK |
 | Secretos del árbol e historial según política actual | Job OK; incidente histórico sigue abierto |
-| CI run #68 | **3/3 success** |
+| CI run #68 (blindaje de deploy) | **3/3 success** |
+| Cadena de suministro (HEAD posterior) | Actions por SHA + gitleaks SHA-256; CI obligatoria |
 
 **Corrector:** el primer HEAD de la ronda falló en CI por una sintaxis inválida del bootstrap. La prueba nueva de `bash -n` detectó el defecto; se corrigió y la corrida siguiente quedó verde. El fallo no llegó a `main` ni a un servidor.
 
 ### 13.3 Auditoría de infraestructura
 
-La auditoría confirmó que `main` no tiene branch protection ni rulesets activos. Tampoco hay evidencia versionada suficiente para declarar cerrados dominio/DNS/TLS, capacidad y aislamiento, acceso SSH nominal, restore externo de DB+uploads, monitoreo/alertas, contenido final ni guardia operativa. La cadena de suministro aún debe fijar Actions por digest y validar por checksum/firma el binario de gitleaks.
+La auditoría confirmó que `main` no tiene branch protection ni rulesets activos. Tampoco hay evidencia versionada suficiente para declarar cerrados dominio/DNS/TLS, capacidad y aislamiento, acceso SSH nominal, restore externo de DB+uploads, monitoreo/alertas, contenido final ni guardia operativa. La cadena de suministro del workflow queda fijada en este PR; sus futuras actualizaciones deben pasar por otro PR revisado y CI verde.
 
 ### 13.4 Veredicto y siguiente acción
 
