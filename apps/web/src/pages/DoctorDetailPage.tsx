@@ -4,6 +4,7 @@ import { Helmet } from "react-helmet-async";
 import { api } from "../api";
 import type { Doctor, Specialty } from "@sa/shared";
 import Avatar from "../components/Avatar";
+import PageSkeleton from "../components/PageSkeleton";
 
 export default function DoctorDetailPage() {
   const { slug } = useParams();
@@ -11,7 +12,7 @@ export default function DoctorDetailPage() {
     queryKey: ["doctor", slug],
     queryFn: async () => (await api.get(`/public/doctors/${slug}`)).data,
   });
-  if (isLoading) return <div className="container-x py-12">Cargando…</div>;
+  if (isLoading) return <PageSkeleton variant="doctor" />;
   if (!data) return <div className="container-x py-12">No encontrado.</div>;
 
   const jsonLd = {

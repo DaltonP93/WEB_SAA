@@ -22,3 +22,17 @@ body { @apply bg-gray-50 text-gray-900; font-family: "Open Sans", system-ui, -ap
 .btn-ghost { @apply btn bg-transparent text-brand hover:bg-brand/10 focus-visible:ring-brand; }
 .btn-danger { @apply btn bg-red-600 text-white hover:bg-red-700; }
 .card { @apply bg-white rounded shadow-sm border; }
+
+/* Entrada de pantalla del panel. Mismos tiempos que la transición de ruta del
+   sitio público, resueltos con CSS: el admin no usa framer-motion. */
+@keyframes admin-fade-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+.page-enter { animation: admin-fade-up 220ms ease-out both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .page-enter { animation: none; }
+  .animate-pulse { animation: none; }
+  html { scroll-behavior: auto; }
+}

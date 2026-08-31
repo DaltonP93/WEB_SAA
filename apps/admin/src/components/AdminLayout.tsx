@@ -1,7 +1,9 @@
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { useEffect, useRef } from "react";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api";
 import LucideIcon from "./LucideIcon";
+import TopProgressBar from "./TopProgressBar";
 
 type NavItem = { to: string; label: string; icon: string; end?: boolean; badge?: "msg" | "turnos" };
 
@@ -43,6 +45,7 @@ const SECTIONS: { title: string; items: NavItem[] }[] = [
 
 export default function AdminLayout() {
   const nav = useNavigate();
+  const { pathname } = useLocation();
 
   const msgs = useQuery({ queryKey: ["adm-msg"], queryFn: async () => (await api.get("/admin/contact-messages")).data });
   // El contador sale del `total` del servidor, no del largo de la lista: la
@@ -61,8 +64,19 @@ export default function AdminLayout() {
     localStorage.removeItem("token");
     nav("/login");
   }
+
+  // El scroll del panel vive en el <main>, no en la ventana: al cambiar de
+  // sección hay que devolverlo al tope a mano. Se asigna `scrollTop` en vez de
+  // `scrollTo()` porque el salto es instantáneo igual y jsdom no implementa el
+  // método en elementos.
+  const mainRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (mainRef.current) mainRef.current.scrollTop = 0;
+  }, [pathname]);
+
   return (
     <div className="flex h-screen">
+      <TopProgressBar />
       <aside className="w-60 bg-brand text-white flex flex-col">
         <div className="px-4 py-4 border-b border-white/10 bg-gradient-to-r from-brand to-brand-700">
           <div className="flex items-center gap-3">
@@ -120,8 +134,9 @@ export default function AdminLayout() {
           Cerrar sesión
         </button>
       </aside>
-      <main className="flex-1 overflow-y-auto">
-        <div className="max-w-6xl mx-auto p-6">
+      <main ref={mainRef} className="flex-1 overflow-y-auto">
+        {/* `key` por ruta: fuerza el remount y con eso la animación de entrada. */}
+        <div key={pathname} className="page-enter max-w-6xl mx-auto p-6">
           <Outlet />
         </div>
       </main>

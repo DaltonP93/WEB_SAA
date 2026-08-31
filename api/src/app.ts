@@ -93,14 +93,23 @@ export function createApp() {
    */
   app.get("/api/health", async (_req, res) => {
     const database = await checkDatabase();
-    const ok = database.ok;
+    // Un esquema atrasado es tan "no sano" como una base caída: la API levanta
+    // igual, pero las rutas que usan las columnas nuevas devuelven 500. El
+    // deploy corre `db:migrate` antes de arrancar PM2 y recién después consulta
+    // este endpoint, así que el chequeo cubre esa secuencia en vez de estorbarla.
+    const ok = database.ok && !database.migrationsPending;
     res.status(ok ? 200 : 503).json({
       ok,
       ts: Date.now(),
       uptime: Math.round(process.uptime()),
       components: {
         api: { ok: true },
-        database: { ok: database.ok, latencyMs: database.latencyMs, error: database.error },
+        database: {
+          ok: database.ok,
+          latencyMs: database.latencyMs,
+          error: database.error,
+          migrationsPending: database.migrationsPending,
+        },
       },
     });
   });

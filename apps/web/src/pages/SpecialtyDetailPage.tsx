@@ -4,6 +4,7 @@ import { api } from "../api";
 import Avatar from "../components/Avatar";
 import LucideIcon from "../components/LucideIcon";
 import { resolveIcon } from "../lib/icons";
+import PageSkeleton from "../components/PageSkeleton";
 
 export default function SpecialtyDetailPage() {
   const { slug } = useParams();
@@ -11,7 +12,7 @@ export default function SpecialtyDetailPage() {
     queryKey: ["specialty", slug],
     queryFn: async () => (await api.get(`/public/specialties/${slug}`)).data,
   });
-  if (isLoading) return <div className="container-x py-12">Cargando…</div>;
+  if (isLoading) return <PageSkeleton />;
   if (!data) return <div className="container-x py-12">No encontrada.</div>;
   const doctors = data.doctors ?? [];
   return (

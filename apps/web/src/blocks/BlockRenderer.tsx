@@ -1,5 +1,6 @@
 import { lazy, Suspense } from "react";
 import type { Block, BlockType } from "@sa/shared/blocks";
+import PageSkeleton from "../components/PageSkeleton";
 import type {
   HeroProps,
   RichTextProps,
@@ -104,7 +105,7 @@ const MAP: Record<BlockType, React.ComponentType<any>> = {
 
 export default function BlockRenderer({ blocks }: { blocks: Block[] }) {
   return (
-    <Suspense fallback={<div className="container-x section-y-sm">Cargando…</div>}>
+    <Suspense fallback={<PageSkeleton variant="section" />}>
       {blocks.map((b) => {
         const C = MAP[b.type];
         if (!C) return <div key={b.id} className="container-x py-3 text-sm text-amber-700">Bloque desconocido: {b.type}</div>;

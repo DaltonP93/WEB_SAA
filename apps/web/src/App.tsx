@@ -5,6 +5,8 @@ import { Helmet } from "react-helmet-async";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { api, applyTheme } from "./api";
 import Layout from "./components/Layout";
+import ScrollToTop from "./components/ScrollToTop";
+import TopProgressBar from "./components/TopProgressBar";
 import DynamicPage from "./pages/DynamicPage";
 import DoctorsPage from "./pages/DoctorsPage";
 import DoctorDetailPage from "./pages/DoctorDetailPage";
@@ -125,14 +127,26 @@ export default function App() {
         {seo?.verification?.bing && <meta name="msvalidate.01" content={seo.verification.bing} />}
         <script type="application/ld+json">{JSON.stringify(orgJsonLd)}</script>
       </Helmet>
+      {/* Fuera del Layout: la barra se apoya en el borde de la ventana, por
+          encima del header sticky. */}
+      <TopProgressBar />
       <Layout settings={settingsQ.data}>
+        <ScrollToTop />
+        {/* `initial={false}` evita que la primera pintura anime: es lo que
+            impide un parpadeo sobre el HTML prerenderizado de /estudios. */}
         <AnimatePresence mode="wait" initial={false}>
           <motion.div
             key={location.pathname}
             initial={reduced ? false : { opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={reduced ? undefined : { opacity: 0, y: -8 }}
-            transition={{ duration: reduced ? 0 : 0.25, ease: "easeOut" }}
+            // La salida es corta a propósito: `mode="wait"` no monta la pantalla
+            // nueva hasta terminarla, así que cada ms de más es pantalla vacía.
+            exit={
+              reduced
+                ? undefined
+                : { opacity: 0, y: -6, transition: { duration: 0.12, ease: "easeIn" } }
+            }
+            transition={{ duration: reduced ? 0 : 0.26, ease: "easeOut" }}
           >
             <Routes location={location}>
               <Route path="/" element={<DynamicPage slug="home" />} />

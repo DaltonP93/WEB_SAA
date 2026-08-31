@@ -139,4 +139,9 @@ h1, h2, h3, h4, h5, h6 {
     animation: none;
     background: linear-gradient(120deg, rgb(var(--c-primary)) 0%, rgb(var(--c-secondary)) 100%);
   }
+  /* Anclas y `scrollTo`: sin desplazamiento animado. */
+  html { scroll-behavior: auto; }
+  /* El pulso de los skeletons es decorativo; la silueta se entiende igual
+     quieta. El resto del movimiento se apaga en JS con `useReducedMotion()`. */
+  .animate-pulse { animation: none; }
 }
