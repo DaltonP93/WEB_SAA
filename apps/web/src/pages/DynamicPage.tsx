@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Helmet } from "react-helmet-async";
 import { api } from "../api";
 import BlockRenderer from "../blocks/BlockRenderer";
+import PageSkeleton from "../components/PageSkeleton";
 
 export default function DynamicPage({ slug }: { slug?: string }) {
   const params = useParams();
@@ -12,7 +13,7 @@ export default function DynamicPage({ slug }: { slug?: string }) {
     queryFn: async () => (await api.get(`/public/pages/${s}`)).data,
   });
 
-  if (isLoading) return <div className="container-x py-12">Cargando…</div>;
+  if (isLoading) return <PageSkeleton />;
   if (isError || !data) return <div className="container-x py-12">Página no encontrada.</div>;
   const canonicalUrl = `${window.location.origin}${s === "home" ? "/" : `/${s}`}`;
   const title = data.seo?.title ?? data.title;
