@@ -1,0 +1,18 @@
+[Unit]
+Description=Sincroniza /var/www/sanatorio con origin/main (auto-deploy)
+Documentation=file:///var/www/sanatorio/docs/DEPLOY.md
+After=network-online.target mysql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/var/www/sanatorio
+ExecStart=/usr/local/bin/sanatorio-auto-deploy.sh
+# El VPS tiene 1.9 GB de RAM y ya hubo un incidente donde un `vite build`
+# tumbó el daemon de PM2 (AGENTS.md §9). El deploy completo puede tardar
+# varios minutos; nunca debería pasar de 25.
+TimeoutStartSec=1800
+# Que un deploy fallido no deje la unidad en `failed` de forma pegajosa:
+# el próximo tick del timer vuelve a intentar solo.
+SuccessExitStatus=0

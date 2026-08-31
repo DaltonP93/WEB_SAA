@@ -443,6 +443,32 @@ python scripts/deploy/run-remote.py "bash /var/www/sanatorio/scripts/deploy/upda
 
 ⚠️ `--frozen-lockfile` implica que **todo cambio de dependencia debe llevar el `pnpm-lock.yaml` commiteado**, o el deploy falla.
 
+### Auto-deploy (el VPS sigue a `origin/main` solo)
+
+Desde 2026-08-31 el VPS se sincroniza solo: un timer de systemd chequea `origin/main` **cada 5 minutos** y, si avanzó, corre `update-vps.sh`. Ya no hace falta lanzar el deploy a mano — el comando manual de arriba sigue siendo válido y es el camino para forzar un deploy sin esperar el tick.
+
+| Unidad / archivo | Dónde |
+|---|---|
+| Script | `/usr/local/bin/sanatorio-auto-deploy.sh` (copia de `scripts/deploy/auto-deploy.sh`) |
+| Service | `/etc/systemd/system/sanatorio-auto-deploy.service` (`Type=oneshot`, `TimeoutStartSec=1800`) |
+| Timer | `/etc/systemd/system/sanatorio-auto-deploy.timer` (`OnBootSec=5min`, `OnUnitActiveSec=5min`) |
+| Log | `/var/log/sanatorio-auto-deploy.log` (logrotate semanal, 8 copias) |
+
+**El script vive fuera del árbol del repo a propósito.** `update-vps.sh` hace `git reset --hard`, que reescribiría el archivo mientras bash lo lee por offset — el mismo problema que `update-vps.sh` resuelve copiándose a `/tmp`. En `/usr/local/bin` git no lo puede tocar. La contrapartida: **editar `scripts/deploy/auto-deploy.sh` no actualiza el VPS**; hay que volver a copiarlo (`scripts/deploy/systemd/` tiene las unidades y el logrotate junto al script).
+
+No hay lock: systemd no arranca una unidad `oneshot` ya activa, así que dos deploys nunca se superponen; si un deploy tarda más que el intervalo, el tick siguiente simplemente no corre.
+
+`auto-deploy.sh` **no actúa si `origin/main` no desciende del HEAD del VPS** (force-push, reescritura de historia): loguea el error y sale con 1 en cada tick hasta que alguien lo resuelve a mano. Es deliberado — decidir si eso amerita un `rollback-vps.sh` no es automatizable.
+
+```bash
+systemctl list-timers sanatorio-auto-deploy.timer   # próximo chequeo
+tail -f /var/log/sanatorio-auto-deploy.log          # qué hizo
+systemctl start sanatorio-auto-deploy.service       # forzar un chequeo ya
+systemctl disable --now sanatorio-auto-deploy.timer # pausar el auto-deploy
+```
+
+⚠️ El timer deploya **cualquier** commit que llegue a `origin/main`, sin esperar a que CI esté verde. La compuerta de calidad es el PR, no el deploy.
+
 ### Rollback
 
 **`update-vps.sh` no hace rollback.** El único camino es:

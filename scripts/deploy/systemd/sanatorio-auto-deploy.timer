@@ -1,0 +1,15 @@
+[Unit]
+Description=Chequea origin/main cada 5 minutos y deploya si avanzó
+
+[Timer]
+# Primer chequeo 5 min después del boot, y después cada 5 min desde que
+# terminó el anterior (OnUnitActiveSec, no OnCalendar: así un deploy largo
+# no encola chequeos encima).
+OnBootSec=5min
+OnUnitActiveSec=5min
+# Desfasa hasta 60s para no caer siempre en el mismo segundo.
+RandomizedDelaySec=60
+Unit=sanatorio-auto-deploy.service
+
+[Install]
+WantedBy=timers.target

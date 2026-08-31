@@ -1,0 +1,10 @@
+# Instalar en /etc/logrotate.d/sanatorio-auto-deploy
+/var/log/sanatorio-auto-deploy.log {
+    weekly
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}
