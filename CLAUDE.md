@@ -4,6 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 > **Read [`AGENTS.md`](AGENTS.md) first.** It is the canonical, exhaustive project context (architecture, conventions, multi-agent workflow, production runbook, incident history) and is kept up to date after every significant change. This file is a short operational summary for quick orientation — when the two disagree, `AGENTS.md` wins.
 
+@AGENTS.md
+@docs/AI_HANDOFF.md
+
 ## What this is
 
 Institutional website + fully parametric admin panel for **Sanatorio Adventista de Asunción** (Paraguay). pnpm monorepo: Node/Express API + two Vite/React SPAs (public site, admin panel), MySQL via Knex.
