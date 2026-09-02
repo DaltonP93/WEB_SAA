@@ -2575,3 +2575,33 @@ verde, 0 fallos nuevos**. Los 67 restantes son ambientales de Windows
 conteo verde.
 
 **Producción.** NO-GO sin cambios (bloqueantes externos intactos).
+
+**Segunda auditoría (sobre `bc2439a`) — validación estricta + preflight.** La
+auditoría independiente devolvió NO-GO para merge por dos defectos: (1) el lector
+de snapshot era laxo —sólo `formato` + tres booleanos y un cast al tipo completo—,
+así un snapshot **parcial forjado** podía hacer que `down()` **borre una fila
+legítima** `settings.brand`; (2) `up()` no validaba un snapshot preexistente
+corrupto: lo conservaba pero igual modificaba `brand`. Corrección sin migración
+posterior ni heurística: **validación estricta de estructura cerrada + coherencia**
+por migración (9 campos exactos, `formato`/`migracion`/`propiedad`, tipos booleanos,
+`valorAplicado` atado a `aplicoCambio`, combinaciones de procedencia imposibles
+rechazadas; se construye el objeto tipado desde los valores validados, nunca un
+cast); `up()` que **lanza** ante snapshot preexistente inválido y es **no-op
+idempotente** si es válido (preserva personalizaciones); `down()` que valida por
+completo antes de tocar o borrar filas y no usa la coincidencia con el default como
+prueba de procedencia. **Preflight** `scripts/deploy/brand-snapshot-preflight.mjs`
+(lo invoca `rollback-db.sh` tras calcular `PENDIENTES` y antes del primer
+`migrate:down`): si el rollback cruza favicon/logo, valida sus snapshots por
+adelantado y **aborta sin revertir nada** (exit 4) si falta o es inválido; no se
+salta con `ROLLBACK_ALLOW_AFTER_SEED`; el mensaje pide un backup **anterior** a esas
+migraciones (uno reciente sólo recupera el estado actual). Necesario porque el
+fail-closed de cada `down()` llega tarde en una reversión múltiple. Pruebas:
+`tests/migrations-brand-rollback-strict.test.ts` (27; 18/27 fallan contra
+`bc2439a`), `tests/rollback-brand-preflight.test.ts` (8, sin base/bash) y 2 casos
+bash end-to-end en `tests/rollback-db.test.ts` (cero `down()` al bloquear; no
+bloquea si no cruza marca). Validación local: typecheck/builds/secrets/`audit:prod`
+OK (0 alto/crítico); marca+estricto+preflight 58/58; migraciones ×3 26/26; suite
+completa **1506✓/69✗/5 skip (1580)** vs `bc2439a` 1471✓/67✗ (1543): +35 verdes, los
++2 fallos son los dos casos **bash** del preflight (ambientales de Windows, verdes
+en CI). Mismos 13 archivos ambientales. Conteo verde autoritativo = CI del PR.
+Producción sigue NO-GO.

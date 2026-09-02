@@ -92,6 +92,20 @@ El sitio público es una SPA estática; la API sirve `/api/`, `/uploads/`, `/rob
   autorizado; no hay fallback heurístico. Pruebas en
   `tests/migrations-brand-rollback.test.ts` (incluye la regresión que falla contra
   `672ae96` y pasa sólo con snapshots).
+- **Segunda auditoría (sobre `bc2439a`) — endurecimiento.** La auditoría halló dos
+  defectos: el lector de snapshot era laxo (aceptaba un objeto parcial y hacía cast,
+  así un snapshot forjado podía borrar una fila legítima) y `up()` no validaba un
+  snapshot preexistente corrupto (lo conservaba pero igual modificaba `brand`). Se
+  corrigió con **validación estricta de estructura cerrada + coherencia** por
+  migración (nunca un cast tras validar sólo algunos campos), `up()` que **lanza**
+  ante un snapshot preexistente inválido y es **no-op idempotente** si es válido, y
+  un **preflight de rollback** (`scripts/deploy/brand-snapshot-preflight.mjs`,
+  invocado por `rollback-db.sh` tras calcular `PENDIENTES` y antes del primer
+  `migrate:down`) que aborta un rollback múltiple **antes** de revertir nada si
+  cruza favicon/logo sin snapshot válido (no se salta con
+  `ROLLBACK_ALLOW_AFTER_SEED`; pide un backup **anterior** a esas migraciones).
+  Pruebas: `tests/migrations-brand-rollback-strict.test.ts` (27) y
+  `tests/rollback-brand-preflight.test.ts` (8) + 2 casos bash end-to-end.
 - **Producción sigue en NO-GO** por los bloqueantes externos de
   `docs/ESTADO-PROYECTO.md` (secreto histórico, protección de `main`, dominio/DNS/
   TLS, backups/restore, monitoreo y contenido). Esta corrección no los altera.

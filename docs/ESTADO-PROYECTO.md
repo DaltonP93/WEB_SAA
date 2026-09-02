@@ -182,6 +182,75 @@ GitHub sobre el PR #29**.
   la migración aplicó). Cambiar la semántica de restauración de assets sembrados
   excede esta corrección mínima y se deja como seguimiento.
 
+### 15.8 Segunda auditoría independiente — validación estricta + preflight (2026-09-02)
+
+Una auditoría independiente del PR #29 sobre `bc2439a` reprodujo **dos defectos
+bloqueantes** de la corrección por snapshot y devolvió **NO-GO para merge**:
+
+1. **`down()` confiaba en un snapshot mal validado.** El lector sólo comprobaba
+   `formato` + tres booleanos y hacía un cast al tipo completo, así que un snapshot
+   **parcial forjado** (sin `migracion`/`propiedad`/`formaInesperada`/`valorAnterior`)
+   pasaba y `down()` podía **borrar una fila legítima** `settings.brand`.
+2. **`up()` no validaba un snapshot preexistente corrupto:** lo conservaba pero igual
+   modificaba `settings.brand`, dejando un estado sin restauración segura.
+
+**Corrección (sin migración posterior ni heurística):**
+
+- **Validación estricta por migración (estructura cerrada).** Cada migración valida
+  el snapshot contra su contrato de formato 1 antes de cualquier escritura: exactamente
+  los 9 campos permitidos (ni faltantes ni extra), `formato===1`, `migracion===MIGRACION`,
+  `propiedad===PROP`, tipos booleanos exactos, `valorAplicado===DEFAULT` sii
+  `aplicoCambio` y `===null` en caso contrario, y coherencia entre
+  `filaExistia`/`formaInesperada`/`propiedadExistia`/`valorAnterior`/`aplicoCambio`
+  (se rechaza toda combinación imposible). El objeto tipado se construye a partir de los
+  valores ya validados — **nunca un cast** tras validar sólo algunos campos.
+- **`up()` endurecido.** Sin snapshot: lo captura y aplica el default (como antes). Con
+  snapshot preexistente: lo **valida estrictamente**; si es inválido/ajeno/contradictorio
+  **lanza antes de tocar `brand`**; si es válido, es un **no-op idempotente** (no recalcula
+  otro contrato ni pisa nada) que preserva personalizaciones posteriores.
+- **`down()` endurecido.** Valida el snapshot por completo antes de modificar o borrar
+  cualquier fila; ante error no toca `brand` ni elimina el snapshot; la coincidencia con
+  el valor por defecto **no** se usa como prueba de procedencia (la da el snapshot
+  validado), sólo como guarda extra contra pisar una personalización.
+- **Preflight de rollback** (`scripts/deploy/brand-snapshot-preflight.mjs`, invocado por
+  `rollback-db.sh` **después** de calcular `PENDIENTES` y **antes** del primer
+  `migrate:down`). Sólo actúa si el rollback cruza `20260828…_brand_favicon` o
+  `20260827…_brand_logo`; valida por adelantado los snapshots requeridos de las de marca
+  incluidas y, si falta uno o es inválido, **aborta sin revertir ninguna migración**
+  (exit 4, base intacta). Un rollback que no cruza esas migraciones no queda bloqueado.
+  **No se salta con `ROLLBACK_ALLOW_AFTER_SEED`.** El mensaje aclara que hace falta un
+  backup **anterior** a esas migraciones (o al deploy que las trajo) o un procedimiento
+  manual autorizado: un backup tomado justo antes del rollback sólo recupera el estado
+  actual. Esto es necesario porque el fail-closed dentro de cada `down()` llega tarde en
+  una reversión múltiple (las migraciones más nuevas ya se habrían revertido).
+
+**Pruebas nuevas.** `tests/migrations-brand-rollback-strict.test.ts` (27): defecto 1 y 2
+para logo y favicon, y validación estricta campo por campo (cada campo faltante,
+`migracion`/`propiedad` incorrectas, `formaInesperada` contradictoria, mezclas
+`aplicoCambio`/`valorAplicado`, procedencias imposibles, clave extra), `up()` idempotente
+con snapshot válido, y `down()` que no modifica nada ante snapshot inválido.
+`tests/rollback-brand-preflight.test.ts` (8, sin base/bash): no cruza marca → permite;
+snapshots válidos → permite; migración más nueva antes de favicon/logo sin snapshot →
+bloquea; snapshot inválido → bloquea; uno de dos ausente → bloquea; error de lectura →
+bloquea (fail-closed); mensaje correcto. `tests/rollback-db.test.ts` suma dos casos
+end-to-end (bash): bloqueo con **cero `down()` ejecutados** y rollback que no cruza marca
+no bloqueado. Todas las nuevas pruebas de validación estricta **fallan contra `bc2439a`**
+(18/27 en el archivo estricto) y pasan sólo con esta corrección.
+
+**Validación local** (Node 20.20.2, pnpm 9.0.0, MySQL 8.4.9; CI usa 8.0):
+`typecheck` OK; builds api/web/admin OK; `check:secrets` OK; `audit:prod` OK (0 alto/
+crítico; 5 moderados preexistentes, bajo el umbral); marca+estricto+preflight **58/58**;
+`tests/migrations.test.ts` ×3 sobre bases limpias **26/26**; suite completa **1506✓ /
+69✗ / 5 skip (1580)** vs `bc2439a` **1471✓ / 67✗ (1543)**: **+35 en verde**; los +2 fallos
+nuevos son los dos casos **bash** del preflight en `rollback-db.test.ts`, ambientales de
+Windows (`spawn bash ENOENT`, idénticos al resto de ese archivo, verdes en el runner
+Ubuntu del CI). Mismos 13 archivos ambientales que el baseline. **Conteo verde autoritativo
+= CI del PR.**
+
+**GO/NO-GO (sin cambios respecto de la ronda anterior salvo el diseño):** diseño → GO para
+nueva auditoría (no se declara "riesgo bajo"); CI → pendiente del run del PR; merge → NO-GO
+hasta nueva auditoría independiente + CI verde; **producción → NO-GO**.
+
 ---
 
 ## 1. Resumen ejecutivo
