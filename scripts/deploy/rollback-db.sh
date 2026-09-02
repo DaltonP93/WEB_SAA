@@ -161,6 +161,17 @@ CANTIDAD="$(echo "$PENDIENTES" | grep -c . || true)"
 log "Migraciones a revertir (${CANTIDAD}), de la más nueva a la más vieja:"
 echo "$PENDIENTES" | sed 's/^/    · /'
 
+# --- 1b. Preflight de procedencia de marca ---------------------------------
+# Si el rollback cruza las migraciones de marca (favicon/logo), sus snapshots de
+# procedencia tienen que existir y ser válidos ANTES de revertir nada: el
+# fail-closed de cada down() llegaría tarde en un batch (las migraciones más
+# nuevas ya se habrían revertido). No se salta con ROLLBACK_ALLOW_AFTER_SEED.
+if ! printf '%s\n' "$PENDIENTES" | (cd "$ROOT" && DB_HOST="$DB_HOST" DB_PORT="$DB_PORT" \
+      DB_USER="$DB_USER" DB_PASS="${DB_PASS:-}" DB_NAME="$DB_NAME" \
+      node "${ROOT}/scripts/deploy/brand-snapshot-preflight.mjs"); then
+  die "el preflight de procedencia de marca bloqueó el rollback: no se revirtió ninguna migración y la base quedó intacta (ver el detalle de arriba)." 4
+fi
+
 # --- 2. Revertir, una por una ----------------------------------------------
 # `migrate:rollback` revierte el batch entero, que puede incluir migraciones
 # que el SHA destino sí tiene. Se va de a una.

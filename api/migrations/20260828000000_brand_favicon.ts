@@ -3,43 +3,39 @@ import type { Knex } from "knex";
 /**
  * Setea el favicon institucional por defecto (asset estático servido en
  * /favicon.png, ver apps/web/public/) cuando settings.brand.faviconUrl todavía
- * está vacío. Reemplaza el ícono genérico de la pestaña por el isotipo real del
- * sanatorio. No pisa un favicon que el sanatorio ya haya cargado a mano.
+ * está vacío. No pisa un favicon que el sanatorio ya haya cargado a mano.
  *
  * ## Por qué esta migración lleva snapshot (excepción autorizada)
  *
- * Igual que `20260827000000_brand_logo`, la primera versión de esta migración
- * **creaba** la fila `settings.brand` si no existía pero su `down()` sólo la
- * **vaciaba** (`faviconUrl → ""`), dejando un residuo `{ ..., faviconUrl: "" }`
- * que en el estado anterior no estaba. La corrección por heurística de contenido
- * se descartó (una coincidencia con los valores por defecto no prueba
- * procedencia). La corrección real registra **procedencia** con un snapshot
- * interno: `up()` guarda el estado previo exacto antes de tocar la base y `down()`
- * restaura sólo lo que esta migración escribió. Editar estas dos migraciones ya
- * fusionadas se hizo bajo autorización explícita y acotada del propietario.
+ * Igual que `20260827000000_brand_logo`, la primera versión vaciaba la propiedad
+ * en `down()` dejando un residuo. La corrección por heurística de contenido se
+ * descartó (coincidir con los defaults no prueba procedencia). La corrección real
+ * registra procedencia con un snapshot interno validado estrictamente. Editar
+ * estas dos migraciones ya fusionadas se hizo bajo autorización explícita y
+ * acotada del propietario.
  *
- * ## Contrato del snapshot
+ * ## Contrato del snapshot (formato 1, estructura cerrada)
  *
- * Clave interna `snapshot_brand_favicon_20260828000000` (prefijo `snapshot_`:
- * fuera de `PUBLIC_SETTING_KEYS`/`ADMIN_SETTING_KEYS`, no publicada ni editable
- * desde el CMS). Registra formato, migración, propiedad, si la fila existía, si
- * tenía forma inesperada, si la propiedad existía, su valor anterior exacto
- * (ausente / null / "" / default / personalizado), si aplicó cambio y qué valor
- * aplicó. Se guarda aunque no haga falta cambiar nada, no se sobrescribe si ya
- * existe, y se elimina recién tras un rollback exitoso. Si no puede guardarse, no
- * se modifica `settings.brand`.
+ * Clave interna `snapshot_brand_favicon_20260828000000` (prefijo `snapshot_`,
+ * `varchar(64)`, fuera de las allowlists de settings: no publicada ni editable
+ * desde el CMS). Objeto con **exactamente** `formato`, `migracion`, `propiedad`,
+ * `filaExistia`, `formaInesperada`, `propiedadExistia`, `valorAnterior`,
+ * `aplicoCambio`, `valorAplicado`. Se valida estrictamente (tipos exactos,
+ * pertenencia a esta migración/propiedad, coherencia interna) antes de confiar en
+ * él; nunca un cast al tipo completo tras validar sólo algunos campos. Se guarda
+ * aunque no cambie nada, no se sobrescribe, y se elimina tras un rollback exitoso.
  *
  * A diferencia del logo, el `down()` del favicon **nunca borra la fila**
  * `settings.brand`: sólo restaura o elimina su propia propiedad. Quitar la fila
  * cuando ya no queda nada es responsabilidad exclusiva del `down()` del logo, que
  * corre después (LIFO) y es dueño de la creación original de la fila.
  *
- * ## Instalaciones migradas antes de esta corrección (fail-closed)
+ * ## Fail-closed en instalaciones migradas antes de esta corrección
  *
- * Si esta migración figura aplicada pero su snapshot no existe (base migrada con
- * el código viejo), `down()` **aborta antes de tocar datos**: no vacía el favicon
- * ni la fila, y remite a restaurar un backup verificado o a un procedimiento
- * manual autorizado. No hay fallback heurístico.
+ * Si figura aplicada pero su snapshot está ausente, es inválido o de una versión
+ * desconocida, `down()` aborta antes de tocar datos y remite a restaurar un backup
+ * anterior a estas migraciones o a un procedimiento manual autorizado. Sin
+ * fallback heurístico.
  */
 
 const BRAND_KEY = "brand";
@@ -49,23 +45,30 @@ const SNAPSHOT_KEY = "snapshot_brand_favicon_20260828000000";
 const MIGRACION = "20260828000000_brand_favicon.ts";
 const FORMATO = 1;
 
+/** Los únicos campos que un snapshot de formato 1 puede tener. */
+const CAMPOS = [
+  "formato",
+  "migracion",
+  "propiedad",
+  "filaExistia",
+  "formaInesperada",
+  "propiedadExistia",
+  "valorAnterior",
+  "aplicoCambio",
+  "valorAplicado",
+] as const;
+
 type BrandObject = Record<string, unknown>;
 
 interface BrandSnapshot {
   formato: number;
   migracion: string;
   propiedad: string;
-  /** ¿Existía la fila `settings.brand` antes del `up()` de esta migración? */
   filaExistia: boolean;
-  /** La fila existía pero su valor no era un objeto JSON (no se toca). */
   formaInesperada: boolean;
-  /** ¿Existía la clave de la propiedad dentro del objeto brand? */
   propiedadExistia: boolean;
-  /** Valor exacto anterior de la propiedad (null si no existía o forma inesperada). */
   valorAnterior: unknown;
-  /** ¿El `up()` realmente escribió el default? */
   aplicoCambio: boolean;
-  /** Valor que el `up()` aplicó, o null si no aplicó ninguno. */
   valorAplicado: string | null;
 }
 
@@ -83,24 +86,91 @@ function esObjeto(v: unknown): v is BrandObject {
   return v !== null && typeof v === "object" && !Array.isArray(v);
 }
 
-/** Lee y valida un snapshot; null si falta contenido válido de un snapshot. */
-function leerSnapshot(value: unknown): BrandSnapshot | null {
-  const parsed = leerValor(value);
-  if (!esObjeto(parsed)) return null;
-  const s = parsed as Partial<BrandSnapshot>;
-  if (
-    typeof s.formato !== "number" ||
-    typeof s.filaExistia !== "boolean" ||
-    typeof s.propiedadExistia !== "boolean" ||
-    typeof s.aplicoCambio !== "boolean"
-  ) {
-    return null;
+/**
+ * Validación estricta del snapshot. Lanza ante cualquier desvío (estructura no
+ * cerrada, tipo inválido, pertenencia ajena, procedencia imposible). Sólo si TODO
+ * pasa construye el objeto tipado a partir de valores validados —nunca un cast—.
+ */
+function validarSnapshot(value: unknown): BrandSnapshot {
+  const o = leerValor(value);
+  if (!esObjeto(o)) {
+    throw new Error(`${MIGRACION}: snapshot inválido — "${SNAPSHOT_KEY}" no es un objeto JSON.`);
   }
-  return parsed as unknown as BrandSnapshot;
+  const claves = Object.keys(o);
+  const faltan = CAMPOS.filter((k) => !Object.prototype.hasOwnProperty.call(o, k));
+  const sobran = claves.filter((k) => !(CAMPOS as readonly string[]).includes(k));
+  if (faltan.length > 0 || sobran.length > 0) {
+    throw new Error(
+      `${MIGRACION}: snapshot inválido — estructura inesperada (faltan: ${faltan.join(",") || "-"}; ` +
+        `sobran: ${sobran.join(",") || "-"}).`,
+    );
+  }
+  if (o.formato !== FORMATO) {
+    throw new Error(`${MIGRACION}: snapshot inválido — formato desconocido (esperado ${FORMATO}).`);
+  }
+  if (o.migracion !== MIGRACION) {
+    throw new Error(`${MIGRACION}: snapshot inválido — pertenece a otra migración.`);
+  }
+  if (o.propiedad !== PROP) {
+    throw new Error(`${MIGRACION}: snapshot inválido — pertenece a otra propiedad.`);
+  }
+  const esBool = (v: unknown): v is boolean => typeof v === "boolean";
+  if (!esBool(o.filaExistia) || !esBool(o.formaInesperada) || !esBool(o.propiedadExistia) || !esBool(o.aplicoCambio)) {
+    throw new Error(`${MIGRACION}: snapshot inválido — banderas con tipo no booleano.`);
+  }
+  const { filaExistia, formaInesperada, propiedadExistia, aplicoCambio, valorAnterior, valorAplicado } = o as {
+    filaExistia: boolean;
+    formaInesperada: boolean;
+    propiedadExistia: boolean;
+    aplicoCambio: boolean;
+    valorAnterior: unknown;
+    valorAplicado: unknown;
+  };
+
+  if (aplicoCambio) {
+    if (valorAplicado !== DEFAULT_VALUE) {
+      throw new Error(`${MIGRACION}: snapshot inválido — valorAplicado incoherente con aplicoCambio=true.`);
+    }
+  } else if (valorAplicado !== null) {
+    throw new Error(`${MIGRACION}: snapshot inválido — valorAplicado debe ser null con aplicoCambio=false.`);
+  }
+
+  if (formaInesperada) {
+    if (!(filaExistia && !propiedadExistia && valorAnterior === null && !aplicoCambio)) {
+      throw new Error(`${MIGRACION}: snapshot inválido — combinación imposible con formaInesperada=true.`);
+    }
+  } else if (!filaExistia) {
+    if (!(!propiedadExistia && valorAnterior === null && aplicoCambio)) {
+      throw new Error(`${MIGRACION}: snapshot inválido — combinación imposible con filaExistia=false.`);
+    }
+  } else if (!propiedadExistia) {
+    if (!(valorAnterior === null && aplicoCambio)) {
+      throw new Error(`${MIGRACION}: snapshot inválido — combinación imposible con propiedadExistia=false.`);
+    }
+  } else if (aplicoCambio) {
+    if (!(valorAnterior === null || valorAnterior === "")) {
+      throw new Error(`${MIGRACION}: snapshot inválido — valorAnterior debe ser null o "" (propiedad presente, aplicoCambio=true).`);
+    }
+  } else {
+    if (!(typeof valorAnterior === "string" && valorAnterior.length > 0)) {
+      throw new Error(`${MIGRACION}: snapshot inválido — valorAnterior debe ser un string no vacío (aplicoCambio=false).`);
+    }
+  }
+
+  return {
+    formato: FORMATO,
+    migracion: MIGRACION,
+    propiedad: PROP,
+    filaExistia,
+    formaInesperada,
+    propiedadExistia,
+    valorAnterior,
+    aplicoCambio,
+    valorAplicado: (valorAplicado as string | null),
+  };
 }
 
 export async function up(knex: Knex): Promise<void> {
-  // 1. Leer la fila y la propiedad ANTES de cualquier escritura.
   const filaRaw = await knex("settings").where({ key: BRAND_KEY }).first();
   const filaExistia = filaRaw !== undefined;
   const valorFila = filaExistia ? leerValor(filaRaw.value) : undefined;
@@ -108,8 +178,13 @@ export async function up(knex: Knex): Promise<void> {
   const formaInesperada = filaExistia && brand === null;
   const propiedadExistia = brand !== null && Object.prototype.hasOwnProperty.call(brand, PROP);
   const valorAnterior = propiedadExistia ? (brand as BrandObject)[PROP] : null;
-
   const debeAplicar = !formaInesperada && !(brand && (brand as BrandObject)[PROP]);
+
+  const snapPrevio = await knex("settings").where({ key: SNAPSHOT_KEY }).first();
+  if (snapPrevio) {
+    validarSnapshot(snapPrevio.value); // inválido ⇒ lanza y aborta sin escribir
+    return; // válido preexistente: no-op idempotente, preserva personalizaciones
+  }
 
   const snapshot: BrandSnapshot = {
     formato: FORMATO,
@@ -122,14 +197,8 @@ export async function up(knex: Knex): Promise<void> {
     aplicoCambio: debeAplicar,
     valorAplicado: debeAplicar ? DEFAULT_VALUE : null,
   };
+  await knex("settings").insert({ key: SNAPSHOT_KEY, value: JSON.stringify(snapshot) });
 
-  // 2. Guardar el snapshot ANTES de tocar brand, sin pisarlo si ya existe.
-  const snapPrevio = await knex("settings").where({ key: SNAPSHOT_KEY }).first();
-  if (!snapPrevio) {
-    await knex("settings").insert({ key: SNAPSHOT_KEY, value: JSON.stringify(snapshot) });
-  }
-
-  // 3. Aplicar el default sólo si corresponde; preservar cualquier clave ajena.
   if (debeAplicar) {
     const next = { ...(brand ?? {}), [PROP]: DEFAULT_VALUE };
     await knex("settings")
@@ -142,39 +211,30 @@ export async function up(knex: Knex): Promise<void> {
 export async function down(knex: Knex): Promise<void> {
   const snapRow = await knex("settings").where({ key: SNAPSHOT_KEY }).first();
 
-  // Fail-closed: aplicada sin snapshot => base migrada antes de la corrección.
   if (!snapRow) {
     throw new Error(
-      `rollback de ${MIGRACION} sin snapshot ("${SNAPSHOT_KEY}"): la migración ` +
-        `figura aplicada pero fue corrida antes de la corrección del rollback de ` +
-        `marca. No se vacía el favicon ni se borra settings.brand. Para cruzar ` +
-        `este punto restaurá un backup verificado o realizá un procedimiento ` +
-        `manual autorizado.`,
+      `rollback de ${MIGRACION} sin snapshot ("${SNAPSHOT_KEY}"): la migración figura ` +
+        `aplicada pero fue corrida antes de la corrección del rollback de marca. No se ` +
+        `vacía el favicon ni se borra settings.brand. Para cruzar este punto restaurá un ` +
+        `backup anterior a estas migraciones o realizá un procedimiento manual autorizado.`,
     );
   }
 
-  const snapshot = leerSnapshot(snapRow.value);
-  if (!snapshot || snapshot.formato !== FORMATO) {
-    throw new Error(
-      `rollback de ${MIGRACION}: el snapshot "${SNAPSHOT_KEY}" es inválido o de una ` +
-        `versión desconocida (esperado formato ${FORMATO}). No se modifica la marca; ` +
-        `restaurá un backup verificado o procedé manualmente.`,
-    );
-  }
+  const snapshot = validarSnapshot(snapRow.value);
 
   if (snapshot.aplicoCambio) {
     const filaRaw = await knex("settings").where({ key: BRAND_KEY }).first();
     const valorFila = filaRaw ? leerValor(filaRaw.value) : undefined;
     const brand = esObjeto(valorFila) ? { ...valorFila } : null;
 
-    // Restaurar sólo si la propiedad conserva EXACTAMENTE lo que esta migración
-    // aplicó; si se personalizó después, se preserva. El favicon nunca borra la
-    // fila: eso es responsabilidad del down() del logo.
+    // Restaurar sólo si la propiedad conserva EXACTAMENTE lo que aplicó (guarda
+    // extra; la procedencia la da el snapshot validado). El favicon nunca borra
+    // la fila: eso es responsabilidad del down() del logo.
     if (brand && brand[PROP] === snapshot.valorAplicado) {
       if (snapshot.propiedadExistia) {
-        brand[PROP] = snapshot.valorAnterior; // restaura null / "" / valor exacto
+        brand[PROP] = snapshot.valorAnterior;
       } else {
-        delete brand[PROP]; // no existía antes: se elimina sólo esa propiedad
+        delete brand[PROP];
       }
       await knex("settings")
         .where({ key: BRAND_KEY })
@@ -182,6 +242,5 @@ export async function down(knex: Knex): Promise<void> {
     }
   }
 
-  // Éxito: eliminar únicamente el snapshot correspondiente.
   await knex("settings").where({ key: SNAPSHOT_KEY }).del();
 }

@@ -376,6 +376,54 @@ try {
     expect(res.code, res.stderr).toBe(0);
     expect(res.stdout).toMatch(/nada que revertir/i);
   }, 180_000);
+
+  const SNAP_FAVICON = "snapshot_brand_favicon_20260828000000";
+
+  it("el preflight de marca bloquea antes del primer down() si falta un snapshot cruzado", async () => {
+    // El rollback cruza favicon (una de las dos últimas). Se borra su snapshot de
+    // procedencia: el preflight debe abortar ANTES de revertir nada.
+    const snap = await db("settings").where({ key: SNAP_FAVICON }).first();
+    expect(snap, "el up() de favicon debió dejar su snapshot").toBeTruthy();
+    await db("settings").where({ key: SNAP_FAVICON }).del();
+    const contador = join(tmp, "contador");
+    try {
+      const res = run("bash", ["scripts/deploy/rollback-db.sh"], {
+        DB_NAME: FALLO_DB,
+        DEST_MIGRATIONS_DIR: destinoSinUltimas(2), // PENDIENTES incluye favicon
+        BACKUP_FILE: backup,
+        DOWN_CMD: downCmd(1), // fallaría si se llamara: no debe llamarse
+      });
+
+      expect(res.code).toBe(4);
+      expect(res.stderr).toContain("PROCEDENCIA DE MARCA");
+      // Cero down(): el contador que downCmd inicializa en "0" no se movió.
+      expect(readFileSync(contador, "utf8").trim()).toBe("0");
+      // Y las migraciones siguen aplicadas: la base quedó intacta.
+      const aplicadas = (await db("knex_migrations").pluck("name")) as string[];
+      expect(aplicadas).toContain(todas[todas.length - 1]);
+      expect(aplicadas).toContain(todas[todas.length - 2]);
+    } finally {
+      // Se restaura el snapshot para no dejar la base inconsistente para el
+      // resto de los casos (beforeEach no lo recrea: la migración sigue aplicada).
+      await db("settings").insert({
+        key: snap!.key,
+        value: typeof snap!.value === "string" ? snap!.value : JSON.stringify(snap!.value),
+      });
+    }
+  }, 180_000);
+
+  it("el preflight de marca no bloquea un rollback que no cruza favicon/logo", async () => {
+    // Sólo se revierte la más nueva (home_seo), que no es de marca.
+    const res = run("bash", ["scripts/deploy/rollback-db.sh"], {
+      DB_NAME: FALLO_DB,
+      DEST_MIGRATIONS_DIR: destinoSinUltimas(1),
+      BACKUP_FILE: backup,
+      DOWN_CMD: downCmd(99),
+    });
+    expect(res.code, res.stderr).toBe(0);
+    expect(res.stdout).toContain("1 migración(es) revertida(s)");
+    expect(res.stderr).not.toContain("PROCEDENCIA DE MARCA");
+  }, 180_000);
 });
 
 describe("rollback-vps.sh usa la lista real y falla fuerte", () => {
