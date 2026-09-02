@@ -378,10 +378,18 @@ try {
   }, 180_000);
 
   const SNAP_FAVICON = "snapshot_brand_favicon_20260828000000";
+  const FAVICON_MIG = "20260828000000_brand_favicon.ts";
+  /**
+   * Un árbol destino que hace que el rollback CRUCE la migración de favicon:
+   * el destino tiene todo lo anterior a favicon, así que `PENDIENTES` incluye
+   * favicon y todo lo que le sigue. No se puede usar `destinoSinUltimas(2)`:
+   * favicon no es de las dos últimas (hay migraciones no-de-marca posteriores).
+   */
+  const destinoCruzaFavicon = () => arbolDestino(todas.slice(0, todas.indexOf(FAVICON_MIG)));
 
   it("el preflight de marca bloquea antes del primer down() si falta un snapshot cruzado", async () => {
-    // El rollback cruza favicon (una de las dos últimas). Se borra su snapshot de
-    // procedencia: el preflight debe abortar ANTES de revertir nada.
+    // El rollback cruza favicon. Se borra su snapshot de procedencia: el preflight
+    // debe abortar ANTES de revertir nada.
     const snap = await db("settings").where({ key: SNAP_FAVICON }).first();
     expect(snap, "el up() de favicon debió dejar su snapshot").toBeTruthy();
     await db("settings").where({ key: SNAP_FAVICON }).del();
@@ -389,7 +397,7 @@ try {
     try {
       const res = run("bash", ["scripts/deploy/rollback-db.sh"], {
         DB_NAME: FALLO_DB,
-        DEST_MIGRATIONS_DIR: destinoSinUltimas(2), // PENDIENTES incluye favicon
+        DEST_MIGRATIONS_DIR: destinoCruzaFavicon(), // PENDIENTES incluye favicon
         BACKUP_FILE: backup,
         DOWN_CMD: downCmd(1), // fallaría si se llamara: no debe llamarse
       });
