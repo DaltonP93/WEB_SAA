@@ -1,7 +1,7 @@
 # AI handoff — WEB_SAA
 
 > **Actualizado:** 2026-09-01  
-> **Baseline confirmado:** `main@10d46957ca8a351e848f9cf8cbbb928960111d51`  
+> **Baseline confirmado:** `main@a4cccc1a3e36cae4fbb40b149f8809de0eac7b2a`  
 > **Regla de lectura:** este es el resumen operativo. Antes de modificar algo, leer también `AGENTS.md`, `CLAUDE.md`, `docs/ESTADO-PROYECTO.md` y, si la tarea afecta despliegue, `docs/DEPLOY.md`. Si hay contradicción, priorizar `AGENTS.md` y validar contra el código actual.
 
 ## Propósito del producto
@@ -43,12 +43,77 @@ El sitio público es una SPA estática; la API sirve `/api/`, `/uploads/`, `/rob
 
 ## Estado confirmado al 2026-09-01
 
-- `main` está en `10d4695`, con el ajuste de branding para usar el logo institucional navy monocromo (“Logo 4”).
-- Los commits inmediatamente anteriores incluyen una corrección de CSP y una automatización de actualización del VPS al seguir `origin/main`.
-- Esa automatización vuelve sensible cualquier cambio fusionado: no asumir que un merge está autorizado para producción; confirmar el flujo real, los controles y la aprobación del responsable antes de desplegar.
-- No se observaron pull requests abiertos durante esta actualización.
-- `docs/ESTADO-PROYECTO.md` contiene la evaluación histórica más detallada y un **NO-GO para producción**. Su baseline anterior no coincide con el HEAD actual, por lo que debe revalidarse antes de usarlo como evidencia de GO.
-- No se registran en este archivo resultados nuevos de CI, staging o producción. No sustituir evidencia real por inferencias.
+- `main` está en `a4cccc1` (merge del PR #28, "docs: add AI handoff"). Los commits
+  recientes incluyen el logo institucional navy monocromo ("Logo 4"), una
+  corrección de CSP y una automatización que actualiza el VPS al seguir
+  `origin/main`.
+- Esa automatización vuelve sensible cualquier cambio fusionado: no asumir que un
+  merge está autorizado para producción; confirmar el flujo real, los controles y
+  la aprobación del responsable antes de desplegar. Desde el repositorio sólo se
+  puede confirmar que el mecanismo **existe** (`scripts/deploy/auto-deploy.sh` +
+  unidades systemd descritas en `AGENTS.md §9`); no que esté activo en el VPS.
+- Al 2026-09-02 hay **un PR Draft abierto**: [#29 `fix/brand-rollback-idempotente`],
+  base `a4cccc1`, dedicado a corregir el CI rojo del rollback de marca (detalle abajo).
+  No hay otros PRs abiertos. (Corrige una contradicción de una versión previa de
+  este archivo, que decía "no se observaron PRs abiertos" mientras el PR #29 ya
+  estaba en curso.)
+- **CI rojo en el HEAD (`a4cccc1`)**: el job "Typecheck, build y pruebas" falló en
+  `tests/migrations.test.ts > … el rollback devuelve exactamente el estado
+  anterior`. Typecheck y los tres builds pasaron; el fallo está en el rollback de
+  migraciones. "Detección de secretos" y "Auditoría de dependencias" quedaron en
+  verde.
+- **Causa raíz:** `20260827000000_brand_logo` y `20260828000000_brand_favicon`
+  **crean** la fila `settings.brand` cuando no existe, pero su `down()` original
+  sólo la vaciaba (nunca la borraba). Sobre una base migrada sin sembrar, el
+  rollback dejaba un residuo `{ logoUrl:"", faviconUrl:"" }` que el snapshot de la
+  prueba detecta. Reproducido 3/3 de forma determinística.
+- **Primera solución descartada (heurística de contenido).** Un intento previo del
+  PR #29 agregó una migración posterior que borraba la fila si su contenido
+  "parecía" autogenerado (claves ⊆ `logoUrl`/`faviconUrl` con los valores por
+  defecto). Se **descartó**: una coincidencia de contenido no prueba procedencia.
+  Una fila legítima, preexistente, con exactamente
+  `{ logoUrl:"/logo-sanatorio.png", faviconUrl:"/favicon.png" }` es indistinguible
+  por contenido de una autogenerada, y la heurística la habría borrado (verificado
+  de forma reproducible contra `672ae96`). Esa migración se eliminó del PR.
+- **Solución vigente (por snapshot, excepción autorizada).** Bajo una autorización
+  explícita y acotada del propietario para editar **sólo** esas dos migraciones ya
+  fusionadas, cada una ahora registra un **snapshot interno de procedencia** antes
+  de tocar la base (`snapshot_brand_logo_20260827000000` /
+  `snapshot_brand_favicon_20260828000000`, prefijo `snapshot_`: no publicado ni
+  editable desde el CMS). El snapshot guarda si la fila existía, si la propiedad
+  existía, su valor anterior exacto (distinguiendo ausente / `null` / `""` /
+  default / personalizado) y si la migración realmente aplicó un cambio. El
+  `down()` restaura a partir del snapshot —no del contenido— así que preserva una
+  fila preexistente idéntica a los defaults y cualquier edición posterior del
+  cliente; el `down()` del logo elimina la fila sólo si el snapshot demuestra que
+  no existía y ya no queda ninguna propiedad. **Fail-closed:** en una base migrada
+  **antes** de esta corrección el snapshot no existe y `down()` **aborta sin tocar
+  datos**, remitiendo a restaurar un backup verificado o a un procedimiento manual
+  autorizado; no hay fallback heurístico. Pruebas en
+  `tests/migrations-brand-rollback.test.ts` (incluye la regresión que falla contra
+  `672ae96` y pasa sólo con snapshots).
+- **Segunda auditoría (sobre `bc2439a`) — endurecimiento.** La auditoría halló dos
+  defectos: el lector de snapshot era laxo (aceptaba un objeto parcial y hacía cast,
+  así un snapshot forjado podía borrar una fila legítima) y `up()` no validaba un
+  snapshot preexistente corrupto (lo conservaba pero igual modificaba `brand`). Se
+  corrigió con **validación estricta de estructura cerrada + coherencia** por
+  migración (nunca un cast tras validar sólo algunos campos), `up()` que **lanza**
+  ante un snapshot preexistente inválido y es **no-op idempotente** si es válido, y
+  un **preflight de rollback** (`scripts/deploy/brand-snapshot-preflight.mjs`,
+  invocado por `rollback-db.sh` tras calcular `PENDIENTES` y antes del primer
+  `migrate:down`) que aborta un rollback múltiple **antes** de revertir nada si
+  cruza favicon/logo sin snapshot válido (no se salta con
+  `ROLLBACK_ALLOW_AFTER_SEED`; pide un backup **anterior** a esas migraciones).
+  Pruebas: `tests/migrations-brand-rollback-strict.test.ts` (27) y
+  `tests/rollback-brand-preflight.test.ts` (8) + 2 casos bash end-to-end.
+- **Producción sigue en NO-GO** por los bloqueantes externos de
+  `docs/ESTADO-PROYECTO.md` (secreto histórico, protección de `main`, dominio/DNS/
+  TLS, backups/restore, monitoreo y contenido). Esta corrección no los altera.
+- `docs/ESTADO-PROYECTO.md` mantiene la evaluación histórica más detallada; su
+  baseline previo (`fd49743a`/`7eb570c`) no coincide con el HEAD actual, así que
+  sus conteos de CI no valen como evidencia del HEAD hasta revalidar.
+
+[#29 `fix/brand-rollback-idempotente`]: https://github.com/DaltonP93/WEB_SAA/pull/29
 
 ## Límites de seguridad y operación
 

@@ -11,6 +11,246 @@
 > pruebas o pendientes. La actualización debe incluirse en el mismo PR del
 > cambio; después del merge se confirma el SHA de `main` y el CI post-merge.
 
+> ⚠️ **Baseline desactualizado.** Los SHA y conteos de las secciones 1–14 fueron
+> verificados sobre `fd49743a`/`7eb570c` y **no coinciden con el HEAD actual de
+> `main` (`a4cccc1`)**. Para el estado vigente ver la **sección 15**, a
+> continuación; los conteos de CI previos no valen como evidencia del HEAD hasta
+> revalidar sobre él.
+
+---
+
+## 15. Ronda correctiva — rollback de `settings.brand` por snapshot (2026-09-02)
+
+**HEAD de `main` verificado:** `a4cccc1a3e36cae4fbb40b149f8809de0eac7b2a`
+(merge del PR #28). **PR abierto:** [#29
+`fix/brand-rollback-idempotente`](https://github.com/DaltonP93/WEB_SAA/pull/29)
+(Draft, base `a4cccc1`), único PR abierto y dedicado a esta corrección.
+**Protección de `main`:** sin ruleset ni revisión obligatoria (sigue bloqueante
+para producción).
+
+### 15.1 Hallazgo: CI rojo en el HEAD
+
+El workflow "CI" sobre `a4cccc1`
+([run 33459369884](https://github.com/DaltonP93/WEB_SAA/actions/runs/33459369884))
+terminó en **failure**:
+
+| Check | Resultado |
+|---|---|
+| Auditoría de dependencias | success |
+| Detección de secretos | success |
+| Typecheck, build y pruebas | **failure** |
+
+Dentro de ese job, typecheck y los tres builds pasaron; falló el paso de pruebas
+en `tests/migrations.test.ts > migraciones correctivas frente a ediciones del
+cliente > el rollback devuelve exactamente el estado anterior`. Los checks
+verdes históricos (secciones 5 y 13) se tomaron sobre `fd49743a`/`7eb570c`, no
+sobre este HEAD.
+
+### 15.2 Causa raíz
+
+Las migraciones fusionadas en el PR #27 `20260827000000_brand_logo.ts` y
+`20260828000000_brand_favicon.ts` **crean** la fila `settings.brand` cuando no
+existe (`insert … onConflict.merge`), pero su `down()` **original** sólo la
+**actualizaba** vaciando el campo; nunca la borraba. Sobre una base migrada **sin
+sembrar** (la de la prueba), revertir la cadena dejaba un residuo `{ logoUrl:"", faviconUrl:"" }`
+que en el estado anterior no estaba, y el snapshot lo detecta. Reproducido de
+forma **determinística 3/3** sobre bases limpias; el `DUMP_SNAPSHOTS` confirma
+que la única sección que difiere es `settings`, y la única clave nueva es
+`brand`.
+
+### 15.3 Primera solución descartada (heurística de contenido)
+
+Un intento previo del PR #29 agregó una migración posterior
+(`20260901000000_brand_rollback_idempotente.ts`) cuyo `down()` borraba la fila
+`settings.brand` si su contenido "parecía" autogenerado (claves ⊆
+`logoUrl`/`faviconUrl` con los valores por defecto). Se **descartó (NO-GO)** y se
+eliminó del PR: una coincidencia de contenido **no prueba procedencia**. Una fila
+legítima, preexistente, con exactamente
+`{ logoUrl:"/logo-sanatorio.png", faviconUrl:"/favicon.png" }` es indistinguible
+por contenido de una autogenerada, y la heurística la habría borrado. Se verificó
+de forma reproducible contra `672ae96`: replicando su cadena de `down()` sobre una
+fila preexistente idéntica a los defaults, la fila **se borra**. La regresión que
+lo demuestra vive ahora en `tests/migrations-brand-rollback.test.ts` y falla
+contra `672ae96`, pasando sólo con la solución por snapshot.
+
+### 15.4 Corrección vigente (por snapshot; excepción autorizada y acotada)
+
+Bajo una **autorización explícita y acotada del propietario** para editar
+**exclusivamente** las dos migraciones ya fusionadas
+`20260827000000_brand_logo.ts` y `20260828000000_brand_favicon.ts` (ninguna otra),
+cada una ahora registra **procedencia**, no contenido:
+
+- **Snapshot interno, antes de tocar la base.** Claves
+  `snapshot_brand_logo_20260827000000` y `snapshot_brand_favicon_20260828000000`
+  (prefijo `snapshot_`, `varchar(64)`, fuera de `PUBLIC_SETTING_KEYS` /
+  `ADMIN_SETTING_KEYS`: no publicadas ni editables desde el CMS, igual que los 9
+  `snapshot_*` que ya dejan las migraciones correctivas previas). Guarda: versión
+  de formato, nombre de la migración, propiedad, si la fila existía, si tenía forma
+  inesperada, si la propiedad existía, su **valor anterior exacto** (distinguiendo
+  ausente / `null` / `""` / default / personalizado), si aplicó un cambio y qué
+  valor aplicó. Se guarda **aunque no haga falta cambiar nada**, **no se
+  sobrescribe** si ya existe, y se **elimina** recién tras un rollback exitoso. Si
+  el snapshot no puede guardarse, `up()` no modifica `settings.brand` (la
+  transacción de la migración revierte).
+- **`down()` específico por propiedad.** Restaura desde el snapshot y sólo sobre lo
+  que la propia migración escribió: si la propiedad conserva exactamente el valor
+  que aplicó, restaura el valor anterior exacto (o elimina sólo esa propiedad si no
+  existía); si fue personalizada después, la preserva. El favicon corre primero
+  (LIFO) y **nunca borra la fila**; el logo, después de restaurar su propiedad,
+  elimina la fila `settings.brand` **sólo** si el snapshot demuestra que no existía
+  originalmente y ya no queda ninguna propiedad. Nunca borra una fila preexistente
+  ni claves agregadas después.
+- **Fail-closed en bases migradas antes de la corrección.** Si la migración figura
+  aplicada pero su snapshot está ausente, es inválido o de una versión desconocida,
+  `down()` **aborta antes de tocar datos** (no vacía la marca, no borra la fila) y
+  remite a restaurar un backup verificado o a un procedimiento manual autorizado.
+  **No hay fallback heurístico.** Este fallo seguro se propaga de punta a punta por
+  el flujo local existente: `scripts/deploy/rollback-db.sh` aborta al fallar un
+  `migrate:down` (sale 4 "ROLLBACK NO INICIADO" si es el primero, o va por
+  restauración de dump si es intermedio), sin ningún cambio en los scripts de
+  rollback. Un preflight dedicado en `rollback-guard.mjs` quedaría **redundante**
+  dado ese comportamiento verificado; se documenta como mejora opcional futura, no
+  necesaria.
+- **No se editó ninguna otra migración fusionada**, no se borra `settings.brand`
+  de forma incondicional, y se preservan marca sembrada (`name`/`tagline`),
+  personalizaciones y claves adicionales. `up()`/`down()` son idempotentes y
+  seguros ante fila ausente, JSON inválido y estructuras parciales.
+- **Pruebas:** `tests/migrations-brand-rollback.test.ts` (23 casos) cubre fila
+  inexistente, preexistente `{}`, propiedades inexistentes, `null`, `""`,
+  preexistente idéntica a los defaults (la **regresión** principal), logo/favicon/
+  ambos personalizados, claves adicionales, edición posterior de logo y de favicon,
+  clave agregada tras el `up()`, snapshot ausente / inválido / de versión
+  desconocida (fail-closed), ciclo aplicar→revertir→aplicar y desaparición de los
+  snapshots tras el rollback. `tests/migrations.test.ts` **no se debilitó** y su
+  aserción de rollback vuelve a verde.
+
+### 15.5 Validación local (reproducible)
+
+Entorno: **Node 20.20.2**, **pnpm 9.0.0**, **MySQL 8.4.9** local descartable
+(`127.0.0.1:3306`, sin servicio Windows). El CI usa **MySQL 8.0** y es la
+autoridad final.
+
+| Validación | Comando | Resultado |
+|---|---|---|
+| Typecheck | `pnpm typecheck` | OK (api/web/admin) |
+| Build API | `pnpm --filter @sa/api build` | OK |
+| Build web | `pnpm --filter @sa/web build` | OK (prerender best-effort, omitido sin API viva) |
+| Build admin | `pnpm --filter @sa/admin build` | OK |
+| Suite de marca | `pnpm test tests/migrations-brand-rollback.test.ts` | **23/23** |
+| Migraciones integrales ×3 sobre bases limpias | `pnpm test tests/migrations.test.ts` | **26/26** cada corrida |
+| Secretos | `pnpm check:secrets` | OK (sin credenciales en el árbol) |
+| Dependencias | `pnpm audit:prod` | OK (0 alto/crítico; 1 moderado preexistente, bajo el umbral) |
+
+**Comparación reproducible de la suite completa** (mismo entorno Windows), para no
+atribuir fallos a Windows sin evidencia:
+
+| Árbol | Test Files | Tests |
+|---|---|---|
+| Base pristina `672ae96` (sin el fix) | 13 failed / 73 passed | 67 failed / **1458** passed / 5 skipped (1530) |
+| Con el fix por snapshot | 13 failed / 73 passed | 67 failed / **1471** passed / 5 skipped (1543) |
+
+Los **mismos 13 archivos** fallan en ambos árboles, con los **mismos 67 tests**,
+todos por spawn de herramientas externas ausentes en la PowerShell de Windows
+(`bash`/`npx`/`pnpm`/`stat`, y los de media que dependen de libvips/Unix). El fix
+**no agrega ningún fallo**; suma +13 en verde (la aserción de `migrations.test.ts`
+corregida +1 y la suite de marca ampliada +12). En el runner Ubuntu del CI esas 13
+integraciones corren normalmente; el **conteo verde definitivo lo confirma el CI de
+GitHub sobre el PR #29**.
+
+### 15.6 Veredicto de la ronda (GO/NO-GO separado)
+
+- **Diseño:** GO para revisión. Se corrigió la falla conceptual de la heurística
+  con un enfoque por procedencia. **No se declara "riesgo bajo"**: el diseño debe
+  pasar una auditoría independiente antes de merge.
+- **CI:** verde localmente en todo lo que corre sin herramientas Unix; el conteo
+  autoritativo depende del run de CI del PR #29. **No se declara CI verde sin ese
+  run.**
+- **Merge:** NO-GO hasta auditoría independiente y CI verde del PR.
+- **Producción:** **NO-GO**, sin cambios. Esta ronda no toca los bloqueantes de las
+  secciones 6 y 10 (secreto histórico, protección de `main`, dominio/DNS/TLS,
+  backups/restore, monitoreo, contenido).
+
+### 15.7 Riesgos residuales y observación fuera de alcance
+
+- **Bases ya migradas sin snapshot:** su rollback por debajo de estas migraciones
+  queda **bloqueado (fail-closed)** hasta restaurar un backup verificado o ejecutar
+  un procedimiento manual autorizado. Es intencional: preferir bloquear a corromper
+  la marca. No accedemos al VPS para verificar su estado.
+- **Rollback sobre base sembrada:** si `settings.brand` trae `name`/`tagline`, esta
+  corrección los preserva; el vaciado de `logoUrl`/`faviconUrl` sembrados que hacía
+  el `down()` original quedó, además, gobernado por el snapshot (sólo se toca lo que
+  la migración aplicó). Cambiar la semántica de restauración de assets sembrados
+  excede esta corrección mínima y se deja como seguimiento.
+
+### 15.8 Segunda auditoría independiente — validación estricta + preflight (2026-09-02)
+
+Una auditoría independiente del PR #29 sobre `bc2439a` reprodujo **dos defectos
+bloqueantes** de la corrección por snapshot y devolvió **NO-GO para merge**:
+
+1. **`down()` confiaba en un snapshot mal validado.** El lector sólo comprobaba
+   `formato` + tres booleanos y hacía un cast al tipo completo, así que un snapshot
+   **parcial forjado** (sin `migracion`/`propiedad`/`formaInesperada`/`valorAnterior`)
+   pasaba y `down()` podía **borrar una fila legítima** `settings.brand`.
+2. **`up()` no validaba un snapshot preexistente corrupto:** lo conservaba pero igual
+   modificaba `settings.brand`, dejando un estado sin restauración segura.
+
+**Corrección (sin migración posterior ni heurística):**
+
+- **Validación estricta por migración (estructura cerrada).** Cada migración valida
+  el snapshot contra su contrato de formato 1 antes de cualquier escritura: exactamente
+  los 9 campos permitidos (ni faltantes ni extra), `formato===1`, `migracion===MIGRACION`,
+  `propiedad===PROP`, tipos booleanos exactos, `valorAplicado===DEFAULT` sii
+  `aplicoCambio` y `===null` en caso contrario, y coherencia entre
+  `filaExistia`/`formaInesperada`/`propiedadExistia`/`valorAnterior`/`aplicoCambio`
+  (se rechaza toda combinación imposible). El objeto tipado se construye a partir de los
+  valores ya validados — **nunca un cast** tras validar sólo algunos campos.
+- **`up()` endurecido.** Sin snapshot: lo captura y aplica el default (como antes). Con
+  snapshot preexistente: lo **valida estrictamente**; si es inválido/ajeno/contradictorio
+  **lanza antes de tocar `brand`**; si es válido, es un **no-op idempotente** (no recalcula
+  otro contrato ni pisa nada) que preserva personalizaciones posteriores.
+- **`down()` endurecido.** Valida el snapshot por completo antes de modificar o borrar
+  cualquier fila; ante error no toca `brand` ni elimina el snapshot; la coincidencia con
+  el valor por defecto **no** se usa como prueba de procedencia (la da el snapshot
+  validado), sólo como guarda extra contra pisar una personalización.
+- **Preflight de rollback** (`scripts/deploy/brand-snapshot-preflight.mjs`, invocado por
+  `rollback-db.sh` **después** de calcular `PENDIENTES` y **antes** del primer
+  `migrate:down`). Sólo actúa si el rollback cruza `20260828…_brand_favicon` o
+  `20260827…_brand_logo`; valida por adelantado los snapshots requeridos de las de marca
+  incluidas y, si falta uno o es inválido, **aborta sin revertir ninguna migración**
+  (exit 4, base intacta). Un rollback que no cruza esas migraciones no queda bloqueado.
+  **No se salta con `ROLLBACK_ALLOW_AFTER_SEED`.** El mensaje aclara que hace falta un
+  backup **anterior** a esas migraciones (o al deploy que las trajo) o un procedimiento
+  manual autorizado: un backup tomado justo antes del rollback sólo recupera el estado
+  actual. Esto es necesario porque el fail-closed dentro de cada `down()` llega tarde en
+  una reversión múltiple (las migraciones más nuevas ya se habrían revertido).
+
+**Pruebas nuevas.** `tests/migrations-brand-rollback-strict.test.ts` (27): defecto 1 y 2
+para logo y favicon, y validación estricta campo por campo (cada campo faltante,
+`migracion`/`propiedad` incorrectas, `formaInesperada` contradictoria, mezclas
+`aplicoCambio`/`valorAplicado`, procedencias imposibles, clave extra), `up()` idempotente
+con snapshot válido, y `down()` que no modifica nada ante snapshot inválido.
+`tests/rollback-brand-preflight.test.ts` (8, sin base/bash): no cruza marca → permite;
+snapshots válidos → permite; migración más nueva antes de favicon/logo sin snapshot →
+bloquea; snapshot inválido → bloquea; uno de dos ausente → bloquea; error de lectura →
+bloquea (fail-closed); mensaje correcto. `tests/rollback-db.test.ts` suma dos casos
+end-to-end (bash): bloqueo con **cero `down()` ejecutados** y rollback que no cruza marca
+no bloqueado. Todas las nuevas pruebas de validación estricta **fallan contra `bc2439a`**
+(18/27 en el archivo estricto) y pasan sólo con esta corrección.
+
+**Validación local** (Node 20.20.2, pnpm 9.0.0, MySQL 8.4.9; CI usa 8.0):
+`typecheck` OK; builds api/web/admin OK; `check:secrets` OK; `audit:prod` OK (0 alto/
+crítico; 5 moderados preexistentes, bajo el umbral); marca+estricto+preflight **58/58**;
+`tests/migrations.test.ts` ×3 sobre bases limpias **26/26**; suite completa **1506✓ /
+69✗ / 5 skip (1580)** vs `bc2439a` **1471✓ / 67✗ (1543)**: **+35 en verde**; los +2 fallos
+nuevos son los dos casos **bash** del preflight en `rollback-db.test.ts`, ambientales de
+Windows (`spawn bash ENOENT`, idénticos al resto de ese archivo, verdes en el runner
+Ubuntu del CI). Mismos 13 archivos ambientales que el baseline. **Conteo verde autoritativo
+= CI del PR.**
+
+**GO/NO-GO (sin cambios respecto de la ronda anterior salvo el diseño):** diseño → GO para
+nueva auditoría (no se declara "riesgo bajo"); CI → pendiente del run del PR; merge → NO-GO
+hasta nueva auditoría independiente + CI verde; **producción → NO-GO**.
+
 ---
 
 ## 1. Resumen ejecutivo
