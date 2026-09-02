@@ -6,6 +6,7 @@ import { sanitizeHtml, sanitizeMapEmbed, safeLinkHref } from "../../html.js";
 import { validateBlockProps } from "../../block-validation.js";
 import { instanteDesdeHoraLocal } from "../../timezone.js";
 import { notFound } from "../../http.js";
+import { registrarAccion, actorDe } from "../../audit.js";
 
 export const pagesRouter = Router();
 
@@ -92,6 +93,7 @@ pagesRouter.post("/", async (req, res) => {
     order: p.order ?? 0,
     publish_at: publishAt,
   });
+  await registrarAccion({ ...actorDe(req), action: "create", resourceType: "pages", resourceId: id, meta: { slug: p.slug } });
   res.status(201).json({ id });
 });
 
@@ -137,6 +139,9 @@ pagesRouter.put("/:id", async (req, res) => {
   // La papelera es intocable desde la edición: `whereNull(deleted_at)`.
   const n = await db("pages").where({ id: req.params.id }).whereNull("deleted_at").update(patch);
   if (n === 0) return res.status(404).json({ error: "no encontrada" });
+  // Publicar/despublicar quedan como acciones propias; el resto es una edición.
+  const accion = patch.status === "published" ? "publish" : patch.status === "draft" ? "unpublish" : "update";
+  await registrarAccion({ ...actorDe(req), action: accion, resourceType: "pages", resourceId: req.params.id });
   res.json({ ok: true });
 });
 
@@ -172,6 +177,7 @@ pagesRouter.post("/:id/schedule", async (req, res) => {
     .whereNull("deleted_at")
     .update({ status: "published", publish_at: instante, updated_at: db.fn.now() });
   if (n === 0) return res.status(404).json({ error: "no encontrada" });
+  await registrarAccion({ ...actorDe(req), action: "schedule", resourceType: "pages", resourceId: req.params.id });
   res.json({ ok: true });
 });
 
@@ -182,6 +188,7 @@ pagesRouter.delete("/:id", async (req, res) => {
     .whereNull("deleted_at")
     .update({ deleted_at: db.fn.now() });
   if (n === 0) return res.status(404).json({ error: "no encontrada" });
+  await registrarAccion({ ...actorDe(req), action: "trash", resourceType: "pages", resourceId: req.params.id });
   res.status(204).end();
 });
 
@@ -192,6 +199,7 @@ pagesRouter.post("/:id/restore", async (req, res) => {
     .whereNotNull("deleted_at")
     .update({ deleted_at: null, updated_at: db.fn.now() });
   if (n === 0) return res.status(404).json({ error: "no está en la papelera" });
+  await registrarAccion({ ...actorDe(req), action: "restore", resourceType: "pages", resourceId: req.params.id });
   res.json({ ok: true });
 });
 
@@ -204,6 +212,7 @@ pagesRouter.post("/:id/restore", async (req, res) => {
 pagesRouter.delete("/:id/definitivo", async (req, res) => {
   const n = await db("pages").where({ id: req.params.id }).whereNotNull("deleted_at").del();
   if (n === 0) return res.status(404).json({ error: "no está en la papelera" });
+  await registrarAccion({ ...actorDe(req), action: "purge", resourceType: "pages", resourceId: req.params.id });
   res.status(204).end();
 });
 
@@ -462,6 +471,7 @@ pagesRouter.post("/:id/revisions/:revId/restore", async (req, res) => {
       });
     await reemplazarBloques(trx, pageId, bloques.validados);
   });
+  await registrarAccion({ ...actorDe(req), action: "restore_revision", resourceType: "pages", resourceId: pageId, meta: { revId } });
   res.json({ ok: true });
 });
 

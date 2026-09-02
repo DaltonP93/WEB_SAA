@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "../db.js";
 import { comparePassword, signToken, requireAuth } from "../auth.js";
 import { rateLimit } from "../rate-limit.js";
+import { registrarAccion, ipDe } from "../audit.js";
 
 export const authRouter = Router();
 
@@ -36,16 +37,19 @@ authRouter.post("/login", loginLimiter, async (req, res) => {
   const user = await db("users").where({ email }).first();
   if (!user) {
     registerFailedAttempt(key, now);
+    await registrarAccion({ actorId: null, actorName: null, actorRole: null, ip: ipDe(req), action: "login_fail", meta: { email } });
     return res.status(401).json({ error: "credenciales invalidas" });
   }
   const ok = await comparePassword(password, user.password_hash);
   if (!ok) {
     registerFailedAttempt(key, now);
+    await registrarAccion({ actorId: null, actorName: null, actorRole: null, ip: ipDe(req), action: "login_fail", meta: { email } });
     return res.status(401).json({ error: "credenciales invalidas" });
   }
   attempts.delete(key);
   const payload = { id: user.id, email: user.email, role: user.role, name: user.name };
   const token = signToken(payload);
+  await registrarAccion({ actorId: user.id, actorName: user.name, actorRole: user.role, ip: ipDe(req), action: "login_ok" });
   res.json({ token, user: payload });
 });
 

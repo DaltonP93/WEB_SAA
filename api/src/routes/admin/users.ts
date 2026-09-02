@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "../../db.js";
 import { hashPassword, requireRole } from "../../auth.js";
 import { badRequest, conflict, notFound } from "../../http.js";
+import { registrarAccion, actorDe } from "../../audit.js";
 
 /**
  * Usuarios del panel.
@@ -75,6 +76,7 @@ usersRouter.post("/", async (req, res) => {
     role: p.role ?? "editor",
   });
 
+  await registrarAccion({ ...actorDe(req), action: "create", resourceType: "users", resourceId: id, meta: { role: p.role ?? "editor" } });
   res.status(201).json(await db("users").where({ id }).first(CAMPOS));
 });
 
@@ -111,6 +113,14 @@ usersRouter.put("/:id", async (req, res) => {
   // escribir y la respuesta es la fila tal como está.
   if (Object.keys(patch).length > 0) await db("users").where({ id }).update(patch);
 
+  const cambioRol = p.role !== undefined && p.role !== actual.role;
+  await registrarAccion({
+    ...actorDe(req),
+    action: cambioRol ? "role_change" : "update",
+    resourceType: "users",
+    resourceId: id,
+    meta: cambioRol ? { from: actual.role, to: p.role } : undefined,
+  });
   res.json(await db("users").where({ id }).first(CAMPOS));
 });
 
@@ -131,5 +141,6 @@ usersRouter.delete("/:id", async (req, res) => {
   }
 
   await db("users").where({ id }).del();
+  await registrarAccion({ ...actorDe(req), action: "delete", resourceType: "users", resourceId: id, meta: { role: actual.role } });
   res.status(204).end();
 });

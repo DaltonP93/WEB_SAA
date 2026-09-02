@@ -20,6 +20,7 @@ import MediaPage from "./pages/MediaPage";
 import UsersPage from "./pages/UsersPage";
 import RedirectsPage from "./pages/RedirectsPage";
 import NewsletterPage from "./pages/NewsletterPage";
+import AuditPage from "./pages/AuditPage";
 
 function Protected({ children }: { children: JSX.Element }) {
   const t = localStorage.getItem("token");
@@ -49,6 +50,7 @@ export const routes = createRoutesFromElements(
       <Route path="messages" element={<ContactMessagesPage />} />
       <Route path="media" element={<MediaPage />} />
       <Route path="users" element={<UsersPage />} />
+      <Route path="auditoria" element={<AuditPage />} />
       <Route path="redirects" element={<RedirectsPage />} />
       <Route path="newsletter" element={<NewsletterPage />} />
     </Route>
