@@ -2521,38 +2521,57 @@ limpio; `gitleaks` sobre el árbol sin hallazgos). CI corre la suite contra
 **MySQL 8**. El hallazgo histórico `9ced09d` **sigue vigente** (ver el aviso de
 arriba): no se rota ni se purga, y no se afirma que el historial esté limpio.
 
-## 19. Ronda correctiva — rollback idempotente de `settings.brand` (2026-09-01)
+## 19. Ronda correctiva — rollback de `settings.brand` por snapshot (2026-09-02)
 
-**Contexto.** `main` en `a4cccc1` (merge PR #28). El CI del HEAD
+**Contexto.** `main` en `a4cccc1` (merge PR #28). PR Draft [#29
+`fix/brand-rollback-idempotente`](https://github.com/DaltonP93/WEB_SAA/pull/29),
+único abierto. El CI del HEAD
 ([run 33459369884](https://github.com/DaltonP93/WEB_SAA/actions/runs/33459369884))
 falló en `tests/migrations.test.ts > … el rollback devuelve exactamente el estado
 anterior`. Typecheck y builds verdes; "Detección de secretos" y "Auditoría de
 dependencias" verdes.
 
 **Causa.** `20260827000000_brand_logo.ts` y `20260828000000_brand_favicon.ts`
-(PR #27) crean `settings.brand` cuando no existe, pero su `down()` sólo vacía el
-campo — nunca borra la fila. Sobre una base migrada sin sembrar (la de la
-prueba), el rollback deja el residuo `{ logoUrl:"", faviconUrl:"" }` y el
+(PR #27) crean `settings.brand` cuando no existe, pero su `down()` original sólo
+vaciaba el campo — nunca borraba la fila. Sobre una base migrada sin sembrar (la
+de la prueba), el rollback dejaba el residuo `{ logoUrl:"", faviconUrl:"" }` y el
 snapshot lo detecta. Determinístico 3/3; `DUMP_SNAPSHOTS` muestra que la única
 sección que difiere es `settings` y la única clave nueva es `brand`.
 
-**Corrección.** Migración correctiva nueva
-`20260901000000_brand_rollback_idempotente.ts`. No edita migraciones fusionadas:
-por ser posterior, su `down()` corre antes que los de marca y borra la fila
-**sólo** si es la auto-generada (claves ⊆ `logoUrl`/`faviconUrl` con el valor por
-defecto); entonces los `down()` de marca (que sólo actúan `if (row)` y nunca
-insertan) quedan no-ops. Preserva marca sembrada (`name`/`tagline`) y
-personalizada. `up()` inerte. `down()` idempotente y tolerante a fila ausente,
-JSON inválido y formas inesperadas (parseo defensivo). Pruebas nuevas en
-`tests/migrations-brand-rollback.test.ts` (10), incluida una que demuestra el
-residuo sin el correctivo. No se debilita `tests/migrations.test.ts`.
+**Solución descartada (heurística).** Un intento previo del PR #29 agregó una
+migración posterior (`20260901000000_brand_rollback_idempotente.ts`) que borraba
+la fila si su contenido coincidía con los defaults. Se **descartó**: coincidir con
+los defaults no prueba procedencia; una fila legítima preexistente idéntica a
+`{ logoUrl:"/logo-sanatorio.png", faviconUrl:"/favicon.png" }` sería borrada.
+Verificado de forma reproducible contra `672ae96` (la fila se borra). Migración
+eliminada del PR.
+
+**Solución vigente (snapshot; excepción autorizada).** Bajo autorización explícita
+y acotada del propietario para editar **sólo** esas dos migraciones ya fusionadas,
+cada una registra un snapshot interno de procedencia **antes** de tocar la base
+(`snapshot_brand_logo_20260827000000` / `snapshot_brand_favicon_20260828000000`,
+prefijo `snapshot_`, `varchar(64)`, no publicados ni editables desde el CMS). El
+snapshot guarda si la fila y la propiedad existían, el valor anterior exacto
+(ausente / `null` / `""` / default / personalizado) y si se aplicó un cambio; se
+guarda aunque no cambie nada, no se sobrescribe, y se elimina tras un rollback
+exitoso; si no puede guardarse, `up()` no toca la marca. `down()` restaura desde el
+snapshot y sólo lo que la migración escribió (favicon primero y nunca borra la
+fila; logo elimina la fila sólo si el snapshot prueba que no existía y no queda
+propiedad). **Fail-closed:** aplicada sin snapshot válido ⇒ `down()` aborta sin
+tocar datos y remite a backup verificado / procedimiento manual; sin fallback
+heurístico. El flujo local ya lo propaga: `rollback-db.sh` aborta al fallar un
+`migrate:down` (no se tocan los scripts de rollback). Pruebas en
+`tests/migrations-brand-rollback.test.ts` (23), incluida la regresión que falla
+contra `672ae96`; `tests/migrations.test.ts` no se debilita y vuelve a verde.
 
 **Validación local.** Node 20.20.2, pnpm 9.0.0, MySQL 8.4.9 (local; CI usa 8.0,
-autoritativo). `typecheck` OK; builds api/web/admin OK; migraciones ×3 sobre
-bases limpias 36/36 cada corrida; suite completa con el fix 1458✓/67✗/5 skip
-(1530) vs baseline 1447✓/68✗/5 skip (1520): **−1 fallo (el objetivo), +10
-pruebas nuevas, 0 fallos nuevos**. Los 67 restantes son ambientales de Windows
-(`bash`/`npx`/`pnpm`/`stat` no en PATH; media/libvips) e idénticos con y sin el
-cambio; el CI Ubuntu del PR es la verificación del conteo verde.
+autoritativo). `typecheck` OK; builds api/web/admin OK; suite de marca 23/23;
+`tests/migrations.test.ts` ×3 sobre bases limpias 26/26 cada corrida;
+`check:secrets` OK; `audit:prod` OK (0 alto/crítico). Suite completa con el fix
+1471✓/67✗/5 skip (1543) vs baseline `672ae96` 1458✓/67✗/5 skip (1530): **+13 en
+verde, 0 fallos nuevos**. Los 67 restantes son ambientales de Windows
+(`bash`/`npx`/`pnpm`/`stat` no en PATH; media/libvips), **idénticos** en ambos
+árboles (comparación reproducible); el CI Ubuntu del PR es la verificación del
+conteo verde.
 
 **Producción.** NO-GO sin cambios (bloqueantes externos intactos).

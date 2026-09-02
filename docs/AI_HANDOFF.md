@@ -52,30 +52,54 @@ El sitio público es una SPA estática; la API sirve `/api/`, `/uploads/`, `/rob
   la aprobación del responsable antes de desplegar. Desde el repositorio sólo se
   puede confirmar que el mecanismo **existe** (`scripts/deploy/auto-deploy.sh` +
   unidades systemd descritas en `AGENTS.md §9`); no que esté activo en el VPS.
-- No se observaron pull requests abiertos durante esta actualización.
+- Al 2026-09-02 hay **un PR Draft abierto**: [#29 `fix/brand-rollback-idempotente`],
+  base `a4cccc1`, dedicado a corregir el CI rojo del rollback de marca (detalle abajo).
+  No hay otros PRs abiertos. (Corrige una contradicción de una versión previa de
+  este archivo, que decía "no se observaron PRs abiertos" mientras el PR #29 ya
+  estaba en curso.)
 - **CI rojo en el HEAD (`a4cccc1`)**: el job "Typecheck, build y pruebas" falló en
   `tests/migrations.test.ts > … el rollback devuelve exactamente el estado
   anterior`. Typecheck y los tres builds pasaron; el fallo está en el rollback de
   migraciones. "Detección de secretos" y "Auditoría de dependencias" quedaron en
   verde.
 - **Causa raíz:** `20260827000000_brand_logo` y `20260828000000_brand_favicon`
-  **crean** la fila `settings.brand` cuando no existe, pero su `down()` sólo la
-  vacía (nunca la borra). Sobre una base migrada sin sembrar, el rollback deja un
-  residuo `{ logoUrl:"", faviconUrl:"" }` que el snapshot de la prueba detecta.
-  Reproducido 3/3 de forma determinística.
-- **Corrección en curso (rama `fix/brand-rollback-idempotente`, PR Draft):**
-  migración correctiva nueva `20260901000000_brand_rollback_idempotente.ts` cuyo
-  `down()` —posterior, corre antes que los de marca— elimina **sólo** la fila
-  auto-generada (claves ⊆ `logoUrl`/`faviconUrl` con los valores por defecto) y
-  preserva marca sembrada o personalizada; `up()` no toca datos; idempotente y
-  seguro ante fila ausente, JSON inválido o estructura parcial. No se editaron
-  migraciones ya fusionadas. Pruebas nuevas en `tests/migrations-brand-rollback.test.ts`.
+  **crean** la fila `settings.brand` cuando no existe, pero su `down()` original
+  sólo la vaciaba (nunca la borraba). Sobre una base migrada sin sembrar, el
+  rollback dejaba un residuo `{ logoUrl:"", faviconUrl:"" }` que el snapshot de la
+  prueba detecta. Reproducido 3/3 de forma determinística.
+- **Primera solución descartada (heurística de contenido).** Un intento previo del
+  PR #29 agregó una migración posterior que borraba la fila si su contenido
+  "parecía" autogenerado (claves ⊆ `logoUrl`/`faviconUrl` con los valores por
+  defecto). Se **descartó**: una coincidencia de contenido no prueba procedencia.
+  Una fila legítima, preexistente, con exactamente
+  `{ logoUrl:"/logo-sanatorio.png", faviconUrl:"/favicon.png" }` es indistinguible
+  por contenido de una autogenerada, y la heurística la habría borrado (verificado
+  de forma reproducible contra `672ae96`). Esa migración se eliminó del PR.
+- **Solución vigente (por snapshot, excepción autorizada).** Bajo una autorización
+  explícita y acotada del propietario para editar **sólo** esas dos migraciones ya
+  fusionadas, cada una ahora registra un **snapshot interno de procedencia** antes
+  de tocar la base (`snapshot_brand_logo_20260827000000` /
+  `snapshot_brand_favicon_20260828000000`, prefijo `snapshot_`: no publicado ni
+  editable desde el CMS). El snapshot guarda si la fila existía, si la propiedad
+  existía, su valor anterior exacto (distinguiendo ausente / `null` / `""` /
+  default / personalizado) y si la migración realmente aplicó un cambio. El
+  `down()` restaura a partir del snapshot —no del contenido— así que preserva una
+  fila preexistente idéntica a los defaults y cualquier edición posterior del
+  cliente; el `down()` del logo elimina la fila sólo si el snapshot demuestra que
+  no existía y ya no queda ninguna propiedad. **Fail-closed:** en una base migrada
+  **antes** de esta corrección el snapshot no existe y `down()` **aborta sin tocar
+  datos**, remitiendo a restaurar un backup verificado o a un procedimiento manual
+  autorizado; no hay fallback heurístico. Pruebas en
+  `tests/migrations-brand-rollback.test.ts` (incluye la regresión que falla contra
+  `672ae96` y pasa sólo con snapshots).
 - **Producción sigue en NO-GO** por los bloqueantes externos de
   `docs/ESTADO-PROYECTO.md` (secreto histórico, protección de `main`, dominio/DNS/
   TLS, backups/restore, monitoreo y contenido). Esta corrección no los altera.
 - `docs/ESTADO-PROYECTO.md` mantiene la evaluación histórica más detallada; su
   baseline previo (`fd49743a`/`7eb570c`) no coincide con el HEAD actual, así que
   sus conteos de CI no valen como evidencia del HEAD hasta revalidar.
+
+[#29 `fix/brand-rollback-idempotente`]: https://github.com/DaltonP93/WEB_SAA/pull/29
 
 ## Límites de seguridad y operación
 
