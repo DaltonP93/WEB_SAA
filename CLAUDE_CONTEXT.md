@@ -2520,3 +2520,39 @@ columna `unsubscribed_at`; `audit:prod` sin vulnerabilidades; `check:secrets`
 limpio; `gitleaks` sobre el árbol sin hallazgos). CI corre la suite contra
 **MySQL 8**. El hallazgo histórico `9ced09d` **sigue vigente** (ver el aviso de
 arriba): no se rota ni se purga, y no se afirma que el historial esté limpio.
+
+## 19. Ronda correctiva — rollback idempotente de `settings.brand` (2026-09-01)
+
+**Contexto.** `main` en `a4cccc1` (merge PR #28). El CI del HEAD
+([run 33459369884](https://github.com/DaltonP93/WEB_SAA/actions/runs/33459369884))
+falló en `tests/migrations.test.ts > … el rollback devuelve exactamente el estado
+anterior`. Typecheck y builds verdes; "Detección de secretos" y "Auditoría de
+dependencias" verdes.
+
+**Causa.** `20260827000000_brand_logo.ts` y `20260828000000_brand_favicon.ts`
+(PR #27) crean `settings.brand` cuando no existe, pero su `down()` sólo vacía el
+campo — nunca borra la fila. Sobre una base migrada sin sembrar (la de la
+prueba), el rollback deja el residuo `{ logoUrl:"", faviconUrl:"" }` y el
+snapshot lo detecta. Determinístico 3/3; `DUMP_SNAPSHOTS` muestra que la única
+sección que difiere es `settings` y la única clave nueva es `brand`.
+
+**Corrección.** Migración correctiva nueva
+`20260901000000_brand_rollback_idempotente.ts`. No edita migraciones fusionadas:
+por ser posterior, su `down()` corre antes que los de marca y borra la fila
+**sólo** si es la auto-generada (claves ⊆ `logoUrl`/`faviconUrl` con el valor por
+defecto); entonces los `down()` de marca (que sólo actúan `if (row)` y nunca
+insertan) quedan no-ops. Preserva marca sembrada (`name`/`tagline`) y
+personalizada. `up()` inerte. `down()` idempotente y tolerante a fila ausente,
+JSON inválido y formas inesperadas (parseo defensivo). Pruebas nuevas en
+`tests/migrations-brand-rollback.test.ts` (10), incluida una que demuestra el
+residuo sin el correctivo. No se debilita `tests/migrations.test.ts`.
+
+**Validación local.** Node 20.20.2, pnpm 9.0.0, MySQL 8.4.9 (local; CI usa 8.0,
+autoritativo). `typecheck` OK; builds api/web/admin OK; migraciones ×3 sobre
+bases limpias 36/36 cada corrida; suite completa con el fix 1458✓/67✗/5 skip
+(1530) vs baseline 1447✓/68✗/5 skip (1520): **−1 fallo (el objetivo), +10
+pruebas nuevas, 0 fallos nuevos**. Los 67 restantes son ambientales de Windows
+(`bash`/`npx`/`pnpm`/`stat` no en PATH; media/libvips) e idénticos con y sin el
+cambio; el CI Ubuntu del PR es la verificación del conteo verde.
+
+**Producción.** NO-GO sin cambios (bloqueantes externos intactos).

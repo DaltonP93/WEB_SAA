@@ -1,7 +1,7 @@
 # AI handoff — WEB_SAA
 
 > **Actualizado:** 2026-09-01  
-> **Baseline confirmado:** `main@10d46957ca8a351e848f9cf8cbbb928960111d51`  
+> **Baseline confirmado:** `main@a4cccc1a3e36cae4fbb40b149f8809de0eac7b2a`  
 > **Regla de lectura:** este es el resumen operativo. Antes de modificar algo, leer también `AGENTS.md`, `CLAUDE.md`, `docs/ESTADO-PROYECTO.md` y, si la tarea afecta despliegue, `docs/DEPLOY.md`. Si hay contradicción, priorizar `AGENTS.md` y validar contra el código actual.
 
 ## Propósito del producto
@@ -43,12 +43,39 @@ El sitio público es una SPA estática; la API sirve `/api/`, `/uploads/`, `/rob
 
 ## Estado confirmado al 2026-09-01
 
-- `main` está en `10d4695`, con el ajuste de branding para usar el logo institucional navy monocromo (“Logo 4”).
-- Los commits inmediatamente anteriores incluyen una corrección de CSP y una automatización de actualización del VPS al seguir `origin/main`.
-- Esa automatización vuelve sensible cualquier cambio fusionado: no asumir que un merge está autorizado para producción; confirmar el flujo real, los controles y la aprobación del responsable antes de desplegar.
+- `main` está en `a4cccc1` (merge del PR #28, "docs: add AI handoff"). Los commits
+  recientes incluyen el logo institucional navy monocromo ("Logo 4"), una
+  corrección de CSP y una automatización que actualiza el VPS al seguir
+  `origin/main`.
+- Esa automatización vuelve sensible cualquier cambio fusionado: no asumir que un
+  merge está autorizado para producción; confirmar el flujo real, los controles y
+  la aprobación del responsable antes de desplegar. Desde el repositorio sólo se
+  puede confirmar que el mecanismo **existe** (`scripts/deploy/auto-deploy.sh` +
+  unidades systemd descritas en `AGENTS.md §9`); no que esté activo en el VPS.
 - No se observaron pull requests abiertos durante esta actualización.
-- `docs/ESTADO-PROYECTO.md` contiene la evaluación histórica más detallada y un **NO-GO para producción**. Su baseline anterior no coincide con el HEAD actual, por lo que debe revalidarse antes de usarlo como evidencia de GO.
-- No se registran en este archivo resultados nuevos de CI, staging o producción. No sustituir evidencia real por inferencias.
+- **CI rojo en el HEAD (`a4cccc1`)**: el job "Typecheck, build y pruebas" falló en
+  `tests/migrations.test.ts > … el rollback devuelve exactamente el estado
+  anterior`. Typecheck y los tres builds pasaron; el fallo está en el rollback de
+  migraciones. "Detección de secretos" y "Auditoría de dependencias" quedaron en
+  verde.
+- **Causa raíz:** `20260827000000_brand_logo` y `20260828000000_brand_favicon`
+  **crean** la fila `settings.brand` cuando no existe, pero su `down()` sólo la
+  vacía (nunca la borra). Sobre una base migrada sin sembrar, el rollback deja un
+  residuo `{ logoUrl:"", faviconUrl:"" }` que el snapshot de la prueba detecta.
+  Reproducido 3/3 de forma determinística.
+- **Corrección en curso (rama `fix/brand-rollback-idempotente`, PR Draft):**
+  migración correctiva nueva `20260901000000_brand_rollback_idempotente.ts` cuyo
+  `down()` —posterior, corre antes que los de marca— elimina **sólo** la fila
+  auto-generada (claves ⊆ `logoUrl`/`faviconUrl` con los valores por defecto) y
+  preserva marca sembrada o personalizada; `up()` no toca datos; idempotente y
+  seguro ante fila ausente, JSON inválido o estructura parcial. No se editaron
+  migraciones ya fusionadas. Pruebas nuevas en `tests/migrations-brand-rollback.test.ts`.
+- **Producción sigue en NO-GO** por los bloqueantes externos de
+  `docs/ESTADO-PROYECTO.md` (secreto histórico, protección de `main`, dominio/DNS/
+  TLS, backups/restore, monitoreo y contenido). Esta corrección no los altera.
+- `docs/ESTADO-PROYECTO.md` mantiene la evaluación histórica más detallada; su
+  baseline previo (`fd49743a`/`7eb570c`) no coincide con el HEAD actual, así que
+  sus conteos de CI no valen como evidencia del HEAD hasta revalidar.
 
 ## Límites de seguridad y operación
 

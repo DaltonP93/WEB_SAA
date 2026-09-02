@@ -11,6 +11,108 @@
 > pruebas o pendientes. La actualización debe incluirse en el mismo PR del
 > cambio; después del merge se confirma el SHA de `main` y el CI post-merge.
 
+> ⚠️ **Baseline desactualizado.** Los SHA y conteos de las secciones 1–14 fueron
+> verificados sobre `fd49743a`/`7eb570c` y **no coinciden con el HEAD actual de
+> `main` (`a4cccc1`)**. Para el estado vigente ver la **sección 15**, a
+> continuación; los conteos de CI previos no valen como evidencia del HEAD hasta
+> revalidar sobre él.
+
+---
+
+## 15. Ronda correctiva — rollback idempotente de `settings.brand` (2026-09-01)
+
+**HEAD de `main` verificado:** `a4cccc1a3e36cae4fbb40b149f8809de0eac7b2a`
+(merge del PR #28). **PRs abiertos:** ninguno. **Protección de `main`:** sin
+ruleset ni revisión obligatoria (sigue bloqueante para producción).
+
+### 15.1 Hallazgo: CI rojo en el HEAD
+
+El workflow "CI" sobre `a4cccc1`
+([run 33459369884](https://github.com/DaltonP93/WEB_SAA/actions/runs/33459369884))
+terminó en **failure**:
+
+| Check | Resultado |
+|---|---|
+| Auditoría de dependencias | success |
+| Detección de secretos | success |
+| Typecheck, build y pruebas | **failure** |
+
+Dentro de ese job, typecheck y los tres builds pasaron; falló el paso de pruebas
+en `tests/migrations.test.ts > migraciones correctivas frente a ediciones del
+cliente > el rollback devuelve exactamente el estado anterior`. Los checks
+verdes históricos (secciones 5 y 13) se tomaron sobre `fd49743a`/`7eb570c`, no
+sobre este HEAD.
+
+### 15.2 Causa raíz
+
+Las migraciones fusionadas en el PR #27 `20260827000000_brand_logo.ts` y
+`20260828000000_brand_favicon.ts` **crean** la fila `settings.brand` cuando no
+existe (`insert … onConflict.merge`), pero su `down()` sólo la **actualiza**
+vaciando el campo; nunca la borra. Sobre una base migrada **sin sembrar** (la de
+la prueba), revertir la cadena deja un residuo `{ logoUrl:"", faviconUrl:"" }`
+que en el estado anterior no estaba, y el snapshot lo detecta. Reproducido de
+forma **determinística 3/3** sobre bases limpias; el `DUMP_SNAPSHOTS` confirma
+que la única sección que difiere es `settings`, y la única clave nueva es
+`brand`.
+
+### 15.3 Corrección (esta rama / PR Draft)
+
+- Migración correctiva **nueva** `20260901000000_brand_rollback_idempotente.ts`.
+  Por ser posterior, su `down()` corre **antes** que los de marca y elimina la
+  fila **sólo** si es la auto-generada (claves ⊆ `logoUrl`/`faviconUrl` con los
+  valores por defecto). Al no quedar fila, los `down()` de las migraciones de
+  marca —que sólo actúan `if (row)` y nunca insertan— se vuelven no-ops. `up()`
+  no toca datos.
+- **No** se editó ninguna migración fusionada; **no** se borra `settings.brand`
+  de forma incondicional; se preservan marca sembrada (`name`/`tagline`),
+  personalizaciones (`logoUrl`/`faviconUrl` custom) y claves adicionales. `up()`
+  y `down()` son idempotentes y seguros ante fila ausente, JSON inválido y
+  estructuras parciales.
+- Pruebas nuevas en `tests/migrations-brand-rollback.test.ts` (10 casos): fila
+  inexistente, preexistente/sembrada, parcial, personalizada, forma inesperada,
+  idempotencia y `up()` inerte, más un caso que **demuestra el residuo sin el
+  correctivo**. No se debilitó `tests/migrations.test.ts`.
+
+### 15.4 Validación local
+
+Entorno: **Node 20.20.2**, **pnpm 9.0.0**, **MySQL 8.4.9** (local descartable; CI
+usa MySQL 8.0, que es la autoridad). Comandos y resultados:
+
+| Validación | Resultado |
+|---|---|
+| `pnpm typecheck` | OK (api/web/admin) |
+| `pnpm --filter @sa/api build` | OK |
+| `pnpm --filter @sa/web build` | OK (prerender best-effort, omitido sin API viva) |
+| `pnpm --filter @sa/admin build` | OK |
+| `tests/migrations.test.ts` + `tests/migrations-brand-rollback.test.ts` ×3 sobre bases limpias | **36/36 en cada corrida** |
+| Suite completa `pnpm test` (MySQL local) — con el fix | 1458 passed / 67 failed / 5 skipped (1530) |
+| Suite completa — baseline sin el fix | 1447 passed / 68 failed / 5 skipped (1520) |
+
+**Delta del fix:** −1 fallo (se corrige `tests/migrations.test.ts`), +10 pruebas
+nuevas en verde, **0 fallos nuevos**. Los 67 fallos restantes son **idénticos con
+y sin el cambio** y **ambientales de Windows** (los tests que invocan `bash`,
+`npx`, `pnpm` o `stat`, y los de media que dependen de libvips/Unix), no
+reproducibles en el runner Ubuntu del CI. El CI de GitHub sobre este PR es la
+verificación autoritativa del conteo verde.
+
+### 15.5 Veredicto de la ronda
+
+- **Desarrollo/CI:** la corrección deja verde la prueba que hoy rompe `main`; el
+  conteo verde definitivo se confirma con el CI del PR (pendiente hasta abrirlo).
+  **No se declara verde el CI sin ese run.**
+- **Producción:** **NO-GO**, sin cambios. Esta ronda no toca los bloqueantes de
+  las secciones 6 y 10 (secreto histórico, protección de `main`, dominio/DNS/TLS,
+  backups/restore, monitoreo, contenido).
+
+### 15.6 Observación fuera de alcance (no se corrige acá)
+
+En una base **sembrada**, `settings.brand` trae `name`/`tagline` además de los
+assets, así que esta corrección la preserva; pero el `down()` de las migraciones
+de marca igualmente vacía `logoUrl`/`faviconUrl` sembrados al revertir (su guard
+sólo compara contra el valor por defecto). Restaurar esos assets sembrados en el
+rollback cambiaría la semántica de `down()` y se deja como candidato de
+seguimiento, no como parte de esta corrección mínima.
+
 ---
 
 ## 1. Resumen ejecutivo
