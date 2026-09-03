@@ -311,6 +311,69 @@ no abierto: ver nota de despliegue).
 
 ---
 
+## 17. Módulo — Permisos granulares (RBAC deny-by-default) (2026-09-02)
+
+**Rama:** `feat/roles-granulares`, **apilada sobre `feat/admin-audit-log`** (que a su vez
+apila sobre el PR #29). Es la segunda mitad —la "riesgosa"— del módulo de seguridad/roles:
+convierte los dos roles binarios en un **modelo de capacidades por recurso/acción** con
+**denegación por defecto** y comprobación **real en el backend**.
+
+**Orden de revisión:** después del PR #29 y del PR de auditoría (`feat/admin-audit-log`).
+
+### 17.1 Qué entrega
+- **Modelo de capacidades** `api/src/permisos.ts`: 11 capacidades (`content.read/write/publish/
+  delete`, `leads.read/write`, `settings.read/write`, `data.confirm`, `users.manage`,
+  `audit.read`) y una **matriz central** rol → capacidades para los **8 roles**: `superadmin`,
+  `admin`, `editor`, `autor`, `revisor`, `analista_marketing`, `operador_leads`, `auditor`.
+- **Migración** `20260904000000_roles_granulares.ts`: amplía el enum `users.role` a los 8
+  roles (default `editor`). No toca filas. Reversible con pérdida controlada (mapea roles
+  nuevos → `editor` antes de angostar).
+- **Middlewares** `requirePermiso(cap)` y `requirePermisoPorMetodo({read,write,delete})` en
+  `auth.ts`; el segundo mapea el método HTTP a una capacidad y **deniega por defecto** un
+  método sin capacidad declarada.
+- **Mapa de autorización central** en `routes/admin/index.ts`: cada uno de los 18 routers se
+  monta con su grupo de capacidades (content/leads/settings) o su capacidad específica
+  (`users.manage`, `audit.read`, `data.confirm`). Antes sólo 2 routers comprobaban rol.
+- **Separación editar-vs-publicar** en `pages.ts`: publicar/despublicar/programar y restaurar
+  una versión publicada exigen `content.publish` además de `content.write`, así un `autor`
+  crea/edita borradores pero no publica; `revisor`/`editor` sí.
+- **`/auth/me`** expone las capacidades del rol (calculadas en el servidor) para que el panel
+  oculte lo que la sesión no puede hacer; `useSesion` gana `capacidades` + `puede(cap)`, y el
+  sidebar gatea *Usuarios* (`users.manage`) y *Auditoría* (`audit.read`) por capacidad. **La
+  autorización es del backend; el front sólo oculta.**
+
+### 17.2 Cambio de comportamiento y no-regresión
+- **`editor` conserva exactamente lo que ya podía** (contenido completo, leads y settings):
+  sin regresión, verificado por prueba y por las suites existentes (`settings-allowlist`,
+  `confirmacion-biopsias`, `usuarios-blindaje`) que siguen verdes.
+- El **tightening** recae en los **6 roles nuevos** (autor/revisor/analista/operador/auditor
+  restringidos) y en la denegación por defecto: un router nuevo montado sin capacidad queda
+  cerrado en vez de abierto. `users.manage` y `data.confirm` siguen siendo sólo de superadmin
+  (la guarda del último superadmin no cambia).
+- Roles como `autor`/`revisor`/`analista_marketing`/`operador_leads` ganarán capacidades
+  específicas cuando se construyan sus módulos (editorial/marketing/CRM); hoy se definen
+  sobre los recursos existentes.
+
+### 17.3 Validación local
+Node 20.20.2, pnpm 9.0.0, MySQL 8.4.9 (CI: 8.0). typecheck OK; builds api/web/admin OK;
+`check:secrets` OK; `audit:prod` OK (0 alto/crítico). `tests/permisos-granulares.test.ts`
+**128/128**: matriz por rol contra `permisos.ts` (403 sii el rol no tiene la capacidad
+efectiva) sobre 14 endpoints, `/auth/me` por rol, denegación por defecto, separación
+editar-vs-publicar (autor no publica, revisor sí), no-regresión de `editor`, y que sólo el
+superadmin gestiona usuarios. `tests/migrations.test.ts` ×3 sobre bases limpias **26/26**.
+Suite completa **1647✓ / 69✗ / 5 skip (1721)** vs la base `feat/admin-audit-log` 1519✓/69✗
+(1593): **+128 en verde, 0 fallos nuevos** (los 69 son los mismos 13 archivos ambientales de
+Windows, verdes en CI). **Conteo verde autoritativo = CI del PR** (pendiente de abrir).
+
+### 17.4 GO/NO-GO
+- Diseño → GO para auditoría (no se declara "riesgo bajo"; es un cambio auth-crítico y merece
+  revisión especialmente cuidadosa de la matriz).
+- CI → pendiente del run del PR.
+- Merge → NO-GO hasta auditoría + CI verde, y después de #29 y del PR de auditoría.
+- Producción → **NO-GO**.
+
+---
+
 ## 1. Resumen ejecutivo
 
 El sitio público, el panel administrativo tipo CMS, el Page Builder, la biblioteca multimedia, los turnos, mensajes, usuarios, SEO, analítica, atribución, redirects, publicación programada, papelera, revisiones y newsletter básica ya están desarrollados y fusionados en `main`.
