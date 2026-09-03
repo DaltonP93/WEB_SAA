@@ -1,6 +1,8 @@
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import type { Request, Response, NextFunction } from "express";
+import type { Rol, Capacidad } from "./permisos.js";
+import { tieneCapacidad } from "./permisos.js";
 
 const SECRET = process.env.JWT_SECRET ?? "dev-secret";
 const EXPIRES = process.env.JWT_EXPIRES_IN ?? "7d";
@@ -28,7 +30,7 @@ if (process.env.NODE_ENV === "production") {
 export interface AuthPayload {
   id: number;
   email: string;
-  role: "superadmin" | "editor";
+  role: Rol;
   name: string;
 }
 
@@ -71,6 +73,34 @@ export function requireRole(...roles: AuthPayload["role"][]) {
   return (req: Request, res: Response, next: NextFunction) => {
     if (!req.user) return res.status(401).json({ error: "no auth" });
     if (!roles.includes(req.user.role)) return res.status(403).json({ error: "forbidden" });
+    next();
+  };
+}
+
+/**
+ * Exige una capacidad concreta (RBAC por capacidades, ver `permisos.ts`). La
+ * autorización real vive acá, en el backend, no en el ocultamiento del front.
+ */
+export function requirePermiso(cap: Capacidad) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (!req.user) return res.status(401).json({ error: "no auth" });
+    if (!tieneCapacidad(req.user.role, cap)) return res.status(403).json({ error: "forbidden" });
+    next();
+  };
+}
+
+/**
+ * Exige la capacidad según el método HTTP: `GET`/`HEAD` → `read`, `DELETE` →
+ * `delete`, el resto (`POST`/`PUT`/`PATCH`) → `write`. **Denegación por defecto**:
+ * un método sin capacidad declarada en el mapa se rechaza con 403, así un router
+ * nuevo montado sin la entrada correspondiente queda cerrado en lugar de abierto.
+ */
+export function requirePermisoPorMetodo(map: { read?: Capacidad; write?: Capacidad; delete?: Capacidad }) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (!req.user) return res.status(401).json({ error: "no auth" });
+    const metodo = req.method.toUpperCase();
+    const cap = metodo === "GET" || metodo === "HEAD" ? map.read : metodo === "DELETE" ? map.delete : map.write;
+    if (!cap || !tieneCapacidad(req.user.role, cap)) return res.status(403).json({ error: "forbidden" });
     next();
   };
 }

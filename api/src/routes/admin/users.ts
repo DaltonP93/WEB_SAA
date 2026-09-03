@@ -4,6 +4,7 @@ import { db } from "../../db.js";
 import { hashPassword, requireRole } from "../../auth.js";
 import { badRequest, conflict, notFound } from "../../http.js";
 import { registrarAccion, actorDe } from "../../audit.js";
+import { ROLES } from "../../permisos.js";
 
 /**
  * Usuarios del panel.
@@ -31,8 +32,6 @@ import { registrarAccion, actorDe } from "../../audit.js";
 
 export const usersRouter = Router();
 usersRouter.use(requireRole("superadmin"));
-
-const ROLES = ["superadmin", "editor"] as const;
 
 /** Lo que se devuelve. Nunca `password_hash`, ni siquiera al propio superadmin. */
 const CAMPOS = ["id", "email", "name", "role", "created_at"];

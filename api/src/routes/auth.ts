@@ -4,6 +4,7 @@ import { db } from "../db.js";
 import { comparePassword, signToken, requireAuth } from "../auth.js";
 import { rateLimit } from "../rate-limit.js";
 import { registrarAccion, ipDe } from "../audit.js";
+import { capacidadesDe } from "../permisos.js";
 
 export const authRouter = Router();
 
@@ -54,7 +55,11 @@ authRouter.post("/login", loginLimiter, async (req, res) => {
 });
 
 authRouter.get("/me", requireAuth, (req, res) => {
-  res.json({ user: req.user });
+  // Se adjuntan las capacidades derivadas del rol para que el panel oculte lo
+  // que la sesión no puede hacer. La autorización real la aplican los
+  // middlewares del backend; esto es sólo UX. Se calculan en el servidor (fuente
+  // única) y no se decodifican del token, que podría traer un rol ya cambiado.
+  res.json({ user: { ...req.user, capabilities: capacidadesDe(req.user?.role) } });
 });
 
 function registerFailedAttempt(key: string, now: number) {

@@ -7,6 +7,18 @@ import { validateBlockProps } from "../../block-validation.js";
 import { instanteDesdeHoraLocal } from "../../timezone.js";
 import { notFound } from "../../http.js";
 import { registrarAccion, actorDe } from "../../audit.js";
+import { tieneCapacidad } from "../../permisos.js";
+import type { Request } from "express";
+
+/**
+ * Publicar/despublicar/programar exige `content.publish`, además de la
+ * `content.write` que ya pide el montaje del router. Así un `autor` (que tiene
+ * `content.write` pero no `content.publish`) puede crear y editar borradores pero
+ * no cambiar el estado de publicación; un `revisor`/`editor` sí. No se distingue
+ * por método HTTP —un `PUT` puede ser editar o publicar—, por eso se comprueba
+ * acá, sobre el payload.
+ */
+const puedePublicar = (req: Request): boolean => tieneCapacidad(req.user?.role, "content.publish");
 
 export const pagesRouter = Router();
 
@@ -77,6 +89,7 @@ pagesRouter.post("/", async (req, res) => {
   const parsed = pageSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "payload invalido", issues: parsed.error.issues });
   const p = parsed.data;
+  if (p.status === "published" && !puedePublicar(req)) return res.status(403).json({ error: "forbidden" });
 
   let publishAt: Date | null = null;
   if (p.publish_at !== undefined && p.publish_at !== null && p.publish_at !== "") {
@@ -128,6 +141,7 @@ class PublishAtInvalido extends Error {}
 pagesRouter.put("/:id", async (req, res) => {
   const parsed = pageSchema.partial().safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "payload invalido", issues: parsed.error.issues });
+  if (parsed.data.status !== undefined && !puedePublicar(req)) return res.status(403).json({ error: "forbidden" });
   let patch: Record<string, unknown>;
   try {
     patch = construirMetaPatch(parsed.data);
@@ -164,6 +178,7 @@ const scheduleSchema = z.object({ publish_at: z.string() });
 pagesRouter.post("/:id/schedule", async (req, res) => {
   const parsed = scheduleSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "payload invalido" });
+  if (!puedePublicar(req)) return res.status(403).json({ error: "forbidden" });
   const instante = instanteDesdeHoraLocal(parsed.data.publish_at);
   if (instante === null) return res.status(400).json({ error: "Hay que indicar una fecha para programar." });
   if (instante === undefined) return res.status(400).json({ error: "La fecha no es válida." });
@@ -348,6 +363,7 @@ pagesRouter.put("/:id/content", async (req, res) => {
   const pageId = Number(req.params.id);
   const parsed = contentSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "payload invalido", issues: parsed.error.issues });
+  if (parsed.data.status !== undefined && !puedePublicar(req)) return res.status(403).json({ error: "forbidden" });
 
   const bloques = validarBloques(parsed.data.blocks);
   if (!bloques.ok) return res.status(400).json({ error: "bloque invalido", block: bloques.invalido });
@@ -440,6 +456,8 @@ pagesRouter.post("/:id/revisions/:revId/restore", async (req, res) => {
   if (!rev) return res.status(404).json({ error: "versión no encontrada" });
   const snap = parseJson(rev.snapshot) as any;
   if (!snap || typeof snap !== "object") return res.status(422).json({ error: "versión ilegible" });
+  // Restaurar una versión que estaba publicada vuelve a publicar: exige publicar.
+  if (snap.status === "published" && !puedePublicar(req)) return res.status(403).json({ error: "forbidden" });
 
   const brutos: { type: string; props: unknown }[] = Array.isArray(snap.blocks)
     ? snap.blocks.map((b: any) => ({ type: String(b?.type), props: b?.props ?? {} }))

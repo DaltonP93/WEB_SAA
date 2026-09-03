@@ -2,17 +2,18 @@ import { Router } from "express";
 import { z } from "zod";
 import { db } from "../../db.js";
 import { badRequest } from "../../http.js";
-import { requireRole } from "../../auth.js";
 import { formatearEnZona, inicioDelDia, inicioDelDiaSiguiente } from "../../timezone.js";
 import { celdaCsv } from "./appointments.js";
 
 /**
  * Lectura de la bitácora de acciones administrativas (`admin_audit_log`).
  *
- * Sólo lectura y **solo superadmin**: la tabla puede contener el correo de un
- * intento de acceso fallido y la IP del operador, así que no la ve un editor.
- * No hay endpoints de escritura/borrado: la tabla es append-only; las filas las
- * escribe `api/src/audit.ts` desde cada acción real.
+ * Sólo lectura, y sólo para roles con la capacidad `audit.read` (superadmin,
+ * admin y auditor): la tabla puede contener el correo de un intento de acceso
+ * fallido y la IP del operador, así que no la ve un editor. El control real lo
+ * aplica `requirePermisoPorMetodo({ read: "audit.read" })` al montar el router en
+ * `routes/admin/index.ts`. No hay endpoints de escritura/borrado: la tabla es
+ * append-only; las filas las escribe `api/src/audit.ts` desde cada acción real.
  *
  * Búsqueda, filtros, orden y ventana los resuelve el servidor (mismo patrón que
  * la bandeja de Turnos): la tabla crece sin techo y recortar sobre una página ya
@@ -20,7 +21,6 @@ import { celdaCsv } from "./appointments.js";
  */
 
 export const auditRouter = Router();
-auditRouter.use(requireRole("superadmin"));
 
 const ACCIONES = [
   "create",
