@@ -16,8 +16,11 @@ import { ROLES } from "../../permisos.js";
  *    salida es entrar a MySQL a mano en el VPS, que es exactamente el tipo de
  *    intervención que este panel existe para no necesitar.
  * 2. **Bajarle el rol al último superadmin.** El mismo agujero por otra
- *    puerta: la versión anterior protegía el borrado —y sólo el propio— pero
- *    dejaba que un `PUT` con `role: "editor"` produjera el mismo resultado.
+ *    puerta: bajar el rol produce el mismo resultado que borrarlo. El guard
+ *    tiene que cubrir *cualquier* rol destino que no sea `superadmin`, no una
+ *    sola forma: cuando el sistema era binario alcanzaba con vigilar el paso a
+ *    `editor`, pero RBAC agregó `admin`, `autor`, `revisor`, etc., y un `PUT`
+ *    con `role: "admin"` sobre el último superadmin lo degradaba igual.
  *
  * Las dos se cierran contando cuántos superadmin quedarían **después** de la
  * operación, no antes.
@@ -91,7 +94,17 @@ usersRouter.put("/:id", async (req, res) => {
 
   const p = parsed.data;
 
-  if (p.role === "editor" && actual.role === "superadmin" && (await otrosSuperadmin(id)) === 0) {
+  // Cualquier rol distinto de `superadmin` lo saca del panel de usuarios: no
+  // alcanza con vigilar el paso a `editor`. Desde que RBAC agregó `admin`,
+  // `autor`, `revisor`, etc., un `PUT` con `role: "admin"` sobre el último
+  // superadmin lo degradaba y dejaba el panel sin nadie que pueda administrar
+  // usuarios. Se bloquea toda degradación del último, no una sola de sus formas.
+  if (
+    p.role !== undefined &&
+    p.role !== "superadmin" &&
+    actual.role === "superadmin" &&
+    (await otrosSuperadmin(id)) === 0
+  ) {
     throw conflict(
       "no se puede quitar el rol de superadmin al último que queda: nadie podría volver a administrar usuarios",
     );
