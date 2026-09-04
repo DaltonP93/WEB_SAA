@@ -410,6 +410,62 @@ técnico de diseño para los 3 módulos; **CI del PR sigue siendo la autoridad**
 
 ---
 
+## 18. Módulo — Revocación de sesiones JWT + TTL configurable (S1) (2026-09-04)
+
+**Rama:** `feat/jwt-revocacion`, **apilada sobre `feat/roles-granulares`**. Cierra el hallazgo
+de seguridad **S1**: el token duraba hasta 7 días y era irrevocable — cambiarle el rol a un
+usuario, darlo de baja o cambiarle la contraseña no invalidaba sus tokens ya emitidos, sobre un
+panel con PII de pacientes.
+
+### 18.1 Qué entrega
+- **Migración** `20260905000000_users_tokens_valid_after.ts`: columna nullable
+  `users.tokens_valid_after` (instante de corte por usuario). No toca filas; reversible.
+- **`requireAuth` contra la base** (`api/src/auth.ts`): verificada la firma, relee al usuario
+  y (a) rechaza al borrado (401), (b) rechaza el token emitido antes de `tokens_valid_after`
+  (401), (c) toma el **rol de la base**, no del token. Un lookup por PK por request. Si la base
+  no responde, el error se propaga al manejador central (503), no se traduce a 401.
+- **TTL configurable** por `JWT_EXPIRES_IN` (ya existía; ahora documentado en `.env.example` y
+  con la revocación que lo complementa). Se recomienda un valor del orden de horas para el panel.
+- **Revocación al cambiar contraseña** (`routes/admin/users.ts`): un cambio de contraseña marca
+  `tokens_valid_after`, cerrando las sesiones abiertas de ese usuario. El corte se **trunca al
+  segundo** (`instanteRevocacion`): los `iat` de JWT son segundos enteros y MySQL 8 redondea un
+  `DATETIME(0)` con fracción hacia arriba, así que sin truncar, el token que se obtiene al volver
+  a entrar en el mismo segundo quedaba revocado por error (~1 s). El cambio de rol y la baja **no**
+  necesitan revocación: los resuelve el lookup contra la base en la próxima request.
+- **Resiliente al rollback:** `requireAuth` lee todas las columnas y toma `tokens_valid_after`
+  de forma defensiva (ausente → sin corte). Si el esquema queda en un punto anterior a esta
+  migración —durante un rollback—, la autenticación sigue funcionando en vez de devolver 500 en
+  cada request y dejar el panel inaccesible. Lo ejercita `tests/rollback-guardia-campos`, y CI
+  (MySQL 8.0) lo detectó cuando la primera versión fijaba la columna en el `SELECT`.
+
+### 18.2 Cambio de comportamiento y no-regresión
+- **Efecto instantáneo:** cambio de rol, baja y cambio de contraseña rigen en la request
+  siguiente, no al expirar el token.
+- **Consecuencia en las guardas del "último superadmin":** como quien actúa debe **seguir siendo
+  superadmin en la base**, el escenario alcanzable de "vaciar el panel" es la autodegradación
+  (409) o el auto-borrado (400) del único superadmin; la guarda 409 del `DELETE` queda como
+  defensa en profundidad (sombreada por la de auto-borrado). Las pruebas de `usuarios-blindaje`
+  se reescribieron a ese escenario real (34/34, incluye los 7 roles destino → 409).
+- `password_hash` y `tokens_valid_after` nunca salen en respuestas (`CAMPOS` no los incluye).
+
+### 18.3 Validación local
+typecheck OK. `tests/auth-revocacion.test.ts` **5/5** (TTL configurable respetado; rol desde la
+base; baja invalida; cambio de contraseña revoca; firma inválida sigue 401). Regresión:
+`permisos-granulares` **131/131**, `admin-audit-log` **14/14**, `usuarios-blindaje` **34/34**
+(reescrita), `migrations` **26/26** (la nueva migración migra y revierte limpia). Suite completa
+**1736/1736** tras el fix de resiliencia (la primera versión fijaba `tokens_valid_after` en el
+`SELECT` y CI la marcó roja en `rollback-guardia-campos`; corregido). CI (MySQL 8.0) es la
+autoridad final.
+
+### 18.4 GO/NO-GO
+- Diseño → GO para auditoría (cambio auth-crítico; la matriz y el lookup merecen revisión).
+- Orden de revisión/merge: después de #29 → #30 → #31; se apila sobre `feat/roles-granulares`.
+- Producción → **NO-GO** (bloqueantes externos sin cambios).
+- Futuro (fuera de alcance): refresh-token revocable y un botón de "cerrar sesiones" por usuario
+  en el panel; hoy la revocación se dispara por cambio de contraseña.
+
+---
+
 ## 1. Resumen ejecutivo
 
 El sitio público, el panel administrativo tipo CMS, el Page Builder, la biblioteca multimedia, los turnos, mensajes, usuarios, SEO, analítica, atribución, redirects, publicación programada, papelera, revisiones y newsletter básica ya están desarrollados y fusionados en `main`.

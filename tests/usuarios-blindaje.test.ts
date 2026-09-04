@@ -115,58 +115,44 @@ describeDb("blindaje de Usuarios", () => {
     Number((await db("users").where({ role: "superadmin" }).count({ n: "id" }))[0].n);
 
   describe("nadie puede dejar el panel sin superadmin", () => {
-    it("no se puede borrar al último superadmin", async () => {
-      // Otro superadmin distinto del propio: sin esto, el rechazo podría venir
-      // de "no podés borrarte a vos mismo" y no de lo que se quiere probar.
-      const otro = await (await crear({ email: "otro@sanatorio.local", role: "superadmin" })).json();
-      await db("users").where({ id: idAdmin }).update({ role: "editor" });
-      expect(await superadmins(), "montaje: tiene que quedar exactamente uno").toBe(1);
+    /**
+     * Con autenticación contra la base (revocación de sesiones), quien actúa DEBE
+     * seguir siendo superadmin en la base: si se le baja el rol, `requireRole` lo
+     * frena con 403 en la próxima request, antes de llegar a estas guardas. Por
+     * eso el escenario real de "vaciar el panel" es el último superadmin
+     * degradándose o borrándose **a sí mismo** —no puede degradar a otro y seguir
+     * actuando como algo que ya no es—.
+     */
+    it("el último superadmin no puede borrarse a sí mismo", async () => {
+      expect(await superadmins(), "montaje: sólo queda el sembrado").toBe(1);
 
-      const res = await borrar(Number(otro.id));
+      // Borrar a otro exige que exista otro (y entonces ya no es el último), así
+      // que la única vía para quedarse sin superadmin por borrado es el
+      // auto-borrado, que corta la guarda de "no podés borrarte a vos mismo".
+      const res = await borrar(idAdmin);
 
-      expect(res.status).toBe(409);
-      expect(await superadmins(), "el panel quedó sin nadie que pueda administrar usuarios").toBe(1);
-      expect(await db("users").where({ id: otro.id }).first(), "se borró igual").toBeTruthy();
+      expect(res.status).toBe(400);
+      expect(await superadmins(), "el panel quedó sin nadie que administre usuarios").toBe(1);
+      expect(await db("users").where({ id: idAdmin }).first(), "se borró igual").toBeTruthy();
     });
 
     /**
-     * El mismo agujero por la otra puerta.
-     *
-     * La versión anterior protegía el borrado y dejaba pasar el `PUT`. El
-     * resultado en la base es idéntico: cero superadmin.
+     * El agujero del `PUT`: bajarle el rol al último superadmin lo deja fuera. El
+     * guard tiene que cubrir CUALQUIER rol destino ≠ superadmin, no sólo `editor`
+     * —RBAC agregó `admin`, `autor`, `revisor`, etc., y un guard que sólo miraba
+     * `editor` dejaba pasar `admin`—. Se prueba como autodegradación del único
+     * superadmin, la vía alcanzable con auth contra la base.
      */
-    it("no se puede bajar a editor al último superadmin", async () => {
-      const otro = await (await crear({ email: "otro@sanatorio.local", role: "superadmin" })).json();
-      await db("users").where({ id: idAdmin }).update({ role: "editor" });
-      expect(await superadmins()).toBe(1);
-
-      const res = await actualizar(Number(otro.id), { role: "editor" });
-
-      expect(res.status, "se pudo cerrar el panel bajando un rol").toBe(409);
-      expect(await superadmins(), "el panel quedó sin superadmin").toBe(1);
-      expect((await db("users").where({ id: otro.id }).first("role")).role).toBe("superadmin");
-    });
-
-    /**
-     * El mismo agujero, pero con un rol que no existía cuando se escribió el
-     * guard. RBAC agregó `admin`, `autor`, `revisor`, etc.: un guard que sólo
-     * miraba `role: "editor"` dejaba pasar `role: "admin"` y volvía a cerrar el
-     * panel. Se prueba con `admin` porque es el rol nuevo con más poder, y el
-     * que más tienta a "promover" al único superadmin sin darse cuenta de que lo
-     * está degradando.
-     */
-    it.each(["admin", "autor", "revisor", "analista_marketing", "operador_leads", "auditor"])(
-      "no se puede bajar a %s al último superadmin",
+    it.each(["editor", "admin", "autor", "revisor", "analista_marketing", "operador_leads", "auditor"])(
+      "no se puede bajar el último superadmin a %s",
       async (rol) => {
-        const otro = await (await crear({ email: "otro@sanatorio.local", role: "superadmin" })).json();
-        await db("users").where({ id: idAdmin }).update({ role: "editor" });
-        expect(await superadmins()).toBe(1);
+        expect(await superadmins(), "montaje: un solo superadmin").toBe(1);
 
-        const res = await actualizar(Number(otro.id), { role: rol });
+        const res = await actualizar(idAdmin, { role: rol });
 
         expect(res.status, `se pudo cerrar el panel pasando el último superadmin a ${rol}`).toBe(409);
         expect(await superadmins(), "el panel quedó sin superadmin").toBe(1);
-        expect((await db("users").where({ id: otro.id }).first("role")).role).toBe("superadmin");
+        expect((await db("users").where({ id: idAdmin }).first("role")).role).toBe("superadmin");
       },
     );
 
