@@ -384,6 +384,12 @@ pagesRouter.put("/:id/content", async (req, res) => {
       .update({ ...metaPatch, updated_at: trx.fn.now() });
     await reemplazarBloques(trx, pageId, bloques.validados);
   });
+  // El guardado del Page Builder también puede publicar/despublicar (acepta
+  // `status`); se traza igual que el `PUT` de metadatos, no sólo ese camino. Sin
+  // esto, publicar desde el Page Builder no dejaba rastro en la bitácora.
+  const accion =
+    metaPatch.status === "published" ? "publish" : metaPatch.status === "draft" ? "unpublish" : "update";
+  await registrarAccion({ ...actorDe(req), action: accion, resourceType: "pages", resourceId: pageId });
   res.json({ ok: true });
 });
 
@@ -413,6 +419,8 @@ pagesRouter.put("/:id/blocks", async (req, res) => {
     await reemplazarBloques(trx, pageId, bloques.validados);
     await trx("pages").where({ id: pageId }).update({ updated_at: trx.fn.now() });
   });
+  // Reemplazar bloques no cambia el estado de publicación: siempre es una edición.
+  await registrarAccion({ ...actorDe(req), action: "update", resourceType: "pages", resourceId: pageId });
   res.json({ ok: true });
 });
 
@@ -456,8 +464,20 @@ pagesRouter.post("/:id/revisions/:revId/restore", async (req, res) => {
   if (!rev) return res.status(404).json({ error: "versión no encontrada" });
   const snap = parseJson(rev.snapshot) as any;
   if (!snap || typeof snap !== "object") return res.status(422).json({ error: "versión ilegible" });
-  // Restaurar una versión que estaba publicada vuelve a publicar: exige publicar.
-  if (snap.status === "published" && !puedePublicar(req)) return res.status(403).json({ error: "forbidden" });
+  // Restaurar puede cambiar el estado de publicación en las DOS direcciones:
+  // re-publicar (una página en borrador vuelve a `published`) y **despublicar**
+  // (una página publicada vuelve a `draft` al restaurar una versión que estaba en
+  // borrador). Cualquiera de las dos exige `content.publish`, no sólo la primera:
+  // gatear únicamente `snap.status === "published"` dejaba que un `autor` (con
+  // `content.write` pero sin `content.publish`) despublicara una página viva
+  // restaurando un borrador. Editar sin cambiar el estado (borrador→borrador) no
+  // lo exige, igual que el resto de los caminos de edición.
+  const estadoRestaurado = snap.status === "published" ? "published" : "draft";
+  const viva = await db("pages").where({ id: pageId }).whereNull("deleted_at").first("status");
+  if (!viva) return res.status(404).json({ error: "no encontrada" });
+  if (estadoRestaurado !== viva.status && !puedePublicar(req)) {
+    return res.status(403).json({ error: "forbidden" });
+  }
 
   const brutos: { type: string; props: unknown }[] = Array.isArray(snap.blocks)
     ? snap.blocks.map((b: any) => ({ type: String(b?.type), props: b?.props ?? {} }))

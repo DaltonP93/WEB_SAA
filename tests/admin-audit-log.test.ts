@@ -222,6 +222,43 @@ describeDb("bitácora de acciones administrativas", () => {
         expect(acciones.has(a), `falta la acción ${a}`).toBe(true);
       }
     });
+
+    /**
+     * El Page Builder guarda por `PUT /:id/content` (no por `PUT /:id`), y ese
+     * camino también puede publicar/despublicar. Antes no llamaba a
+     * `registrarAccion`, así que publicar desde el Page Builder no dejaba rastro
+     * mientras que publicar desde la lista sí. Se prueba que /content traza el
+     * cambio de estado real.
+     */
+    it("publicar y despublicar desde el Page Builder (/content) queda en la bitácora", async () => {
+      const crear = await fetch(`${baseUrl}/api/admin/pages`, {
+        method: "POST",
+        headers: json(tokenSuperadmin),
+        body: JSON.stringify({ slug: "pagina-content-audit", title: "Página /content" }),
+      });
+      expect(crear.status, await crear.clone().text()).toBe(201);
+      const pid = (await crear.json()).id;
+
+      const content = (body: unknown) =>
+        fetch(`${baseUrl}/api/admin/pages/${pid}/content`, {
+          method: "PUT",
+          headers: json(tokenSuperadmin),
+          body: JSON.stringify(body),
+        });
+      expect((await content({ status: "published", blocks: [] })).status).toBe(200);
+      expect((await content({ status: "draft", blocks: [] })).status).toBe(200);
+      expect((await content({ blocks: [] })).status).toBe(200); // sin status → "update"
+
+      const acciones: string[] = [];
+      for (let offset = 0; ; offset += 100) {
+        const { body } = await listar(`resource_type=pages&limit=100&offset=${offset}`);
+        for (const r of body.items) if (String(r.resource_id) === String(pid)) acciones.push(r.action);
+        if (offset + 100 >= body.total) break;
+      }
+      // Publicar y despublicar por /content tienen que estar registrados.
+      expect(acciones.includes("publish"), "publicar desde /content no dejó rastro").toBe(true);
+      expect(acciones.includes("unpublish"), "despublicar desde /content no dejó rastro").toBe(true);
+    });
   });
 
   describe("gestión de usuarios", () => {

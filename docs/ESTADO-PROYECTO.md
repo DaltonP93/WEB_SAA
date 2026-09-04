@@ -372,6 +372,42 @@ Windows, verdes en CI). **Conteo verde autoritativo = CI del PR** (pendiente de 
 - Merge → NO-GO hasta auditoría + CI verde, y después de #29 y del PR de auditoría.
 - Producción → **NO-GO**.
 
+### 17.5 Re-corrida del fleet de verificación y endurecimiento (2026-09-04)
+
+Se re-corrieron las auditorías de **código** y **DevOps** (solo lectura) que habían quedado
+incompletas. Resultados:
+
+- **S2 (candado del último superadmin) — CERRADO y verificado.** El `PUT` ahora bloquea
+  cualquier rol destino ≠ `superadmin` sobre el único superadmin (no sólo `editor`); regresión
+  con `it.each` sobre los 6 roles nuevos → 409 en `tests/usuarios-blindaje.test.ts` (34/34).
+- **Hueco de rollback `migrate:down` vs `migrate:rollback` — DESCARTADO.** No existe: ambos
+  scripts npm encadenan `rollback-guard.mjs`, y el preflight de marca está bien ubicado en
+  `rollback-db.sh` (tras `PENDIENTES`, antes del primer `migrate:down`), fail-closed y no
+  salteable con `ROLLBACK_ALLOW_AFTER_SEED`. Ningún módulo toca `pnpm-lock.yaml`/deps.
+
+Tres hallazgos menores confirmados fueron **corregidos en esta rama** (con pruebas):
+
+- **H1 · `pages.ts` (restaurar versión).** El guard de publicar sólo cubría re-publicar; un
+  `autor` (sin `content.publish`) podía **despublicar** una página viva restaurando un
+  borrador. Ahora se gatea cualquier transición del estado de publicación (las dos
+  direcciones); editar sin cambiar estado sigue permitido. Pruebas en
+  `tests/permisos-granulares.test.ts` (131/131).
+- **H2 · `pages.ts` (`/content` y `/blocks`).** El guardado del Page Builder podía publicar/
+  despublicar sin dejar fila en `admin_audit_log`. Ahora `/content` registra
+  `publish`/`unpublish`/`update` según el cambio de estado, y `/blocks` registra `update`
+  (best-effort). Prueba en `tests/admin-audit-log.test.ts` (14/14).
+- **D3 · migración `roles_granulares` (`down()`).** El remapeo de roles restringidos → `editor`
+  al revertir es una **elevación de privilegio** (el enum viejo no tiene destino de menor
+  privilegio). Documentado como tal en la migración, con ⚠️ operativo: revisar roles de
+  usuarios después de un rollback que cruce esta migración. Sin cambio de comportamiento del
+  `down()` (estructuralmente inevitable en un dominio de dos roles).
+
+D1 (timestamps de migración duplicados, hoy deterministas por orden lexicográfico) y D2
+(preflight sólo en la ruta sancionada de rollback) quedan como backlog operativo/documental,
+sin cambio de código (tocar los timestamps exigiría renombrar migraciones ya aplicadas). GO
+técnico de diseño para los 3 módulos; **CI del PR sigue siendo la autoridad**. Producción
+**NO-GO** sin cambios.
+
 ---
 
 ## 1. Resumen ejecutivo
