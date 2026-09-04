@@ -427,8 +427,11 @@ panel con PII de pacientes.
 - **TTL configurable** por `JWT_EXPIRES_IN` (ya existía; ahora documentado en `.env.example` y
   con la revocación que lo complementa). Se recomienda un valor del orden de horas para el panel.
 - **Revocación al cambiar contraseña** (`routes/admin/users.ts`): un cambio de contraseña marca
-  `tokens_valid_after = ahora`, cerrando las sesiones abiertas de ese usuario. El cambio de rol
-  y la baja **no** la necesitan: los resuelve el lookup contra la base en la próxima request.
+  `tokens_valid_after`, cerrando las sesiones abiertas de ese usuario. El corte se **trunca al
+  segundo** (`instanteRevocacion`): los `iat` de JWT son segundos enteros y MySQL 8 redondea un
+  `DATETIME(0)` con fracción hacia arriba, así que sin truncar, el token que se obtiene al volver
+  a entrar en el mismo segundo quedaba revocado por error (~1 s). El cambio de rol y la baja **no**
+  necesitan revocación: los resuelve el lookup contra la base en la próxima request.
 - **Resiliente al rollback:** `requireAuth` lee todas las columnas y toma `tokens_valid_after`
   de forma defensiva (ausente → sin corte). Si el esquema queda en un punto anterior a esta
   migración —durante un rollback—, la autenticación sigue funcionando en vez de devolver 500 en

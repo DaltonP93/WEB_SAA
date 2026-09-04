@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { db } from "../../db.js";
-import { hashPassword, requireRole } from "../../auth.js";
+import { hashPassword, requireRole, instanteRevocacion } from "../../auth.js";
 import { badRequest, conflict, notFound } from "../../http.js";
 import { registrarAccion, actorDe } from "../../audit.js";
 import { ROLES } from "../../permisos.js";
@@ -122,10 +122,13 @@ usersRouter.put("/:id", async (req, res) => {
   if (p.password) {
     patch.password_hash = await hashPassword(p.password);
     // Cambiar la contraseña cierra las sesiones abiertas de ese usuario: los
-    // tokens emitidos antes de ahora quedan revocados (los compara `requireAuth`).
-    // El cambio de rol y la baja NO necesitan esto: `requireAuth` lee el rol de la
-    // base y rechaza al usuario borrado, así que rigen en la próxima request.
-    patch.tokens_valid_after = new Date();
+    // tokens emitidos antes de este segundo quedan revocados (los compara
+    // `requireAuth`). El corte se trunca al segundo (`instanteRevocacion`) para no
+    // rechazar el token nuevo que se obtiene al volver a entrar en el mismo
+    // segundo. El cambio de rol y la baja NO necesitan esto: `requireAuth` lee el
+    // rol de la base y rechaza al usuario borrado, así que rigen en la próxima
+    // request.
+    patch.tokens_valid_after = instanteRevocacion();
   }
 
   // Un `update({})` en knex genera SQL inválido. Sin cambios, no hay nada que
