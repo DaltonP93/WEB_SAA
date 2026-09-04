@@ -119,7 +119,14 @@ usersRouter.put("/:id", async (req, res) => {
   if (p.email !== undefined) patch.email = p.email;
   if (p.name !== undefined) patch.name = p.name;
   if (p.role !== undefined) patch.role = p.role;
-  if (p.password) patch.password_hash = await hashPassword(p.password);
+  if (p.password) {
+    patch.password_hash = await hashPassword(p.password);
+    // Cambiar la contraseña cierra las sesiones abiertas de ese usuario: los
+    // tokens emitidos antes de ahora quedan revocados (los compara `requireAuth`).
+    // El cambio de rol y la baja NO necesitan esto: `requireAuth` lee el rol de la
+    // base y rechaza al usuario borrado, así que rigen en la próxima request.
+    patch.tokens_valid_after = new Date();
+  }
 
   // Un `update({})` en knex genera SQL inválido. Sin cambios, no hay nada que
   // escribir y la respuesta es la fila tal como está.

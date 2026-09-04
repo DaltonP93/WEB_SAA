@@ -3,8 +3,13 @@ import bcrypt from "bcryptjs";
 import type { Request, Response, NextFunction } from "express";
 import type { Rol, Capacidad } from "./permisos.js";
 import { tieneCapacidad } from "./permisos.js";
+import { db } from "./db.js";
 
 const SECRET = process.env.JWT_SECRET ?? "dev-secret";
+// Duración del token, **configurable** por `JWT_EXPIRES_IN` (formato de
+// `jsonwebtoken`: "15m", "8h", "7d"…). Cuanto más corta, menor la ventana en que
+// un token robado sirve; la revocación (abajo) la complementa para los casos en
+// que hay que cortar una sesión antes de que expire.
 const EXPIRES = process.env.JWT_EXPIRES_IN ?? "7d";
 
 // Valores que alguna vez estuvieron en los .env de ejemplo: si quedan en
@@ -46,8 +51,8 @@ export function signToken(p: AuthPayload): string {
   return jwt.sign(p, SECRET, { expiresIn: EXPIRES as any });
 }
 
-export function verifyToken(t: string): AuthPayload {
-  return jwt.verify(t, SECRET) as AuthPayload;
+export function verifyToken(t: string): AuthPayload & { iat?: number } {
+  return jwt.verify(t, SECRET) as AuthPayload & { iat?: number };
 }
 
 export async function hashPassword(pw: string) {
@@ -58,14 +63,57 @@ export async function comparePassword(pw: string, hash: string) {
   return bcrypt.compare(pw, hash);
 }
 
-export function requireAuth(req: Request, res: Response, next: NextFunction) {
+/**
+ * Un token está revocado si se emitió **antes** del `tokens_valid_after` del
+ * usuario. `iat` viene en segundos (estándar JWT); la columna es un instante
+ * absoluto que el driver devuelve como `Date`. Un token sin `iat` no se puede
+ * ubicar en el tiempo, así que se trata como revocado (fail-closed).
+ */
+function sesionRevocada(iat: number | undefined, validoDesde: Date | string | null): boolean {
+  if (validoDesde == null) return false; // sin corte: nada revocado
+  if (iat === undefined) return true;
+  const corte = validoDesde instanceof Date ? validoDesde.getTime() : new Date(validoDesde).getTime();
+  if (Number.isNaN(corte)) return false; // valor ilegible: no bloquear por un dato roto
+  return iat * 1000 < corte;
+}
+
+/**
+ * Autentica **contra la base**, no sólo contra el token.
+ *
+ * El token stateless probaba la identidad pero no reflejaba cambios posteriores:
+ * cambiarle el rol a un usuario, darlo de baja o revocarle las sesiones no tenía
+ * efecto hasta que el token expiraba (hasta 7 días). Ahora, verificada la firma,
+ * se relee el usuario y:
+ *  - si ya no existe (baja) → 401;
+ *  - si el token se emitió antes de `tokens_valid_after` (revocación / cambio de
+ *    contraseña) → 401;
+ *  - el `role` sale de la base, no del token, así un cambio de rol rige en la
+ *    próxima request.
+ *
+ * Es un lookup por PK por request (costo despreciable en un panel). Si la base no
+ * responde, el error se propaga al manejador central (503), no se traduce a 401.
+ */
+export async function requireAuth(req: Request, res: Response, next: NextFunction) {
   const h = req.headers.authorization;
   if (!h?.startsWith("Bearer ")) return res.status(401).json({ error: "no token" });
+  let decoded: AuthPayload & { iat?: number };
   try {
-    req.user = verifyToken(h.slice(7));
-    next();
+    decoded = verifyToken(h.slice(7));
   } catch {
     return res.status(401).json({ error: "token invalido" });
+  }
+  try {
+    const user = await db("users")
+      .where({ id: decoded.id })
+      .first("id", "email", "name", "role", "tokens_valid_after");
+    if (!user) return res.status(401).json({ error: "sesion invalida" });
+    if (sesionRevocada(decoded.iat, user.tokens_valid_after)) {
+      return res.status(401).json({ error: "sesion expirada" });
+    }
+    req.user = { id: user.id, email: user.email, name: user.name, role: user.role };
+    next();
+  } catch (err) {
+    next(err);
   }
 }
 
