@@ -429,6 +429,11 @@ panel con PII de pacientes.
 - **Revocación al cambiar contraseña** (`routes/admin/users.ts`): un cambio de contraseña marca
   `tokens_valid_after = ahora`, cerrando las sesiones abiertas de ese usuario. El cambio de rol
   y la baja **no** la necesitan: los resuelve el lookup contra la base en la próxima request.
+- **Resiliente al rollback:** `requireAuth` lee todas las columnas y toma `tokens_valid_after`
+  de forma defensiva (ausente → sin corte). Si el esquema queda en un punto anterior a esta
+  migración —durante un rollback—, la autenticación sigue funcionando en vez de devolver 500 en
+  cada request y dejar el panel inaccesible. Lo ejercita `tests/rollback-guardia-campos`, y CI
+  (MySQL 8.0) lo detectó cuando la primera versión fijaba la columna en el `SELECT`.
 
 ### 18.2 Cambio de comportamiento y no-regresión
 - **Efecto instantáneo:** cambio de rol, baja y cambio de contraseña rigen en la request
@@ -444,8 +449,10 @@ panel con PII de pacientes.
 typecheck OK. `tests/auth-revocacion.test.ts` **5/5** (TTL configurable respetado; rol desde la
 base; baja invalida; cambio de contraseña revoca; firma inválida sigue 401). Regresión:
 `permisos-granulares` **131/131**, `admin-audit-log` **14/14**, `usuarios-blindaje` **34/34**
-(reescrita), `migrations` **26/26** (la nueva migración migra y revierte limpia). CI (MySQL 8.0)
-es la autoridad final.
+(reescrita), `migrations` **26/26** (la nueva migración migra y revierte limpia). Suite completa
+**1736/1736** tras el fix de resiliencia (la primera versión fijaba `tokens_valid_after` en el
+`SELECT` y CI la marcó roja en `rollback-guardia-campos`; corregido). CI (MySQL 8.0) es la
+autoridad final.
 
 ### 18.4 GO/NO-GO
 - Diseño → GO para auditoría (cambio auth-crítico; la matriz y el lookup merecen revisión).
