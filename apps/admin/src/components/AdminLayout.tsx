@@ -6,7 +6,7 @@ import LucideIcon from "./LucideIcon";
 import TopProgressBar from "./TopProgressBar";
 import { useSesion } from "../hooks/useSesion";
 
-type NavItem = { to: string; label: string; icon: string; end?: boolean; badge?: "msg" | "turnos"; superadmin?: boolean };
+type NavItem = { to: string; label: string; icon: string; end?: boolean; badge?: "msg" | "turnos"; cap?: string };
 
 const TOP: NavItem = { to: "/", label: "Inicio", icon: "home", end: true };
 
@@ -39,8 +39,8 @@ const SECTIONS: { title: string; items: NavItem[] }[] = [
     items: [
       { to: "/settings", label: "Branding y settings", icon: "palette" },
       { to: "/redirects", label: "Redirects", icon: "milestone" },
-      { to: "/users", label: "Usuarios", icon: "users" },
-      { to: "/auditoria", label: "Auditoría", icon: "scroll-text", superadmin: true },
+      { to: "/users", label: "Usuarios", icon: "users", cap: "users.manage" },
+      { to: "/auditoria", label: "Auditoría", icon: "scroll-text", cap: "audit.read" },
     ],
   },
 ];
@@ -48,7 +48,7 @@ const SECTIONS: { title: string; items: NavItem[] }[] = [
 export default function AdminLayout() {
   const nav = useNavigate();
   const { pathname } = useLocation();
-  const { esSuperadmin } = useSesion();
+  const { puede } = useSesion();
 
   const msgs = useQuery({ queryKey: ["adm-msg"], queryFn: async () => (await api.get("/admin/contact-messages")).data });
   // El contador sale del `total` del servidor, no del largo de la lista: la
@@ -126,7 +126,7 @@ export default function AdminLayout() {
                     <div className="text-[10px] uppercase tracking-[0.14em] font-semibold text-white/50 px-4 pt-4 pb-1.5">
                       {s.title}
                     </div>
-                    {s.items.filter((n) => !n.superadmin || esSuperadmin).map(renderItem)}
+                    {s.items.filter((n) => !n.cap || puede(n.cap)).map(renderItem)}
                   </div>
                 ))}
               </>

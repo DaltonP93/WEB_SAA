@@ -147,6 +147,29 @@ describeDb("blindaje de Usuarios", () => {
       expect((await db("users").where({ id: otro.id }).first("role")).role).toBe("superadmin");
     });
 
+    /**
+     * El mismo agujero, pero con un rol que no existía cuando se escribió el
+     * guard. RBAC agregó `admin`, `autor`, `revisor`, etc.: un guard que sólo
+     * miraba `role: "editor"` dejaba pasar `role: "admin"` y volvía a cerrar el
+     * panel. Se prueba con `admin` porque es el rol nuevo con más poder, y el
+     * que más tienta a "promover" al único superadmin sin darse cuenta de que lo
+     * está degradando.
+     */
+    it.each(["admin", "autor", "revisor", "analista_marketing", "operador_leads", "auditor"])(
+      "no se puede bajar a %s al último superadmin",
+      async (rol) => {
+        const otro = await (await crear({ email: "otro@sanatorio.local", role: "superadmin" })).json();
+        await db("users").where({ id: idAdmin }).update({ role: "editor" });
+        expect(await superadmins()).toBe(1);
+
+        const res = await actualizar(Number(otro.id), { role: rol });
+
+        expect(res.status, `se pudo cerrar el panel pasando el último superadmin a ${rol}`).toBe(409);
+        expect(await superadmins(), "el panel quedó sin superadmin").toBe(1);
+        expect((await db("users").where({ id: otro.id }).first("role")).role).toBe("superadmin");
+      },
+    );
+
     it("sí se puede bajar el rol mientras quede otro superadmin", async () => {
       const otro = await (await crear({ email: "otro@sanatorio.local", role: "superadmin" })).json();
       expect(await superadmins()).toBe(2);

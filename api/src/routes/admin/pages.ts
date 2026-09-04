@@ -7,6 +7,18 @@ import { validateBlockProps } from "../../block-validation.js";
 import { instanteDesdeHoraLocal } from "../../timezone.js";
 import { notFound } from "../../http.js";
 import { registrarAccion, actorDe } from "../../audit.js";
+import { tieneCapacidad } from "../../permisos.js";
+import type { Request } from "express";
+
+/**
+ * Publicar/despublicar/programar exige `content.publish`, además de la
+ * `content.write` que ya pide el montaje del router. Así un `autor` (que tiene
+ * `content.write` pero no `content.publish`) puede crear y editar borradores pero
+ * no cambiar el estado de publicación; un `revisor`/`editor` sí. No se distingue
+ * por método HTTP —un `PUT` puede ser editar o publicar—, por eso se comprueba
+ * acá, sobre el payload.
+ */
+const puedePublicar = (req: Request): boolean => tieneCapacidad(req.user?.role, "content.publish");
 
 export const pagesRouter = Router();
 
@@ -77,6 +89,7 @@ pagesRouter.post("/", async (req, res) => {
   const parsed = pageSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "payload invalido", issues: parsed.error.issues });
   const p = parsed.data;
+  if (p.status === "published" && !puedePublicar(req)) return res.status(403).json({ error: "forbidden" });
 
   let publishAt: Date | null = null;
   if (p.publish_at !== undefined && p.publish_at !== null && p.publish_at !== "") {
@@ -128,6 +141,7 @@ class PublishAtInvalido extends Error {}
 pagesRouter.put("/:id", async (req, res) => {
   const parsed = pageSchema.partial().safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "payload invalido", issues: parsed.error.issues });
+  if (parsed.data.status !== undefined && !puedePublicar(req)) return res.status(403).json({ error: "forbidden" });
   let patch: Record<string, unknown>;
   try {
     patch = construirMetaPatch(parsed.data);
@@ -164,6 +178,7 @@ const scheduleSchema = z.object({ publish_at: z.string() });
 pagesRouter.post("/:id/schedule", async (req, res) => {
   const parsed = scheduleSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "payload invalido" });
+  if (!puedePublicar(req)) return res.status(403).json({ error: "forbidden" });
   const instante = instanteDesdeHoraLocal(parsed.data.publish_at);
   if (instante === null) return res.status(400).json({ error: "Hay que indicar una fecha para programar." });
   if (instante === undefined) return res.status(400).json({ error: "La fecha no es válida." });
@@ -348,6 +363,7 @@ pagesRouter.put("/:id/content", async (req, res) => {
   const pageId = Number(req.params.id);
   const parsed = contentSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "payload invalido", issues: parsed.error.issues });
+  if (parsed.data.status !== undefined && !puedePublicar(req)) return res.status(403).json({ error: "forbidden" });
 
   const bloques = validarBloques(parsed.data.blocks);
   if (!bloques.ok) return res.status(400).json({ error: "bloque invalido", block: bloques.invalido });
@@ -368,6 +384,12 @@ pagesRouter.put("/:id/content", async (req, res) => {
       .update({ ...metaPatch, updated_at: trx.fn.now() });
     await reemplazarBloques(trx, pageId, bloques.validados);
   });
+  // El guardado del Page Builder también puede publicar/despublicar (acepta
+  // `status`); se traza igual que el `PUT` de metadatos, no sólo ese camino. Sin
+  // esto, publicar desde el Page Builder no dejaba rastro en la bitácora.
+  const accion =
+    metaPatch.status === "published" ? "publish" : metaPatch.status === "draft" ? "unpublish" : "update";
+  await registrarAccion({ ...actorDe(req), action: accion, resourceType: "pages", resourceId: pageId });
   res.json({ ok: true });
 });
 
@@ -397,6 +419,8 @@ pagesRouter.put("/:id/blocks", async (req, res) => {
     await reemplazarBloques(trx, pageId, bloques.validados);
     await trx("pages").where({ id: pageId }).update({ updated_at: trx.fn.now() });
   });
+  // Reemplazar bloques no cambia el estado de publicación: siempre es una edición.
+  await registrarAccion({ ...actorDe(req), action: "update", resourceType: "pages", resourceId: pageId });
   res.json({ ok: true });
 });
 
@@ -440,6 +464,20 @@ pagesRouter.post("/:id/revisions/:revId/restore", async (req, res) => {
   if (!rev) return res.status(404).json({ error: "versión no encontrada" });
   const snap = parseJson(rev.snapshot) as any;
   if (!snap || typeof snap !== "object") return res.status(422).json({ error: "versión ilegible" });
+  // Restaurar puede cambiar el estado de publicación en las DOS direcciones:
+  // re-publicar (una página en borrador vuelve a `published`) y **despublicar**
+  // (una página publicada vuelve a `draft` al restaurar una versión que estaba en
+  // borrador). Cualquiera de las dos exige `content.publish`, no sólo la primera:
+  // gatear únicamente `snap.status === "published"` dejaba que un `autor` (con
+  // `content.write` pero sin `content.publish`) despublicara una página viva
+  // restaurando un borrador. Editar sin cambiar el estado (borrador→borrador) no
+  // lo exige, igual que el resto de los caminos de edición.
+  const estadoRestaurado = snap.status === "published" ? "published" : "draft";
+  const viva = await db("pages").where({ id: pageId }).whereNull("deleted_at").first("status");
+  if (!viva) return res.status(404).json({ error: "no encontrada" });
+  if (estadoRestaurado !== viva.status && !puedePublicar(req)) {
+    return res.status(403).json({ error: "forbidden" });
+  }
 
   const brutos: { type: string; props: unknown }[] = Array.isArray(snap.blocks)
     ? snap.blocks.map((b: any) => ({ type: String(b?.type), props: b?.props ?? {} }))

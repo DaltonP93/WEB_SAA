@@ -120,6 +120,15 @@ El sitio público es una SPA estática; la API sirve `/api/`, `/uploads/`, `/rob
   autorización actual; los permisos granulares (deny-by-default) van en un PR
   posterior. Detalle y validación en `docs/ESTADO-PROYECTO.md` §16. Se revisa y
   fusiona **después** del PR #29. Producción sigue NO-GO.
+- **Desarrollo en curso (apilado sobre `feat/admin-audit-log`):** rama
+  `feat/roles-granulares` — **permisos granulares (RBAC deny-by-default)**: modelo
+  de capacidades por recurso/acción (`api/src/permisos.ts`), 8 roles, middlewares
+  `requirePermiso*`, mapa de autorización central en `routes/admin/index.ts`,
+  separación editar-vs-publicar en páginas, y `/auth/me` con capacidades para el
+  panel. `editor` conserva su poder actual (sin regresión); el tightening recae en
+  los 6 roles nuevos y la denegación por defecto. Detalle en
+  `docs/ESTADO-PROYECTO.md` §17. Orden de revisión: después de #29 y del PR de
+  auditoría. Producción sigue NO-GO.
 
 [#29 `fix/brand-rollback-idempotente`]: https://github.com/DaltonP93/WEB_SAA/pull/29
 
