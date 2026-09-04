@@ -103,11 +103,16 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     return res.status(401).json({ error: "token invalido" });
   }
   try {
-    const user = await db("users")
-      .where({ id: decoded.id })
-      .first("id", "email", "name", "role", "tokens_valid_after");
+    // Se leen todas las columnas (no una lista fija) para que la revocación sea
+    // resiliente a que `tokens_valid_after` todavía no exista: durante un rollback
+    // el esquema puede estar en un punto anterior a esa migración, y una lista fija
+    // con esa columna haría fallar (500) cada request autenticada, dejando el panel
+    // inaccesible justo cuando hace falta operarlo. Ausente → `undefined` →
+    // `sesionRevocada` lo trata como "sin corte" (no revoca). `password_hash` queda
+    // en memoria pero nunca se copia a `req.user`.
+    const user = await db("users").where({ id: decoded.id }).first();
     if (!user) return res.status(401).json({ error: "sesion invalida" });
-    if (sesionRevocada(decoded.iat, user.tokens_valid_after)) {
+    if (sesionRevocada(decoded.iat, user.tokens_valid_after ?? null)) {
       return res.status(401).json({ error: "sesion expirada" });
     }
     req.user = { id: user.id, email: user.email, name: user.name, role: user.role };
