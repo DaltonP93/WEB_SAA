@@ -64,6 +64,21 @@ export async function comparePassword(pw: string, hash: string) {
 }
 
 /**
+ * Instante de corte para revocar sesiones, **truncado al segundo**.
+ *
+ * Los `iat` de JWT son segundos enteros (`Math.floor(now/1000)`). Si el corte se
+ * guardara con fracción, MySQL 8 lo **redondea** al segundo en una columna
+ * `DATETIME(0)` —hacia arriba desde `.5`—, y un token emitido en ese mismo
+ * segundo quedaría del lado equivocado: el caso real es cambiar la contraseña y
+ * volver a entrar de inmediato, cuyo token nuevo (iat de ese segundo) se
+ * rechazaría hasta ~1 s. Truncar el corte al segundo alinea ambos: nunca revoca
+ * un token emitido en el segundo del corte o después.
+ */
+export function instanteRevocacion(): Date {
+  return new Date(Math.floor(Date.now() / 1000) * 1000);
+}
+
+/**
  * Un token está revocado si se emitió **antes** del `tokens_valid_after` del
  * usuario. `iat` viene en segundos (estándar JWT); la columna es un instante
  * absoluto que el driver devuelve como `Date`. Un token sin `iat` no se puede
