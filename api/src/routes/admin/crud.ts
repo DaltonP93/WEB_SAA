@@ -3,6 +3,7 @@ import type { Request, Response } from "express";
 import { z, ZodSchema, ZodObject } from "zod";
 import { db } from "../../db.js";
 import { isLucideIconName } from "../../lucide-icons.js";
+import { registrarAccion, actorDe } from "../../audit.js";
 
 /**
  * Icono administrable: o vacío, o un nombre que existe de verdad en la versión
@@ -114,6 +115,7 @@ export function crudRouter(opts: CrudOpts): Router {
     }
     const [id] = await db(opts.table).insert(prepare(parsed.data));
     const row = await db(opts.table).where({ id }).first();
+    await registrarAccion({ ...actorDe(req), action: "create", resourceType: opts.table, resourceId: id });
     res.status(201).json(serialize(row));
   });
 
@@ -157,6 +159,7 @@ export function crudRouter(opts: CrudOpts): Router {
       .where({ id: req.params.id })
       .update(opts.touchUpdatedAt ? { ...cambios, updated_at: db.fn.now() } : cambios);
     const row = await db(opts.table).where({ id: req.params.id }).first();
+    await registrarAccion({ ...actorDe(req), action: "update", resourceType: opts.table, resourceId: req.params.id });
     res.json(serialize(row));
   });
 
@@ -166,6 +169,7 @@ export function crudRouter(opts: CrudOpts): Router {
     const bloqueo = opts.guard?.canDelete?.(current);
     if (bloqueo) return res.status(403).json({ error: bloqueo });
     await db(opts.table).where({ id: req.params.id }).del();
+    await registrarAccion({ ...actorDe(req), action: "delete", resourceType: opts.table, resourceId: req.params.id });
     res.status(204).end();
   });
 

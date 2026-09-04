@@ -112,6 +112,14 @@ El sitio público es una SPA estática; la API sirve `/api/`, `/uploads/`, `/rob
 - `docs/ESTADO-PROYECTO.md` mantiene la evaluación histórica más detallada; su
   baseline previo (`fd49743a`/`7eb570c`) no coincide con el HEAD actual, así que
   sus conteos de CI no valen como evidencia del HEAD hasta revalidar.
+- **Desarrollo en curso (apilado sobre el PR #29):** rama `feat/admin-audit-log`
+  —primer incremento seguro del módulo de seguridad/roles: **trazabilidad de
+  acciones administrativas** (tabla `admin_audit_log`, emisor best-effort
+  `api/src/audit.ts`, enganches en CRUD/páginas/usuarios/login, endpoint
+  `GET /api/admin/audit` solo-superadmin + página en el panel). No cambia la
+  autorización actual; los permisos granulares (deny-by-default) van en un PR
+  posterior. Detalle y validación en `docs/ESTADO-PROYECTO.md` §16. Se revisa y
+  fusiona **después** del PR #29. Producción sigue NO-GO.
 
 [#29 `fix/brand-rollback-idempotente`]: https://github.com/DaltonP93/WEB_SAA/pull/29
 

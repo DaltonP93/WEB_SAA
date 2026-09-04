@@ -253,6 +253,64 @@ hasta nueva auditoría independiente + CI verde; **producción → NO-GO**.
 
 ---
 
+## 16. Módulo — Trazabilidad de acciones administrativas (2026-09-02)
+
+**Rama:** `feat/admin-audit-log`, **apilada sobre el PR #29** (`40c3b11`, CI verde).
+Es el primer incremento —seguro y sin cambiar la autorización actual— del módulo de
+seguridad/roles del plan. Los **permisos granulares (deny-by-default en los 18 routers)**
+quedan para un PR posterior; éste entrega sólo la **bitácora de "quién hizo qué"**, que hoy
+falta: publicar/despublicar/programar, papelera/restaurar/purgar y todo el CRUD de
+médicos/servicios/estudios/menús/settings/usuarios no dejaban rastro de autor (sólo lo
+hacían `page_revisions.created_by`, `media.uploaded_by` y la confirmación de Biopsias).
+
+**Orden de revisión:** revisar y fusionar **después** del PR #29 (del que depende su base).
+
+### 16.1 Qué entrega
+- **Migración nueva** `20260903000000_admin_audit_log.ts`: tabla append-only `admin_audit_log`
+  (`actor_id` FK→users `SET NULL` + foto `actor_name`/`actor_role`, `action`,
+  `resource_type`/`resource_id`, `meta` JSON acotado, `ip` del operador, `created_at`),
+  con índices por recurso, fecha, actor y acción. Reversible (`down()` dropea la tabla).
+- **Emisor** `api/src/audit.ts` (`registrarAccion`): **best-effort, nunca lanza** —registrar
+  no puede romper ni demorar la acción principal—; `meta` se sanea (sólo escalares acotados)
+  como defensa; nunca guarda payloads, contraseñas ni tokens.
+- **Enganches**: `crudRouter` (create/update/delete de las 12 entidades), ciclo de vida de
+  páginas (create/publish/unpublish/schedule/trash/restore/purge/restore_revision), usuarios
+  (create/role_change/delete) y login (`login_ok`/`login_fail`, con el email intentado en el
+  fallo, nunca la contraseña). Los guardados de contenido siguen trazados por
+  `page_revisions`, así que no se duplican.
+- **Lectura** `GET /api/admin/audit` (+ `/export` CSV con `Cache-Control: no-store`):
+  **solo superadmin** (`requireRole`), Zod-validado, paginado y filtrable por acción, recurso,
+  actor, rango de fecha y búsqueda; orden por allowlist (sin inyección en `ORDER BY`).
+- **Panel**: página `Auditoría` (solo lectura) bajo *Sistema*, **enlace y pantalla
+  gateados a superadmin** (además del control real en el backend), con `DataTable`
+  server-side, filtros y export.
+
+### 16.2 Decisiones de privacidad
+- La tabla vive detrás de un endpoint **solo superadmin**: es "dentro del panel autenticado",
+  donde el proyecto permite información personal. Por eso guarda la IP del **operador** (personal
+  del panel) y el email intentado en un `login_fail` —ambos con valor forense—, nunca datos de
+  pacientes ni contenido de formularios/turnos/mensajes. Verificado por prueba: ninguna fila
+  contiene contraseñas ni tokens.
+
+### 16.3 Validación local
+Node 20.20.2, pnpm 9.0.0, MySQL 8.4.9 (CI: 8.0). typecheck OK; builds api/web/admin OK;
+`check:secrets` OK; `audit:prod` OK (0 alto/crítico). `tests/admin-audit-log.test.ts` **13/13**
+(autz editor 403 / superadmin 200 / sin sesión 401; una fila por acción de CRUD, ciclo de vida,
+usuarios y login; `role_change` con `{from,to}`; paginación y filtros; 400 ante orden inválido;
+ninguna fila con contraseña/token). Suite completa **1519✓ / 69✗ / 5 skip (1593)** vs la base
+`40c3b11` 1506✓/69✗ (1580): **+13 en verde, 0 fallos nuevos**; los 69 fallos son los mismos 13
+archivos ambientales de Windows (verdes en CI). **Conteo verde autoritativo = CI del PR** (aún
+no abierto: ver nota de despliegue).
+
+### 16.4 GO/NO-GO
+- Diseño → GO para auditoría (no se declara "riesgo bajo").
+- CI → **pendiente**: la rama está pusheada pero el PR aún no se abrió (el token disponible no
+  tiene permiso de escritura de PRs); el CI corre recién al abrir el PR Draft.
+- Merge → NO-GO hasta auditoría independiente + CI verde, y después del PR #29.
+- Producción → **NO-GO** (bloqueantes externos intactos).
+
+---
+
 ## 1. Resumen ejecutivo
 
 El sitio público, el panel administrativo tipo CMS, el Page Builder, la biblioteca multimedia, los turnos, mensajes, usuarios, SEO, analítica, atribución, redirects, publicación programada, papelera, revisiones y newsletter básica ya están desarrollados y fusionados en `main`.
