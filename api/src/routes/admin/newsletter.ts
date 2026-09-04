@@ -70,6 +70,7 @@ newsletterRouter.get("/export", async (_req, res) => {
   const csv = "﻿" + lineas.join("\r\n");
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
   res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Content-Disposition", 'attachment; filename="newsletter.csv"');
   res.send(csv);
 });

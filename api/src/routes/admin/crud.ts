@@ -38,6 +38,16 @@ export interface CrudOpts {
   uniqueIcon?: boolean;
   /** columnas a devolver en list */
   listColumns?: string[];
+  /**
+   * Columnas por las que se permite buscar con `?q=&searchField=`. **Allowlist**:
+   * un `searchField` fuera de esta lista se rechaza con 400 en vez de usarse como
+   * identificador de columna. Sin esto, el query decidía qué columna filtrar sin
+   * restricción —knex escapa el identificador, así que no hay inyección SQL, pero
+   * dejaba enumerar por cualquier columna—. El panel busca del lado del cliente
+   * (no manda `searchField`), así que por defecto no hay campo permitido y el
+   * parámetro queda inerte salvo que un mount lo habilite explícitamente.
+   */
+  searchableColumns?: string[];
   /** ordering por defecto */
   defaultOrderBy?: string;
   /** transformación de payload antes de insert/update (JSON.stringify de campos json) */
@@ -81,8 +91,14 @@ export function crudRouter(opts: CrudOpts): Router {
     let qb = db(opts.table);
     if (opts.listColumns) qb = qb.select(opts.listColumns);
     if (opts.defaultOrderBy) qb = qb.orderBy(opts.defaultOrderBy);
-    if (q && (req.query.searchField as string)) {
-      qb = qb.where(req.query.searchField as string, "like", `%${q}%`);
+    const searchField = req.query.searchField as string | undefined;
+    if (q && searchField) {
+      // Allowlist: el campo tiene que estar declarado como buscable. Si no, 400 —
+      // no se usa un valor arbitrario del query como nombre de columna.
+      if (!opts.searchableColumns?.includes(searchField)) {
+        return res.status(400).json({ error: "campo de búsqueda no permitido" });
+      }
+      qb = qb.where(searchField, "like", `%${q}%`);
     }
     const rows = await qb;
     res.json(rows.map(serialize));

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { db } from "../db.js";
-import { comparePassword, signToken, requireAuth } from "../auth.js";
+import { comparePassword, signToken, requireAuth, DUMMY_PASSWORD_HASH } from "../auth.js";
 import { rateLimit } from "../rate-limit.js";
 import { registrarAccion, ipDe } from "../audit.js";
 import { capacidadesDe } from "../permisos.js";
@@ -17,6 +17,18 @@ const attempts = new Map<string, { count: number; resetAt: number }>();
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_MAX_ATTEMPTS = 8;
 
+// El Map de intentos crece con cada par IP+email distinto y no se vaciaba nunca:
+// en un barrido sostenido queda una fuga de memoria lenta. Se poda a lo sumo una
+// vez por ventana (no en cada request), borrando las entradas ya expiradas.
+let lastPrune = 0;
+function pruneAttempts(now: number) {
+  if (now - lastPrune < LOGIN_WINDOW_MS) return;
+  lastPrune = now;
+  for (const [k, v] of attempts) {
+    if (v.resetAt <= now) attempts.delete(k);
+  }
+}
+
 // Límite por IP además del contador por IP+email de más abajo: frena el
 // barrido de muchos emails distintos desde la misma conexión.
 const loginLimiter = rateLimit({
@@ -31,12 +43,17 @@ authRouter.post("/login", loginLimiter, async (req, res) => {
   const { email, password } = parsed.data;
   const key = `${req.ip}:${email.toLowerCase()}`;
   const now = Date.now();
+  pruneAttempts(now);
   const current = attempts.get(key);
   if (current && current.resetAt > now && current.count >= LOGIN_MAX_ATTEMPTS) {
     return res.status(429).json({ error: "demasiados intentos, intente nuevamente mas tarde" });
   }
   const user = await db("users").where({ email }).first();
   if (!user) {
+    // Se corre un compare contra un hash ficticio para que este camino tarde lo
+    // mismo que el de un email real: sin esto, la latencia menor delataba qué
+    // emails están registrados.
+    await comparePassword(password, DUMMY_PASSWORD_HASH);
     registerFailedAttempt(key, now);
     await registrarAccion({ actorId: null, actorName: null, actorRole: null, ip: ipDe(req), action: "login_fail", meta: { email } });
     return res.status(401).json({ error: "credenciales invalidas" });
