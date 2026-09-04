@@ -27,6 +27,12 @@ export type AuditAction =
   | "restore"
   | "purge"
   | "restore_revision"
+  // Flujo editorial (transiciones de estado de páginas).
+  | "submit_review"
+  | "approve"
+  | "return_draft"
+  | "archive"
+  | "unarchive"
   | "role_change"
   | "login_ok"
   | "login_fail";
