@@ -64,6 +64,16 @@ export async function comparePassword(pw: string, hash: string) {
 }
 
 /**
+ * Hash ficticio para igualar el tiempo del login cuando el email no existe.
+ *
+ * Sin esto, el camino "usuario inexistente" respondía sin correr `bcrypt`, y su
+ * latencia mucho menor permitía distinguir por tiempo qué emails están
+ * registrados. Comparando la contraseña contra este hash (mismo costo) los dos
+ * caminos tardan lo mismo. No es un secreto: es un hash de una cadena fija.
+ */
+export const DUMMY_PASSWORD_HASH = bcrypt.hashSync("timing-equalizer-not-a-real-password", 10);
+
+/**
  * Instante de corte para revocar sesiones, **truncado al segundo**.
  *
  * Los `iat` de JWT son segundos enteros (`Math.floor(now/1000)`). Si el corte se

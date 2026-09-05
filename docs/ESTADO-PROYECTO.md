@@ -466,6 +466,42 @@ autoridad final.
 
 ---
 
+## 19. Módulo — Endurecimiento de seguridad menor (backlog auditoría) (2026-09-04)
+
+**Rama:** `feat/security-hardening`, **apilada sobre `feat/jwt-revocacion`**. Cierra el backlog de
+hardening de severidad baja de la auditoría de seguridad (ninguno era merge-blocker), como un PR
+chico y de bajo riesgo. Sin migración; sólo código + pruebas.
+
+### 19.1 Qué entrega
+- **`X-Content-Type-Options: nosniff`** en los **tres** export CSV con datos (turnos, auditoría,
+  newsletter), junto al `Cache-Control: no-store` que ya tenían.
+- **`searchField` con allowlist (deny-by-default)** en `crud.ts`: `?q=&searchField=` sólo filtra
+  por una columna declarada en `CrudOpts.searchableColumns`; cualquier otra da **400**. Knex ya
+  escapaba el identificador (no había inyección SQL), pero se dejaba enumerar por cualquier
+  columna. El panel busca del lado del cliente (no manda `searchField`), así que ningún mount la
+  declara y el parámetro queda inerte — sin regresión funcional (S3).
+- **`sanitizarMeta` con denylist de claves** (`audit.ts`): descarta `password`/`token`/
+  `authorization`/`api_key`/`*_hash`/`contrase*` aunque sean escalares, además de objetos/arrays.
+  Segunda barrera: hoy ningún emisor pasa secretos, pero la bitácora se lee desde el panel.
+- **Login de tiempo constante** (`routes/auth.ts`, S4): el camino de email inexistente corre un
+  `bcrypt.compare` contra un hash ficticio (`DUMMY_PASSWORD_HASH`), igualando la latencia con la
+  del email real; antes la diferencia delataba qué correos están registrados.
+- **Poda del Map de intentos de login**: se limpian las entradas expiradas a lo sumo una vez por
+  ventana (no en cada request); antes crecía sin techo (fuga de memoria lenta bajo barrido).
+
+### 19.2 Validación local
+typecheck OK. `tests/security-hardening.test.ts` **8/8** (nosniff en los 3 export; `searchField`
+no permitido → 400; listar sin `searchField` → 200; login inexistente → 401) y
+`tests/sanitizar-meta.test.ts` **3/3** (unidad pura). Suite completa **1747/1747** verde. CI
+(MySQL 8.0) es la autoridad final.
+
+### 19.3 GO/NO-GO
+- Diseño → GO (bajo riesgo, sin migración).
+- Orden de revisión/merge: después de #29 → #30 → #31 → #32; se apila sobre `feat/jwt-revocacion`.
+- Producción → **NO-GO** (bloqueantes externos sin cambios).
+
+---
+
 ## 1. Resumen ejecutivo
 
 El sitio público, el panel administrativo tipo CMS, el Page Builder, la biblioteca multimedia, los turnos, mensajes, usuarios, SEO, analítica, atribución, redirects, publicación programada, papelera, revisiones y newsletter básica ya están desarrollados y fusionados en `main`.

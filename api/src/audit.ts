@@ -49,15 +49,25 @@ const MAX_META_STR = 200;
 const MAX_META_KEYS = 20;
 
 /**
- * Recorta `meta` a algo chico y no sensible: descarta valores que no sean
- * escalares simples, acota strings y limita la cantidad de claves. El emisor ya
- * pasa sólo metadatos de operación; esto es una segunda barrera.
+ * Claves cuyo valor nunca se persiste en la bitácora, aunque sea un escalar: un
+ * emisor futuro podría pasar sin querer una contraseña, un token o un hash en
+ * `meta`. Hoy ningún emisor lo hace (verificado), pero la bitácora se lee desde
+ * el panel y no es lugar para un secreto. Se compara sobre la clave en minúsculas.
  */
-function sanitizarMeta(meta: Record<string, unknown>): Record<string, unknown> {
+const CLAVES_SENSIBLES = /(pass|password|contrase|token|secret|authorization|api[_-]?key|_hash)/i;
+
+/**
+ * Recorta `meta` a algo chico y no sensible: descarta valores que no sean
+ * escalares simples, acota strings, limita la cantidad de claves y **redacta las
+ * claves sensibles** (contraseñas/tokens/hashes) aunque sean escalares. El emisor
+ * ya pasa sólo metadatos de operación; esto es una segunda barrera.
+ */
+export function sanitizarMeta(meta: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   let n = 0;
   for (const [k, v] of Object.entries(meta)) {
     if (n >= MAX_META_KEYS) break;
+    if (CLAVES_SENSIBLES.test(k)) continue; // se descarta por nombre, no se registra
     if (v === null || typeof v === "number" || typeof v === "boolean") {
       out[k] = v;
       n++;
