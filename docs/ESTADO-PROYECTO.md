@@ -502,6 +502,53 @@ no permitido → 400; listar sin `searchField` → 200; login inexistente → 40
 
 ---
 
+## 20. Módulo — Flujo editorial de páginas · API (2026-09-04)
+
+**Rama:** `feat/editorial-workflow`, **apilada sobre `feat/security-hardening`**. Primera mitad
+del módulo editorial (paso 5 del roadmap): la **máquina de estados en el backend**. La UI del
+panel (botones de transición + vista de diff de versiones) va en un PR siguiente, apilado sobre
+éste.
+
+### 20.1 Qué entrega
+- **Migración** `20260906000000_pages_editorial_states.ts`: amplía `pages.status` de
+  `draft`/`published` a **cinco** estados: `draft → in_review → approved → published → archived`.
+  No toca filas; reversible con pérdida controlada (los estados nuevos → `draft` antes de angostar).
+- **Máquina de estados** en `pages.ts` (6 transiciones, `POST /admin/pages/:id/<acción>`):
+  `submit` (draft→in_review), `approve` (in_review→approved), `publish`
+  (approved|in_review→published, limpia `publish_at`), `return` (in_review|approved→draft),
+  `archive` (published|approved→archived), `unarchive` (archived→draft). Actualización
+  **condicional atómica** (sólo si la fila está viva y en un estado de origen válido): estado
+  inválido → **409**, página inexistente/en papelera → **404**.
+- **Gateo por capacidad:** `submit`/`return` exigen `content.write` (un `autor` mueve su propio
+  borrador); `approve`/`publish`/`archive`/`unarchive` exigen `content.publish` (revisor/editor).
+  Se apoya en el RBAC del módulo #31.
+- **Bitácora:** cada transición deja acción propia (`submit_review`, `approve`, `return_draft`,
+  `archive`, `unarchive`, y `publish`) en `admin_audit_log`.
+
+### 20.2 No-regresión (contrato público intacto)
+- **Sólo `published` es público.** `pages-visibilidad.ts` no cambia: `in_review`/`approved`/
+  `archived` no se sirven en el sitio, igual que un borrador (probado). Los estados nuevos son
+  ortogonales a la papelera (`deleted_at`) y al agendado (`publish_at`).
+- Los caminos directos previos (`PUT` status, `/schedule`, `/content`, papelera, revisiones)
+  siguen funcionando sin cambios; el flujo editorial **agrega** la vía de revisión para `autor`.
+
+### 20.3 Validación local
+typecheck OK. `tests/editorial-workflow.test.ts` **7/7** (camino feliz; autor no aprueba/publica →
+403; transición inválida → 409; return; archivar/desarchivar; estados intermedios no públicos;
+404 en inexistente). `migrations` **26/26** (la nueva migración migra y revierte limpia). Suite
+completa **1754/1754** verde. CI (MySQL 8.0) es la autoridad final.
+
+### 20.4 GO/NO-GO
+- Diseño → GO para revisión. **Semántica a confirmar por el dueño** (documentada acá para poder
+  redirigir en el Draft): publicar es de dos pasos (aprobar y luego publicar); `archived` es un
+  estado propio, distinto de la papelera; `publish` limpia `publish_at` (publicar = en vivo ya).
+- Orden de revisión/merge: después de #29 → #30 → #31 → #32 → #33; se apila sobre
+  `feat/security-hardening`.
+- Pendiente (PR siguiente): UI del panel (transiciones + diff de versiones).
+- Producción → **NO-GO** (bloqueantes externos sin cambios).
+
+---
+
 ## 1. Resumen ejecutivo
 
 El sitio público, el panel administrativo tipo CMS, el Page Builder, la biblioteca multimedia, los turnos, mensajes, usuarios, SEO, analítica, atribución, redirects, publicación programada, papelera, revisiones y newsletter básica ya están desarrollados y fusionados en `main`.

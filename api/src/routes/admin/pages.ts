@@ -6,9 +6,9 @@ import { sanitizeHtml, sanitizeMapEmbed, safeLinkHref } from "../../html.js";
 import { validateBlockProps } from "../../block-validation.js";
 import { instanteDesdeHoraLocal } from "../../timezone.js";
 import { notFound } from "../../http.js";
-import { registrarAccion, actorDe } from "../../audit.js";
+import { registrarAccion, actorDe, type AuditAction } from "../../audit.js";
 import { tieneCapacidad } from "../../permisos.js";
-import type { Request } from "express";
+import type { Request, Response } from "express";
 
 /**
  * Publicar/despublicar/programar exige `content.publish`, además de la
@@ -512,6 +512,70 @@ pagesRouter.post("/:id/revisions/:revId/restore", async (req, res) => {
   await registrarAccion({ ...actorDe(req), action: "restore_revision", resourceType: "pages", resourceId: pageId, meta: { revId } });
   res.json({ ok: true });
 });
+
+// ---------------------------------------------------- flujo editorial (estados)
+
+/**
+ * Máquina de estados del flujo editorial: `draft → in_review → approved →
+ * published → archived`. Cada transición declara desde qué estados es válida, a
+ * cuál lleva, si exige `content.publish` (además de la `content.write` que ya
+ * pide el montaje del router para los `POST`) y qué acción de bitácora deja.
+ *
+ * - `submit`/`return` sólo exigen `content.write`: un `autor` manda su propio
+ *   borrador a revisión o lo retira; no publica.
+ * - `approve`/`publish`/`archive`/`unarchive` exigen `content.publish`
+ *   (revisor/editor). `publish` limpia `publish_at` —publicar es "en vivo ahora";
+ *   agendar es `POST /:id/schedule`—.
+ *
+ * **La visibilidad pública no cambia:** sólo `published` es público
+ * (`pages-visibilidad.ts`); `in_review`/`approved`/`archived` no se sirven, igual
+ * que un borrador. Los estados intermedios y el archivado son ortogonales a la
+ * papelera (`deleted_at`) y al agendado (`publish_at`).
+ */
+interface Transicion {
+  desde: string[];
+  hasta: string;
+  requierePublicar: boolean;
+  accion: AuditAction;
+  extra?: Record<string, unknown>;
+}
+
+const TRANSICIONES: Record<string, Transicion> = {
+  submit: { desde: ["draft"], hasta: "in_review", requierePublicar: false, accion: "submit_review" },
+  approve: { desde: ["in_review"], hasta: "approved", requierePublicar: true, accion: "approve" },
+  publish: { desde: ["approved", "in_review"], hasta: "published", requierePublicar: true, accion: "publish", extra: { publish_at: null } },
+  return: { desde: ["in_review", "approved"], hasta: "draft", requierePublicar: false, accion: "return_draft" },
+  archive: { desde: ["published", "approved"], hasta: "archived", requierePublicar: true, accion: "archive" },
+  unarchive: { desde: ["archived"], hasta: "draft", requierePublicar: true, accion: "unarchive" },
+};
+
+async function aplicarTransicion(req: Request, res: Response, nombre: keyof typeof TRANSICIONES) {
+  const t = TRANSICIONES[nombre];
+  if (t.requierePublicar && !puedePublicar(req)) return res.status(403).json({ error: "forbidden" });
+  const id = Number(req.params.id);
+  // Actualización condicional atómica: sólo si la página está viva (no en
+  // papelera) y en un estado de origen válido. Así no se saltea el orden ni se
+  // aplica dos veces la misma transición por una carrera entre dos revisores.
+  const n = await db("pages")
+    .where({ id })
+    .whereNull("deleted_at")
+    .whereIn("status", t.desde)
+    .update({ status: t.hasta, updated_at: db.fn.now(), ...(t.extra ?? {}) });
+  if (n === 0) {
+    const viva = await db("pages").where({ id }).whereNull("deleted_at").first("status");
+    if (!viva) return res.status(404).json({ error: "no encontrada" });
+    return res.status(409).json({ error: `no se puede "${nombre}" desde el estado "${viva.status}"` });
+  }
+  await registrarAccion({ ...actorDe(req), action: t.accion, resourceType: "pages", resourceId: id });
+  res.json({ ok: true, status: t.hasta });
+}
+
+pagesRouter.post("/:id/submit", (req, res) => aplicarTransicion(req, res, "submit"));
+pagesRouter.post("/:id/approve", (req, res) => aplicarTransicion(req, res, "approve"));
+pagesRouter.post("/:id/publish", (req, res) => aplicarTransicion(req, res, "publish"));
+pagesRouter.post("/:id/return", (req, res) => aplicarTransicion(req, res, "return"));
+pagesRouter.post("/:id/archive", (req, res) => aplicarTransicion(req, res, "archive"));
+pagesRouter.post("/:id/unarchive", (req, res) => aplicarTransicion(req, res, "unarchive"));
 
 /**
  * Saneo profundo de los props de un bloque.
