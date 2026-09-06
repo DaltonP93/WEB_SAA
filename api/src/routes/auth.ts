@@ -49,7 +49,10 @@ authRouter.post("/login", loginLimiter, async (req, res) => {
   }
   attempts.delete(key);
   const payload = { id: user.id, email: user.email, role: user.role, name: user.name };
-  const token = signToken(payload);
+  // La versión de sesión vigente viaja en el token; `requireAuth` la compara
+  // contra la base. `auth_version` es NOT NULL DEFAULT 0, pero si por un rollback
+  // de esquema no estuviera, se firma con 0 (y `requireAuth` la validará).
+  const token = signToken(payload, typeof user.auth_version === "number" ? user.auth_version : 0);
   await registrarAccion({ actorId: user.id, actorName: user.name, actorRole: user.role, ip: ipDe(req), action: "login_ok" });
   res.json({ token, user: payload });
 });
