@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { db } from "../../db.js";
-import { hashPassword, requireRole, instanteRevocacion } from "../../auth.js";
+import { hashPassword, requireRole } from "../../auth.js";
 import { badRequest, conflict, notFound } from "../../http.js";
 import { registrarAccion, actorDe } from "../../audit.js";
 import { ROLES } from "../../permisos.js";
@@ -121,14 +121,13 @@ usersRouter.put("/:id", async (req, res) => {
   if (p.role !== undefined) patch.role = p.role;
   if (p.password) {
     patch.password_hash = await hashPassword(p.password);
-    // Cambiar la contraseña cierra las sesiones abiertas de ese usuario: los
-    // tokens emitidos antes de este segundo quedan revocados (los compara
-    // `requireAuth`). El corte se trunca al segundo (`instanteRevocacion`) para no
-    // rechazar el token nuevo que se obtiene al volver a entrar en el mismo
-    // segundo. El cambio de rol y la baja NO necesitan esto: `requireAuth` lee el
-    // rol de la base y rechaza al usuario borrado, así que rigen en la próxima
-    // request.
-    patch.tokens_valid_after = instanteRevocacion();
+    // Cambiar la contraseña cierra las sesiones abiertas de ese usuario:
+    // **incrementa `auth_version`** de forma atómica en el mismo UPDATE, así que
+    // todo token con la versión anterior queda revocado y el token que se obtiene
+    // al volver a entrar (con la versión nueva) vale de inmediato — sin ventanas de
+    // tiempo ni carreras de reloj. El cambio de rol y la baja NO lo necesitan:
+    // `requireAuth` lee el rol de la base y rechaza al usuario borrado.
+    patch.auth_version = db.raw("auth_version + 1");
   }
 
   // Un `update({})` en knex genera SQL inválido. Sin cambios, no hay nada que
@@ -144,6 +143,22 @@ usersRouter.put("/:id", async (req, res) => {
     meta: cambioRol ? { from: actual.role, to: p.role } : undefined,
   });
   res.json(await db("users").where({ id }).first(CAMPOS));
+});
+
+/**
+ * Cierra **todas** las sesiones abiertas de un usuario sin cambiarle la
+ * contraseña: incrementa `auth_version`, con lo que todos sus tokens vigentes
+ * quedan revocados en la próxima request (los compara `requireAuth` por igualdad
+ * exacta). Sólo superadmin —el router ya lo exige—. Queda auditado.
+ */
+usersRouter.post("/:id/cerrar-sesiones", async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) throw badRequest("id invalido");
+  const actual = await db("users").where({ id }).first("id");
+  if (!actual) throw notFound("usuario no encontrado");
+  await db("users").where({ id }).update({ auth_version: db.raw("auth_version + 1") });
+  await registrarAccion({ ...actorDe(req), action: "update", resourceType: "users", resourceId: id, meta: { op: "cerrar_sesiones" } });
+  res.json({ ok: true });
 });
 
 usersRouter.delete("/:id", async (req, res) => {

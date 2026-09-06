@@ -4,6 +4,7 @@ import { z, ZodSchema, ZodObject } from "zod";
 import { db } from "../../db.js";
 import { isLucideIconName } from "../../lucide-icons.js";
 import { registrarAccion, actorDe } from "../../audit.js";
+import { likeLiteral } from "../../sql-like.js";
 
 /**
  * Icono administrable: o vacío, o un nombre que existe de verdad en la versión
@@ -98,7 +99,7 @@ export function crudRouter(opts: CrudOpts): Router {
       if (!opts.searchableColumns?.includes(searchField)) {
         return res.status(400).json({ error: "campo de búsqueda no permitido" });
       }
-      qb = qb.where(searchField, "like", `%${q}%`);
+      qb = qb.where(searchField, "like", likeLiteral(q));
     }
     const rows = await qb;
     res.json(rows.map(serialize));

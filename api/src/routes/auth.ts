@@ -3,7 +3,7 @@ import { z } from "zod";
 import { db } from "../db.js";
 import { comparePassword, signToken, requireAuth, DUMMY_PASSWORD_HASH } from "../auth.js";
 import { rateLimit } from "../rate-limit.js";
-import { registrarAccion, ipDe } from "../audit.js";
+import { registrarAccion, ipDe, seudonimoEmail } from "../audit.js";
 import { capacidadesDe } from "../permisos.js";
 
 export const authRouter = Router();
@@ -55,18 +55,21 @@ authRouter.post("/login", loginLimiter, async (req, res) => {
     // emails están registrados.
     await comparePassword(password, DUMMY_PASSWORD_HASH);
     registerFailedAttempt(key, now);
-    await registrarAccion({ actorId: null, actorName: null, actorRole: null, ip: ipDe(req), action: "login_fail", meta: { email } });
+    await registrarAccion({ actorId: null, actorName: null, actorRole: null, ip: ipDe(req), action: "login_fail", meta: { emailHash: seudonimoEmail(email) } });
     return res.status(401).json({ error: "credenciales invalidas" });
   }
   const ok = await comparePassword(password, user.password_hash);
   if (!ok) {
     registerFailedAttempt(key, now);
-    await registrarAccion({ actorId: null, actorName: null, actorRole: null, ip: ipDe(req), action: "login_fail", meta: { email } });
+    await registrarAccion({ actorId: null, actorName: null, actorRole: null, ip: ipDe(req), action: "login_fail", meta: { emailHash: seudonimoEmail(email) } });
     return res.status(401).json({ error: "credenciales invalidas" });
   }
   attempts.delete(key);
   const payload = { id: user.id, email: user.email, role: user.role, name: user.name };
-  const token = signToken(payload);
+  // La versión de sesión vigente viaja en el token; `requireAuth` la compara
+  // contra la base. `auth_version` es NOT NULL DEFAULT 0, pero si por un rollback
+  // de esquema no estuviera, se firma con 0 (y `requireAuth` la validará).
+  const token = signToken(payload, typeof user.auth_version === "number" ? user.auth_version : 0);
   await registrarAccion({ actorId: user.id, actorName: user.name, actorRole: user.role, ip: ipDe(req), action: "login_ok" });
   res.json({ token, user: payload });
 });

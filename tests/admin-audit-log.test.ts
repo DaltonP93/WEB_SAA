@@ -1,4 +1,5 @@
 import type { Server } from "node:http";
+import { createHash } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Knex } from "knex";
 import {
@@ -127,7 +128,7 @@ describeDb("bitácora de acciones administrativas", () => {
       for (const r of body.items) expect(r.action).toBe("login_ok");
     });
 
-    it("un login fallido queda como login_fail con el email intentado, sin contraseña", async () => {
+    it("un login fallido queda como login_fail con el correo SEUDONIMIZADO, sin correo en claro ni contraseña", async () => {
       const res = await login("admin@sanatorio.local", "contraseña-incorrecta");
       expect(res.status).toBe(401);
       const { body } = await listar("action=login_fail&limit=50");
@@ -135,9 +136,30 @@ describeDb("bitácora de acciones administrativas", () => {
       const fila = body.items[0];
       expect(fila.action).toBe("login_fail");
       expect(fila.actor_id).toBeNull(); // no se sabe quién
-      expect(fila.meta?.email).toBe("admin@sanatorio.local");
-      // Nunca la contraseña intentada.
+      // Seudónimo estable (hash), correlacionable pero sin PII: SHA-256 truncado.
+      const esperado = createHash("sha256").update("admin@sanatorio.local").digest("hex").slice(0, 16);
+      expect(fila.meta?.emailHash).toBe(esperado);
+      // El correo en claro NO se guarda; tampoco la contraseña intentada.
+      expect(JSON.stringify(fila)).not.toContain("admin@sanatorio.local");
       expect(JSON.stringify(fila)).not.toContain("contraseña-incorrecta");
+    });
+
+    it("la IP de la bitácora no se puede falsificar con X-Real-IP", async () => {
+      // `ipDe` ahora usa `req.ip`, que respeta `trust proxy` de Express. Ese
+      // mecanismo gobierna sólo `X-Forwarded-For` y **nunca** consulta
+      // `X-Real-IP` (es una convención de Nginx, no de Express). Antes `ipDe`
+      // leía `X-Real-IP` de la cabecera a ciegas, así que cualquiera podía
+      // dictar la IP del registro. Se manda sólo `X-Real-IP` para probar que ya
+      // no llega a la bitácora por ninguna vía.
+      const res = await fetch(`${baseUrl}/api/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Real-IP": "203.0.113.7" },
+        body: JSON.stringify({ email: "spoof@sanatorio.local", password: "x" }),
+      });
+      expect(res.status).toBe(401);
+      const { body } = await listar("action=login_fail&limit=100");
+      const forjada = body.items.some((r: any) => r.ip === "203.0.113.7");
+      expect(forjada, "la IP falsificada por X-Real-IP llegó a la bitácora").toBe(false);
     });
   });
 
@@ -195,10 +217,16 @@ describeDb("bitácora de acciones administrativas", () => {
       expect(crear.status, await crear.clone().text()).toBe(201);
       pageId = (await crear.json()).id;
 
-      const put = (body: unknown) =>
-        fetch(`${baseUrl}/api/admin/pages/${pageId}`, { method: "PUT", headers: json(tokenSuperadmin), body: JSON.stringify(body) });
-      expect((await put({ status: "published" })).status).toBe(200);
-      expect((await put({ status: "draft" })).status).toBe(200);
+      const trans = (nombre: string) =>
+        fetch(`${baseUrl}/api/admin/pages/${pageId}/${nombre}`, { method: "POST", headers: auth(tokenSuperadmin) });
+      // Publicar por el flujo (deja publish), despublicar (unpublish).
+      expect((await trans("submit")).status).toBe(200);
+      expect((await trans("approve")).status).toBe(200);
+      expect((await trans("publish")).status).toBe(200);
+      expect((await trans("unpublish")).status).toBe(200);
+      // Reencaminar y programar (deja schedule).
+      expect((await trans("submit")).status).toBe(200);
+      expect((await trans("approve")).status).toBe(200);
       expect(
         (await fetch(`${baseUrl}/api/admin/pages/${pageId}/schedule`, {
           method: "POST",
@@ -224,13 +252,11 @@ describeDb("bitácora de acciones administrativas", () => {
     });
 
     /**
-     * El Page Builder guarda por `PUT /:id/content` (no por `PUT /:id`), y ese
-     * camino también puede publicar/despublicar. Antes no llamaba a
-     * `registrarAccion`, así que publicar desde el Page Builder no dejaba rastro
-     * mientras que publicar desde la lista sí. Se prueba que /content traza el
-     * cambio de estado real.
+     * Bloqueante D: el Page Builder guarda por `PUT /:id/content`, que **nunca**
+     * cambia la publicación (eso es de las transiciones). Guardar deja `update`;
+     * mandar `status` por esa vía se rechaza con 400 y no deja `publish`/`unpublish`.
      */
-    it("publicar y despublicar desde el Page Builder (/content) queda en la bitácora", async () => {
+    it("guardar por /content deja 'update' y nunca publica ni despublica", async () => {
       const crear = await fetch(`${baseUrl}/api/admin/pages`, {
         method: "POST",
         headers: json(tokenSuperadmin),
@@ -245,9 +271,11 @@ describeDb("bitácora de acciones administrativas", () => {
           headers: json(tokenSuperadmin),
           body: JSON.stringify(body),
         });
-      expect((await content({ status: "published", blocks: [] })).status).toBe(200);
-      expect((await content({ status: "draft", blocks: [] })).status).toBe(200);
-      expect((await content({ blocks: [] })).status).toBe(200); // sin status → "update"
+      // Intentar publicar por /content se rechaza (no cambia el estado por esa vía).
+      expect((await content({ status: "published", blocks: [] })).status).toBe(400);
+      // Guardar contenido normal deja 'update'.
+      expect((await content({ title: "X", blocks: [] })).status).toBe(200);
+      expect((await content({ blocks: [] })).status).toBe(200);
 
       const acciones: string[] = [];
       for (let offset = 0; ; offset += 100) {
@@ -255,9 +283,9 @@ describeDb("bitácora de acciones administrativas", () => {
         for (const r of body.items) if (String(r.resource_id) === String(pid)) acciones.push(r.action);
         if (offset + 100 >= body.total) break;
       }
-      // Publicar y despublicar por /content tienen que estar registrados.
-      expect(acciones.includes("publish"), "publicar desde /content no dejó rastro").toBe(true);
-      expect(acciones.includes("unpublish"), "despublicar desde /content no dejó rastro").toBe(true);
+      expect(acciones.includes("update"), "guardar contenido no dejó 'update'").toBe(true);
+      expect(acciones.includes("publish"), "/content no debe publicar").toBe(false);
+      expect(acciones.includes("unpublish"), "/content no debe despublicar").toBe(false);
     });
   });
 

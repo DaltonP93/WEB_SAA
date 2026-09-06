@@ -161,58 +161,64 @@ describeDb("flujo editorial de páginas", () => {
     expect((await admin(`pages/999999/submit`, "POST", tokens.superadmin)).status).toBe(404);
   });
 
-  // ---- Guardas de edición vs. publicación (hallazgos Codex #36 F1/F3/F6) ----
-
-  it("F1/F6: el autor guarda contenido reenviando el estado actual (draft y in_review) sin 400/403", async () => {
-    const { id } = await crearBorrador("autor-guarda-estado");
-    // El Page Builder reenvía el estado actual en cada guardado. Un borrador:
-    const g1 = await admin(`pages/${id}/content`, "PUT", tokens.autor, {
-      title: "Editado por autor",
-      status: "draft",
-      blocks: [],
-    });
-    expect(g1.status, await g1.clone().text()).toBe(200);
-    // Mandado a revisión: el schema tiene que aceptar `in_review` (antes daba 400)
-    // y el guard, al no cambiar el estado, no exige content.publish.
-    expect((await admin(`pages/${id}/submit`, "POST", tokens.autor)).status).toBe(200);
-    const g2 = await admin(`pages/${id}/content`, "PUT", tokens.autor, {
-      title: "Otra edición en revisión",
-      status: "in_review",
-      blocks: [],
-    });
-    expect(g2.status, await g2.clone().text()).toBe(200);
-    expect(await estado(id)).toBe("in_review"); // el guardado no cambió el estado
-  });
-
-  it("F6: el autor NO puede cambiar el estado por /content (in_review→published da 403)", async () => {
-    const { id } = await crearBorrador("autor-no-cambia-estado");
+  it("despublicar (unpublish) retira una publicada y la vuelve a borrador, limpiando publish_at", async () => {
+    const { id, slug } = await crearBorrador("unpublish-flujo");
     await admin(`pages/${id}/submit`, "POST", tokens.autor);
-    const res = await admin(`pages/${id}/content`, "PUT", tokens.autor, { status: "published", blocks: [] });
-    expect(res.status).toBe(403);
-    expect(await estado(id)).toBe("in_review"); // no publicó
-  });
-
-  it("F3: el autor NO puede cambiar publish_at por PUT sin status (no puede publicar una agendada ni ocultar una viva)", async () => {
-    const { id, slug } = await crearBorrador("autor-no-agenda");
-    // El revisor la programa a futuro: queda published + publish_at futuro → aún no pública.
-    expect((await admin(`pages/${id}/schedule`, "POST", tokens.revisor, { publish_at: "2099-01-01T10:00" })).status).toBe(200);
-    expect((await fetch(`${baseUrl}/api/public/pages/${slug}`)).status).toBe(404);
-    // El autor intenta publicarla ya limpiando la agenda (publish_at:null) sin tocar status → 403.
-    const abuso = await admin(`pages/${id}`, "PUT", tokens.autor, { publish_at: null });
-    expect(abuso.status, await abuso.clone().text()).toBe(403);
-    expect((await fetch(`${baseUrl}/api/public/pages/${slug}`)).status).toBe(404); // sigue oculta
-    // El revisor (content.publish) sí puede limpiar la agenda → pública ya.
-    expect((await admin(`pages/${id}`, "PUT", tokens.revisor, { publish_at: null })).status).toBe(200);
+    await admin(`pages/${id}/approve`, "POST", tokens.revisor);
+    await admin(`pages/${id}/publish`, "POST", tokens.revisor);
+    expect(await estado(id)).toBe("published");
     expect((await fetch(`${baseUrl}/api/public/pages/${slug}`)).status).toBe(200);
+
+    // El autor no puede despublicar (no tiene content.publish).
+    expect((await admin(`pages/${id}/unpublish`, "POST", tokens.autor)).status).toBe(403);
+    // El revisor sí.
+    expect((await admin(`pages/${id}/unpublish`, "POST", tokens.revisor)).status).toBe(200);
+    expect(await estado(id)).toBe("draft");
+    expect((await fetch(`${baseUrl}/api/public/pages/${slug}`)).status).toBe(404);
+    expect((await db("pages").where({ id }).first("publish_at")).publish_at).toBeNull();
+
+    // unpublish sólo sale de published: desde draft da 409.
+    expect((await admin(`pages/${id}/unpublish`, "POST", tokens.revisor)).status).toBe(409);
   });
 
-  it("F8: la bitácora se puede filtrar por una acción editorial (approve) sin 400", async () => {
-    const { id } = await crearBorrador("audit-approve");
+  it("el estado NO se cambia editando: PUT y /content con status o publish_at dan 400", async () => {
+    const { id } = await crearBorrador("no-estado-por-edicion");
+    for (const ruta of [`pages/${id}`, `pages/${id}/content`]) {
+      const body = ruta.endsWith("/content")
+        ? { status: "published", blocks: [] }
+        : { status: "published" };
+      expect((await admin(ruta, "PUT", tokens.superadmin, body)).status, `${ruta} con status`).toBe(400);
+      const conFecha = ruta.endsWith("/content")
+        ? { publish_at: "2099-01-01T00:00", blocks: [] }
+        : { publish_at: "2099-01-01T00:00" };
+      expect((await admin(ruta, "PUT", tokens.superadmin, conFecha)).status, `${ruta} con publish_at`).toBe(400);
+    }
+    // Sigue en borrador: ninguna edición lo movió.
+    expect(await estado(id)).toBe("draft");
+  });
+
+  it("concurrencia real: dos submit simultáneos → exactamente uno 200 y uno 409 (FOR UPDATE)", async () => {
+    const { id } = await crearBorrador("concurrencia-submit");
+    // Dos transiciones idénticas disparadas a la vez sobre la misma página. El
+    // lock de fila serializa: la segunda ve el estado nuevo (in_review) y su
+    // origen (draft) ya no coincide → 409. Sin el lock, ambas podían leer "draft".
+    const [a, b] = await Promise.all([
+      admin(`pages/${id}/submit`, "POST", tokens.autor),
+      admin(`pages/${id}/submit`, "POST", tokens.autor),
+    ]);
+    const estados = [a.status, b.status].sort();
+    expect(estados).toEqual([200, 409]);
+    expect(await estado(id)).toBe("in_review");
+  });
+
+  it("la bitácora registra el from/to exacto de cada transición", async () => {
+    const { id } = await crearBorrador("auditoria-transicion");
     await admin(`pages/${id}/submit`, "POST", tokens.autor);
-    expect((await admin(`pages/${id}/approve`, "POST", tokens.revisor)).status).toBe(200);
-    const res = await admin(`audit?action=approve&resource_type=pages&limit=100`, "GET", tokens.superadmin);
-    expect(res.status).toBe(200); // antes: 400 (acción no permitida en el filtro)
-    const body = await res.json();
-    expect(body.items.some((r: any) => String(r.resource_id) === String(id) && r.action === "approve")).toBe(true);
+    await admin(`pages/${id}/approve`, "POST", tokens.revisor);
+
+    const audit = await (await admin(`audit?resource_type=pages&action=approve&limit=50`)).json();
+    const fila = audit.items.find((r: any) => String(r.resource_id) === String(id));
+    expect(fila, "no se registró la aprobación").toBeTruthy();
+    expect(fila.meta).toMatchObject({ from: "in_review", to: "approved" });
   });
 });

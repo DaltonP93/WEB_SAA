@@ -20,50 +20,17 @@ import type { Request, Response } from "express";
  */
 const puedePublicar = (req: Request): boolean => tieneCapacidad(req.user?.role, "content.publish");
 
-/**
- * Estados posibles de una página, incluidos los del flujo editorial. El editor
- * (Page Builder / lista) **relee** el estado actual y lo reenvía en cada
- * guardado, así que el esquema tiene que aceptar los cinco: si sólo aceptara
- * `draft`/`published`, editar el contenido de una página en `in_review`,
- * `approved` o `archived` respondía 400. Que un estado se **acepte** en el
- * payload no significa que cambiarlo sea gratis: cambiar de estado (o de
- * `publish_at`) exige `content.publish` — ver `esCambioDePublicacion`.
- */
-const ESTADOS_PAGINA = ["draft", "in_review", "approved", "published", "archived"] as const;
-type EstadoPagina = (typeof ESTADOS_PAGINA)[number];
-
-/** Al crear, estos estados ya afectan (o preparan) la publicación: exigen `content.publish`. */
-const ESTADOS_PUBLICACION_AL_CREAR = new Set<EstadoPagina>(["approved", "published", "archived"]);
-
-/** ¿Dos instantes de `publish_at` son el mismo? `null` (sin agenda) ≠ una fecha. */
-function mismoInstante(a: Date | string | null | undefined, b: Date | string | null | undefined): boolean {
-  const ta = a == null ? null : new Date(a).getTime();
-  const tb = b == null ? null : new Date(b).getTime();
-  return ta === tb;
-}
-
-/**
- * ¿El patch cambia la publicación respecto de lo que hay guardado? Es lo que
- * exige `content.publish`, y se decide por **cambio real**, no por presencia del
- * campo: el editor reenvía el `status` actual en cada guardado, así que gatear
- * "vino status" haría que un `autor` no pudiera ni guardar un borrador. Cambia la
- * publicación si el estado pasa a ser otro, o si `publish_at` (que controla la
- * visibilidad pública, `pages-visibilidad.ts`) pasa a un instante distinto —
- * incluido pasar de una fecha futura a `null`, que publica en vivo ya.
- */
-function esCambioDePublicacion(
-  actual: { status: string; publish_at: Date | string | null },
-  patch: Record<string, unknown>,
-): boolean {
-  const cambiaEstado = patch.status !== undefined && patch.status !== actual.status;
-  const cambiaAgenda =
-    "publish_at" in patch && !mismoInstante(actual.publish_at, patch.publish_at as Date | null);
-  return cambiaEstado || cambiaAgenda;
-}
-
 export const pagesRouter = Router();
 
 const COLUMNAS_LISTA = ["id", "slug", "title", "status", "order", "publish_at", "updated_at"] as const;
+
+/**
+ * Resultado de una operación de estado resuelta dentro de una transacción:
+ * o una respuesta HTTP de error decidida bajo el lock, o el estado de origen
+ * (`desde`) que se leyó al aplicar el cambio. Explícito para que el `"http" in …`
+ * narrowing sea inequívoco fuera de la transacción.
+ */
+type ResultadoEstado = { http: 403 | 404 | 409; body: { error: string } } | { desde: string };
 
 pagesRouter.get("/", async (_req, res) => {
   // La papelera vive aparte: la lista principal muestra sólo lo que no está
@@ -102,47 +69,58 @@ const seoSchema = z
   })
   .strip();
 
-const pageSchema = z.object({
+/**
+ * Alta de página. Acepta un `status` **inicial** (borrador por defecto; publicar
+ * de entrada exige `content.publish`), porque fijar el estado de una página que
+ * todavía no existe no es *cambiar* el estado de una existente —eso es lo que el
+ * flujo editorial reserva a las transiciones—. NO acepta `publish_at`: agendar es
+ * `POST /:id/schedule` sobre una página ya creada.
+ */
+const pageCreateSchema = z.object({
   slug: z.string().trim().min(1).max(191).regex(/^[a-z0-9-]+$/),
   title: z.string().trim().min(1).max(255),
-  status: z.enum(ESTADOS_PAGINA).optional(),
+  status: z.enum(["draft", "published"]).optional(),
   seo: seoSchema.optional(),
   order: z.number().int().optional(),
-  // Se acepta como texto y se interpreta abajo en la zona institucional; el
-  // esquema sólo comprueba que sea texto o nulo (vaciar el agendamiento).
-  publish_at: z.string().nullable().optional(),
 });
 
 /**
- * Traduce el `publish_at` del payload a lo que se guarda.
- *
- * Devuelve `{ set: Date|null }` cuando hay que escribir la columna, o
- * `{ invalido: true }` cuando vino algo que no es una fecha. La zona la resuelve
- * `instanteDesdeHoraLocal` (institucional), no la del proceso.
+ * Edición de metadatos (`PUT /:id`) y de contenido (`/content`): NO llevan
+ * `status` ni `publish_at`. La publicación —estado y fecha— se controla **sólo**
+ * por las transiciones del flujo editorial y por `POST /:id/schedule`. Un cliente
+ * viejo que mande esos campos recibe un 400 explícito (ver `rechazarCamposDeEstado`).
  */
-function resolverPublishAt(valor: string | null | undefined): { set: Date | null } | { invalido: true } {
-  const instante = instanteDesdeHoraLocal(valor);
-  if (instante === undefined) return { invalido: true }; // vino texto, pero no es fecha
-  return { set: instante }; // null (vaciar) o Date (agendar)
+const pageMetaSchema = z.object({
+  slug: z.string().trim().min(1).max(191).regex(/^[a-z0-9-]+$/).optional(),
+  title: z.string().trim().min(1).max(255).optional(),
+  seo: seoSchema.optional(),
+  order: z.number().int().optional(),
+});
+
+/**
+ * Rechaza, con un 400 claro, cualquier intento de cambiar la publicación por la
+ * puerta de la edición. `status` y `publish_at` sólo se tocan por las
+ * transiciones / `schedule`; aceptarlos acá era el agujero que este bloqueante
+ * cierra (una edición podía publicar o despublicar sin pasar por el flujo).
+ * Devuelve `true` si ya respondió.
+ */
+function rechazarCamposDeEstado(req: Request, res: Response): boolean {
+  const b = req.body as Record<string, unknown> | null | undefined;
+  if (b && typeof b === "object" && ("status" in b || "publish_at" in b)) {
+    res.status(400).json({
+      error:
+        "El estado y la fecha de publicación se cambian con las acciones del flujo editorial (enviar, aprobar, publicar, despublicar, archivar) y con “programar”, no editando la página.",
+    });
+    return true;
+  }
+  return false;
 }
 
 pagesRouter.post("/", async (req, res) => {
-  const parsed = pageSchema.safeParse(req.body);
+  const parsed = pageCreateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "payload invalido", issues: parsed.error.issues });
   const p = parsed.data;
-  // Crear en un estado que publica o lo prepara (approved/published/archived)
-  // exige `content.publish`. Un `autor` puede crear en `draft` o `in_review`
-  // (mandar a revisión es `content.write`), no en los otros.
-  if (p.status && ESTADOS_PUBLICACION_AL_CREAR.has(p.status) && !puedePublicar(req)) {
-    return res.status(403).json({ error: "forbidden" });
-  }
-
-  let publishAt: Date | null = null;
-  if (p.publish_at !== undefined && p.publish_at !== null && p.publish_at !== "") {
-    const r = resolverPublishAt(p.publish_at);
-    if ("invalido" in r) return res.status(400).json({ error: "publish_at no es una fecha válida" });
-    publishAt = r.set;
-  }
+  if (p.status === "published" && !puedePublicar(req)) return res.status(403).json({ error: "forbidden" });
 
   const [id] = await db("pages").insert({
     slug: p.slug,
@@ -150,84 +128,54 @@ pagesRouter.post("/", async (req, res) => {
     status: p.status ?? "draft",
     seo: p.seo ? JSON.stringify(p.seo) : null,
     order: p.order ?? 0,
-    publish_at: publishAt,
+    publish_at: null,
   });
   await registrarAccion({ ...actorDe(req), action: "create", resourceType: "pages", resourceId: id, meta: { slug: p.slug } });
   res.status(201).json({ id });
 });
 
 /**
- * Construye el patch de metadatos desde un payload parcial. Resuelve `publish_at`
- * en la zona institucional. Lanza 400 si la fecha vino como texto no-fecha.
+ * Construye el patch de metadatos desde un payload parcial (sólo edición: título,
+ * slug, SEO y orden). `status` y `publish_at` NO se tocan por acá —los gobiernan
+ * las transiciones y `schedule`—, por eso no aparecen.
  */
 function construirMetaPatch(p: {
   title?: string;
   slug?: string;
-  status?: EstadoPagina;
   seo?: unknown;
   order?: number;
-  publish_at?: string | null;
 }): Record<string, unknown> {
   const patch: Record<string, unknown> = {};
   if (p.title !== undefined) patch.title = p.title;
   if (p.slug !== undefined) patch.slug = p.slug;
-  if (p.status !== undefined) patch.status = p.status;
   if (p.order !== undefined) patch.order = p.order;
   if (p.seo !== undefined) patch.seo = p.seo ? JSON.stringify(p.seo) : null;
-  if ("publish_at" in p) {
-    const r = resolverPublishAt(p.publish_at ?? null);
-    if ("invalido" in r) throw new PublishAtInvalido();
-    patch.publish_at = r.set;
-  }
   return patch;
 }
 
-class PublishAtInvalido extends Error {}
-
 pagesRouter.put("/:id", async (req, res) => {
-  const parsed = pageSchema.partial().safeParse(req.body);
+  if (rechazarCamposDeEstado(req, res)) return;
+  const parsed = pageMetaSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "payload invalido", issues: parsed.error.issues });
-  let patch: Record<string, unknown>;
-  try {
-    patch = construirMetaPatch(parsed.data);
-  } catch (e) {
-    if (e instanceof PublishAtInvalido) return res.status(400).json({ error: "publish_at no es una fecha válida" });
-    throw e;
-  }
-  // El estado y `publish_at` guardados deciden si esto es una publicación. Sin
-  // leerlos, gatear por "vino el campo" bloqueaba al `autor` en cada guardado
-  // (el editor reenvía el estado actual) y, al revés, dejaba pasar un cambio de
-  // `publish_at` sin `status` que sí cambia la visibilidad.
-  const actual = await db("pages")
-    .where({ id: req.params.id })
-    .whereNull("deleted_at")
-    .first("status", "publish_at");
-  if (!actual) return res.status(404).json({ error: "no encontrada" });
-  if (esCambioDePublicacion(actual, patch) && !puedePublicar(req)) {
-    return res.status(403).json({ error: "forbidden" });
-  }
+  const patch = construirMetaPatch(parsed.data);
   patch.updated_at = db.fn.now();
   // La papelera es intocable desde la edición: `whereNull(deleted_at)`.
   const n = await db("pages").where({ id: req.params.id }).whereNull("deleted_at").update(patch);
   if (n === 0) return res.status(404).json({ error: "no encontrada" });
-  await registrarAccion({ ...actorDe(req), action: accionDeEstado(actual.status, patch), resourceType: "pages", resourceId: req.params.id });
+  // Editar metadatos no cambia la publicación: siempre es `update`.
+  await registrarAccion({ ...actorDe(req), action: "update", resourceType: "pages", resourceId: req.params.id });
   res.json({ ok: true });
 });
 
-/**
- * Acción de bitácora según el cambio de estado: `publish`/`unpublish` sólo cuando
- * el estado **cambia** a `published`/`draft`; reenviar el mismo estado (un
- * guardado de contenido cualquiera) es `update`, no un falso "publish".
- */
-function accionDeEstado(anterior: string, patch: Record<string, unknown>): AuditAction {
-  const nuevo = patch.status;
-  if (nuevo === undefined || nuevo === anterior) return "update";
-  if (nuevo === "published") return "publish";
-  if (nuevo === "draft") return "unpublish";
-  return "update";
-}
-
 const scheduleSchema = z.object({ publish_at: z.string() });
+
+/**
+ * Estados desde los que se puede programar. Programar es publicar con fecha
+ * futura, así que sale de los mismos estados que la transición `publish`
+ * (revisado y listo) más `published` (reprogramar una página ya publicada).
+ * Desde `draft` o `archived` da 409: hay que pasar antes por el flujo.
+ */
+const SCHEDULE_DESDE = ["in_review", "approved", "published"];
 
 /**
  * Programar la publicación: pasa la página a `published` con una fecha **futura**.
@@ -240,13 +188,15 @@ const scheduleSchema = z.object({ publish_at: z.string() });
  * —la misma zona que usa el servidor para guardar `publish_at`— y la comparación
  * contra `Date.now()` es entre instantes absolutos, independiente de zonas.
  *
- * "Publicar ya" es otra cosa (status published + `publish_at: null`) y va por el
- * `PUT` de metadatos; acá una fecha pasada se rechaza.
+ * Atómico y serializado: se bloquea la fila con `FOR UPDATE`, se decide sobre el
+ * estado ya bloqueado (existe / no está en la papelera / estado de origen válido)
+ * y se escribe dentro de la misma transacción. Dos programaciones simultáneas no
+ * se pisan. "Publicar ya" es la transición `publish` (limpia `publish_at`); acá
+ * una fecha pasada se rechaza.
  */
 pagesRouter.post("/:id/schedule", async (req, res) => {
   const parsed = scheduleSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "payload invalido" });
-  if (!puedePublicar(req)) return res.status(403).json({ error: "forbidden" });
   const instante = instanteDesdeHoraLocal(parsed.data.publish_at);
   if (instante === null) return res.status(400).json({ error: "Hay que indicar una fecha para programar." });
   if (instante === undefined) return res.status(400).json({ error: "La fecha no es válida." });
@@ -255,12 +205,25 @@ pagesRouter.post("/:id/schedule", async (req, res) => {
       .status(400)
       .json({ error: "La fecha de publicación tiene que ser futura. Para publicar ya, usá “Publicar”." });
   }
-  const n = await db("pages")
-    .where({ id: req.params.id })
-    .whereNull("deleted_at")
-    .update({ status: "published", publish_at: instante, updated_at: db.fn.now() });
-  if (n === 0) return res.status(404).json({ error: "no encontrada" });
-  await registrarAccion({ ...actorDe(req), action: "schedule", resourceType: "pages", resourceId: req.params.id });
+  if (!puedePublicar(req)) return res.status(403).json({ error: "forbidden" });
+  const id = Number(req.params.id);
+  const resultado = await db.transaction<ResultadoEstado>(async (trx) => {
+    const page = await trx("pages").where({ id }).forUpdate().first();
+    if (!page || page.deleted_at != null) return { http: 404, body: { error: "no encontrada" } };
+    if (!SCHEDULE_DESDE.includes(page.status)) {
+      return { http: 409, body: { error: `no se puede programar desde el estado "${page.status}"` } };
+    }
+    await trx("pages").where({ id }).update({ status: "published", publish_at: instante, updated_at: trx.fn.now() });
+    return { desde: page.status as string };
+  });
+  if ("http" in resultado) return res.status(resultado.http).json(resultado.body);
+  await registrarAccion({
+    ...actorDe(req),
+    action: "schedule",
+    resourceType: "pages",
+    resourceId: id,
+    meta: { from: resultado.desde, to: "published" },
+  });
   res.json({ ok: true });
 });
 
@@ -410,9 +373,7 @@ async function cargarPaginaViva(trx: Knex.Transaction, pageId: number) {
 const contentSchema = z.object({
   title: z.string().trim().min(1).max(255).optional(),
   slug: z.string().trim().min(1).max(191).regex(/^[a-z0-9-]+$/).optional(),
-  status: z.enum(ESTADOS_PAGINA).optional(),
   seo: seoSchema.optional(),
-  publish_at: z.string().nullable().optional(),
   blocks: z.array(z.object({ type: z.string(), props: z.unknown() })).max(80),
 });
 
@@ -422,12 +383,17 @@ const contentSchema = z.object({
  * llamadas (metadatos por un lado, bloques por otro) que dejaban fotos
  * intermedias inconsistentes y estado a medias si la segunda fallaba.
  *
+ * **No cambia la publicación.** No acepta `status` ni `publish_at`: guardar el
+ * contenido nunca publica, despublica ni reprograma —eso es del flujo editorial y
+ * de `schedule`—. Un cliente viejo que los mande recibe 400 (`rechazarCamposDeEstado`).
+ *
  * Orden dentro de la transacción: cargar la fila viva (404 si no está o está en
  * la papelera) → **archivar el estado anterior** → aplicar metadatos → reemplazar
  * bloques. Si algo falla, la transacción revierte entera: nunca quedan metadatos
  * actualizados con bloques a medias.
  */
 pagesRouter.put("/:id/content", async (req, res) => {
+  if (rechazarCamposDeEstado(req, res)) return;
   const pageId = Number(req.params.id);
   const parsed = contentSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "payload invalido", issues: parsed.error.issues });
@@ -435,23 +401,7 @@ pagesRouter.put("/:id/content", async (req, res) => {
   const bloques = validarBloques(parsed.data.blocks);
   if (!bloques.ok) return res.status(400).json({ error: "bloque invalido", block: bloques.invalido });
 
-  let metaPatch: Record<string, unknown>;
-  try {
-    metaPatch = construirMetaPatch(parsed.data);
-  } catch (e) {
-    if (e instanceof PublishAtInvalido) return res.status(400).json({ error: "publish_at no es una fecha válida" });
-    throw e;
-  }
-
-  // Guard de publicación por **cambio real** (ver `esCambioDePublicacion`): el
-  // Page Builder reenvía el estado actual en cada guardado, así que un `autor`
-  // (con `content.write`, sin `content.publish`) tiene que poder guardar bloques
-  // y metadatos de una página en cualquier estado sin que se lo tome por publicar.
-  const actual = await db("pages").where({ id: pageId }).whereNull("deleted_at").first("status", "publish_at");
-  if (!actual) return res.status(404).json({ error: "no encontrada" });
-  if (esCambioDePublicacion(actual, metaPatch) && !puedePublicar(req)) {
-    return res.status(403).json({ error: "forbidden" });
-  }
+  const metaPatch = construirMetaPatch(parsed.data);
 
   await db.transaction(async (trx) => {
     await cargarPaginaViva(trx, pageId);
@@ -461,10 +411,8 @@ pagesRouter.put("/:id/content", async (req, res) => {
       .update({ ...metaPatch, updated_at: trx.fn.now() });
     await reemplazarBloques(trx, pageId, bloques.validados);
   });
-  // El guardado del Page Builder también puede publicar/despublicar (acepta
-  // `status`); se traza igual que el `PUT` de metadatos. `accionDeEstado` sólo
-  // marca publish/unpublish cuando el estado **cambia**, no en un guardado común.
-  await registrarAccion({ ...actorDe(req), action: accionDeEstado(actual.status, metaPatch), resourceType: "pages", resourceId: pageId });
+  // Guardar contenido no cambia la publicación: siempre es `update`.
+  await registrarAccion({ ...actorDe(req), action: "update", resourceType: "pages", resourceId: pageId });
   res.json({ ok: true });
 });
 
@@ -524,62 +472,64 @@ pagesRouter.get("/:id/revisions", async (req, res) => {
 });
 
 /**
- * Restaura una versión: aplica su título, estado, SEO, `publish_at` y bloques
- * como estado actual. **Archiva primero el estado actual**, de modo que restaurar
+ * Esquema estricto del snapshot que se restaura.
+ *
+ * Restaurar escribe en la página: la foto tiene que tener forma conocida antes de
+ * aplicarse. Un snapshot ilegible o con forma inesperada (fila editada a mano,
+ * versión de un esquema viejo) se rechaza con 422 en vez de volcar basura. Se
+ * exige `title` y `blocks` (arreglo de `{type, props}`); `status`, `slug` y
+ * `publish_at` se aceptan pero **no se aplican** (ver abajo).
+ */
+const revisionSnapshotSchema = z.object({
+  title: z.string().min(1),
+  slug: z.string().optional(),
+  status: z.string().optional(),
+  seo: seoSchema.nullable().optional(),
+  publish_at: z.string().nullable().optional(),
+  blocks: z.array(z.object({ type: z.string(), props: z.unknown() })),
+});
+
+/**
+ * Restaura una versión: aplica su **contenido** —título, SEO y bloques— como
+ * estado actual. **Archiva primero el estado actual**, de modo que restaurar
  * también se pueda deshacer (queda como una versión más). Atómico y con guarda
  * de papelera.
  *
- * El `slug` NO se restaura: es la identidad y la URL de la página. Cambiarlo al
- * volver a una versión vieja rompería enlaces y podría chocar con otra página.
+ * Lo que restaurar NO toca, a propósito:
+ * - `slug`: es la identidad y la URL; cambiarlo al volver a una versión vieja
+ *   rompería enlaces y podría chocar con otra página.
+ * - `status` y `publish_at`: la publicación se cambia **sólo** por las transiciones
+ *   del flujo editorial y por `schedule`. Restaurar un contenido viejo no publica,
+ *   despublica ni reprograma una página viva por la ventana trasera; la página
+ *   conserva el estado y la fecha que tenía. Por eso restaurar sólo pide
+ *   `content.write` (ya exigido por el montaje), no `content.publish`.
  */
 pagesRouter.post("/:id/revisions/:revId/restore", async (req, res) => {
   const pageId = Number(req.params.id);
   const revId = Number(req.params.revId);
   const rev = await db("page_revisions").where({ id: revId, page_id: pageId }).first();
   if (!rev) return res.status(404).json({ error: "versión no encontrada" });
-  const snap = parseJson(rev.snapshot) as any;
-  if (!snap || typeof snap !== "object") return res.status(422).json({ error: "versión ilegible" });
-  // Restaurar puede cambiar el estado de publicación en las DOS direcciones:
-  // re-publicar (una página en borrador vuelve a `published`) y **despublicar**
-  // (una página publicada vuelve a `draft` al restaurar una versión que estaba en
-  // borrador). Cualquiera de las dos exige `content.publish`, no sólo la primera:
-  // gatear únicamente `snap.status === "published"` dejaba que un `autor` (con
-  // `content.write` pero sin `content.publish`) despublicara una página viva
-  // restaurando un borrador. Editar sin cambiar el estado (borrador→borrador) no
-  // lo exige, igual que el resto de los caminos de edición.
-  const estadoRestaurado = snap.status === "published" ? "published" : "draft";
-  const viva = await db("pages").where({ id: pageId }).whereNull("deleted_at").first("status");
-  if (!viva) return res.status(404).json({ error: "no encontrada" });
-  if (estadoRestaurado !== viva.status && !puedePublicar(req)) {
-    return res.status(403).json({ error: "forbidden" });
-  }
 
-  const brutos: { type: string; props: unknown }[] = Array.isArray(snap.blocks)
-    ? snap.blocks.map((b: any) => ({ type: String(b?.type), props: b?.props ?? {} }))
-    : [];
-  const bloques = validarBloques(brutos);
+  const parsedSnap = revisionSnapshotSchema.safeParse(parseJson(rev.snapshot));
+  if (!parsedSnap.success) return res.status(422).json({ error: "versión ilegible o incompatible" });
+  const snap = parsedSnap.data;
+
+  const bloques = validarBloques(snap.blocks.map((b) => ({ type: b.type, props: b.props ?? {} })));
   // Una versión archivada ya pasó por validación al guardarse; si aun así trae
   // un bloque ilegible (fila editada a mano), se rechaza en vez de escribir basura.
   if (!bloques.ok) return res.status(422).json({ error: "versión con un bloque ilegible" });
 
   await db.transaction(async (trx) => {
+    // Bloquea la fila y confirma que sigue viva (404 si no está o está en la
+    // papelera). Primero se archiva lo que hay ahora: así deshacer la restauración
+    // es volver a esta versión recién creada.
     await cargarPaginaViva(trx, pageId);
-    // Primero se archiva lo que hay ahora: así deshacer la restauración es volver
-    // a esta versión recién creada.
     await archivarActual(trx, pageId, req.user?.id);
     await trx("pages")
       .where({ id: pageId })
       .update({
         title: snap.title,
-        status: snap.status === "published" ? "published" : "draft",
         seo: snap.seo ? JSON.stringify(snap.seo) : null,
-        // El snapshot guarda `publish_at` como texto ISO con `Z` (viene de
-        // `JSON.stringify(Date)`). Escribir ese string crudo en la columna
-        // DATETIME es frágil: MySQL 8 en modo estricto rechaza el `T`/`Z`, y una
-        // base más laxa podría reinterpretarlo y correr el instante. Se
-        // normaliza a `Date`, que el driver formatea igual que el guardado
-        // original, así el instante restaurado es idéntico al archivado.
-        publish_at: snap.publish_at ? new Date(snap.publish_at) : null,
         updated_at: trx.fn.now(),
       });
     await reemplazarBloques(trx, pageId, bloques.validados);
@@ -598,14 +548,17 @@ pagesRouter.post("/:id/revisions/:revId/restore", async (req, res) => {
  *
  * - `submit`/`return` sólo exigen `content.write`: un `autor` manda su propio
  *   borrador a revisión o lo retira; no publica.
- * - `approve`/`publish`/`archive`/`unarchive` exigen `content.publish`
+ * - `approve`/`publish`/`unpublish`/`archive`/`unarchive` exigen `content.publish`
  *   (revisor/editor). `publish` limpia `publish_at` —publicar es "en vivo ahora";
- *   agendar es `POST /:id/schedule`—.
+ *   agendar es `POST /:id/schedule`—. `unpublish` es la vía **explícita** para
+ *   retirar del público una página publicada (vuelve a `draft`, limpia `publish_at`).
  *
- * **La visibilidad pública no cambia:** sólo `published` es público
- * (`pages-visibilidad.ts`); `in_review`/`approved`/`archived` no se sirven, igual
- * que un borrador. Los estados intermedios y el archivado son ortogonales a la
- * papelera (`deleted_at`) y al agendado (`publish_at`).
+ * **Las transiciones son la ÚNICA forma de cambiar el estado.** La edición
+ * (`PUT /:id`, `/content`) y el guardado del Page Builder no tocan `status` ni
+ * `publish_at`; sólo estas transiciones y `schedule` lo hacen. La visibilidad
+ * pública no cambia: sólo `published` es público (`pages-visibilidad.ts`);
+ * `in_review`/`approved`/`archived` no se sirven, igual que un borrador. Los
+ * estados intermedios y el archivado son ortogonales a la papelera (`deleted_at`).
  */
 interface Transicion {
   desde: string[];
@@ -618,30 +571,49 @@ interface Transicion {
 const TRANSICIONES: Record<string, Transicion> = {
   submit: { desde: ["draft"], hasta: "in_review", requierePublicar: false, accion: "submit_review" },
   approve: { desde: ["in_review"], hasta: "approved", requierePublicar: true, accion: "approve" },
-  publish: { desde: ["approved", "in_review"], hasta: "published", requierePublicar: true, accion: "publish", extra: { publish_at: null } },
+  publish: { desde: ["approved", "in_review", "published"], hasta: "published", requierePublicar: true, accion: "publish", extra: { publish_at: null } },
   return: { desde: ["in_review", "approved"], hasta: "draft", requierePublicar: false, accion: "return_draft" },
+  unpublish: { desde: ["published"], hasta: "draft", requierePublicar: true, accion: "unpublish", extra: { publish_at: null } },
   archive: { desde: ["published", "approved"], hasta: "archived", requierePublicar: true, accion: "archive" },
   unarchive: { desde: ["archived"], hasta: "draft", requierePublicar: true, accion: "unarchive" },
 };
 
+/**
+ * Aplica una transición sobre la fila **bloqueada con `FOR UPDATE`**.
+ *
+ * La capacidad (`content.publish`) es del rol, no de la fila, así que se comprueba
+ * **antes** de tomar el lock: un rol sin permiso recibe 403 sin revelar si la
+ * página existe ni bloquear nada. Lo que **sí** depende de la fila —que exista y no
+ * esté en la papelera (404) y que el estado de origen sea válido (409)— se decide
+ * dentro de la transacción, sobre la fila ya bloqueada, y recién ahí se escribe.
+ * Bloquear primero serializa dos transiciones simultáneas sobre la misma página: la
+ * segunda espera a que la primera confirme, ve el estado nuevo y su origen ya no
+ * coincide (409). Sin el lock, dos revisores podían leer el mismo estado y aplicar
+ * dos transiciones sobre él. La bitácora registra el `from`/`to` leído bajo el lock.
+ */
 async function aplicarTransicion(req: Request, res: Response, nombre: keyof typeof TRANSICIONES) {
   const t = TRANSICIONES[nombre];
   if (t.requierePublicar && !puedePublicar(req)) return res.status(403).json({ error: "forbidden" });
   const id = Number(req.params.id);
-  // Actualización condicional atómica: sólo si la página está viva (no en
-  // papelera) y en un estado de origen válido. Así no se saltea el orden ni se
-  // aplica dos veces la misma transición por una carrera entre dos revisores.
-  const n = await db("pages")
-    .where({ id })
-    .whereNull("deleted_at")
-    .whereIn("status", t.desde)
-    .update({ status: t.hasta, updated_at: db.fn.now(), ...(t.extra ?? {}) });
-  if (n === 0) {
-    const viva = await db("pages").where({ id }).whereNull("deleted_at").first("status");
-    if (!viva) return res.status(404).json({ error: "no encontrada" });
-    return res.status(409).json({ error: `no se puede "${nombre}" desde el estado "${viva.status}"` });
-  }
-  await registrarAccion({ ...actorDe(req), action: t.accion, resourceType: "pages", resourceId: id });
+  const resultado = await db.transaction<ResultadoEstado>(async (trx) => {
+    const page = await trx("pages").where({ id }).forUpdate().first();
+    if (!page || page.deleted_at != null) return { http: 404, body: { error: "no encontrada" } };
+    if (!t.desde.includes(page.status)) {
+      return { http: 409, body: { error: `no se puede "${nombre}" desde el estado "${page.status}"` } };
+    }
+    await trx("pages")
+      .where({ id })
+      .update({ status: t.hasta, updated_at: trx.fn.now(), ...(t.extra ?? {}) });
+    return { desde: page.status as string };
+  });
+  if ("http" in resultado) return res.status(resultado.http).json(resultado.body);
+  await registrarAccion({
+    ...actorDe(req),
+    action: t.accion,
+    resourceType: "pages",
+    resourceId: id,
+    meta: { from: resultado.desde, to: t.hasta },
+  });
   res.json({ ok: true, status: t.hasta });
 }
 
@@ -649,6 +621,7 @@ pagesRouter.post("/:id/submit", (req, res) => aplicarTransicion(req, res, "submi
 pagesRouter.post("/:id/approve", (req, res) => aplicarTransicion(req, res, "approve"));
 pagesRouter.post("/:id/publish", (req, res) => aplicarTransicion(req, res, "publish"));
 pagesRouter.post("/:id/return", (req, res) => aplicarTransicion(req, res, "return"));
+pagesRouter.post("/:id/unpublish", (req, res) => aplicarTransicion(req, res, "unpublish"));
 pagesRouter.post("/:id/archive", (req, res) => aplicarTransicion(req, res, "archive"));
 pagesRouter.post("/:id/unarchive", (req, res) => aplicarTransicion(req, res, "unarchive"));
 

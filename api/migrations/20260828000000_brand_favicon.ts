@@ -91,7 +91,7 @@ function esObjeto(v: unknown): v is BrandObject {
  * cerrada, tipo inválido, pertenencia ajena, procedencia imposible). Sólo si TODO
  * pasa construye el objeto tipado a partir de valores validados —nunca un cast—.
  */
-function validarSnapshot(value: unknown): BrandSnapshot {
+export function validarSnapshot(value: unknown): BrandSnapshot {
   const o = leerValor(value);
   if (!esObjeto(o)) {
     throw new Error(`${MIGRACION}: snapshot inválido — "${SNAPSHOT_KEY}" no es un objeto JSON.`);
@@ -152,8 +152,11 @@ function validarSnapshot(value: unknown): BrandSnapshot {
       throw new Error(`${MIGRACION}: snapshot inválido — valorAnterior debe ser null o "" (propiedad presente, aplicoCambio=true).`);
     }
   } else {
-    if (!(typeof valorAnterior === "string" && valorAnterior.length > 0)) {
-      throw new Error(`${MIGRACION}: snapshot inválido — valorAnterior debe ser un string no vacío (aplicoCambio=false).`);
+    // Propiedad presente y no se aplicó nada ⇒ el valor previo NO era vacío:
+    // cualquier valor JSON salvo `null` o `""` (string personalizado, `false`,
+    // `0`, `true`, número, objeto o arreglo). Se preservan tal cual.
+    if (valorAnterior === null || valorAnterior === "") {
+      throw new Error(`${MIGRACION}: snapshot inválido — valorAnterior no puede ser null ni "" con aplicoCambio=false (propiedad presente).`);
     }
   }
 
@@ -178,7 +181,9 @@ export async function up(knex: Knex): Promise<void> {
   const formaInesperada = filaExistia && brand === null;
   const propiedadExistia = brand !== null && Object.prototype.hasOwnProperty.call(brand, PROP);
   const valorAnterior = propiedadExistia ? (brand as BrandObject)[PROP] : null;
-  const debeAplicar = !formaInesperada && !(brand && (brand as BrandObject)[PROP]);
+  // El default se aplica SÓLO cuando la propiedad está ausente, es `null` o es
+  // "" (no por truthiness: `false`/`0` son datos legítimos, no "vacío").
+  const debeAplicar = !formaInesperada && (!propiedadExistia || valorAnterior === null || valorAnterior === "");
 
   const snapPrevio = await knex("settings").where({ key: SNAPSHOT_KEY }).first();
   if (snapPrevio) {
@@ -197,6 +202,9 @@ export async function up(knex: Knex): Promise<void> {
     aplicoCambio: debeAplicar,
     valorAplicado: debeAplicar ? DEFAULT_VALUE : null,
   };
+  // Validar el snapshot recién construido ANTES de insertarlo (aborta sin
+  // escribir si no cumpliera el contrato).
+  validarSnapshot(snapshot);
   await knex("settings").insert({ key: SNAPSHOT_KEY, value: JSON.stringify(snapshot) });
 
   if (debeAplicar) {

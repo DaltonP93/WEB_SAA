@@ -1,19 +1,23 @@
-import type { Request, Response, NextFunction } from "express";
+import type { Request } from "express";
+import { createHash } from "node:crypto";
 import { db } from "./db.js";
 import { errorSeguro } from "./log-seguro.js";
 
 /**
- * Bitácora de acciones administrativas.
+ * Bitácora **operativa** de acciones administrativas (contrato de cobertura).
  *
- * `registrarAccion` es **best-effort**: nunca lanza. Registrar la acción no
- * puede romper ni demorar la acción principal —el contenido ya se guardó cuando
- * esto corre—, así que cualquier fallo (tabla ausente, base caída) se traga y se
- * loguea de forma segura. La contrapartida es que en un incidente de base puede
- * faltar una fila; para el uso de este proyecto (trazabilidad operativa, no
- * cumplimiento legal estricto) es el compromiso correcto.
+ * `registrarAccion` es **best-effort**: nunca lanza y se ejecuta **después** de la
+ * acción principal, así que cualquier fallo (tabla ausente, base caída, proceso
+ * caído entre la mutación y el insert) se traga. **Contrato explícito: esto es una
+ * bitácora operativa para trazabilidad, no un registro de auditoría con garantía
+ * de integridad completa.** No promete que toda mutación tenga su fila: en un
+ * incidente puede faltar. Si en el futuro una operación necesitara auditoría
+ * **obligatoria**, habría que escribir mutación y bitácora en la misma transacción
+ * o vía outbox — es una decisión de alcance del propietario, no está implementado.
  *
- * Nunca se guarda PII de pacientes: el emisor pasa sólo metadatos de operación
- * (id de recurso, slug, cambio de rol). `meta` se sanea igual como defensa.
+ * Nunca se guarda PII: el emisor pasa sólo metadatos de operación (id de recurso,
+ * slug, cambio de rol) y `meta` se sanea como defensa. El correo de un intento de
+ * acceso fallido se guarda **seudonimizado** (`seudonimoEmail`), nunca en claro.
  */
 
 export type AuditAction =
@@ -86,14 +90,32 @@ export function sanitizarMeta(meta: Record<string, unknown>): Record<string, unk
   return out;
 }
 
-/** IP del operador, sin depender de `trust proxy`. Nginx setea X-Real-IP. */
+/**
+ * IP del operador para la bitácora, derivada de `req.ip`.
+ *
+ * `req.ip` respeta `trust proxy` (configurado en `app.ts` como `loopback`): sólo
+ * cree en `X-Forwarded-For` cuando la conexión entrante es el proxy de confianza
+ * (Nginx en loopback); en cualquier otro caso es la IP del peer directo. Antes se
+ * leían `X-Real-IP`/`X-Forwarded-For` **a ciegas**, así que si el puerto de la API
+ * quedaba accesible sin pasar por Nginx, cualquiera falsificaba la IP registrada.
+ * No se leen esas cabeceras acá: la decisión de en quién confiar es de Express.
+ */
 export function ipDe(req: Request): string | null {
-  const real = req.headers["x-real-ip"];
-  if (typeof real === "string" && real) return real.slice(0, 45);
-  const fwd = req.headers["x-forwarded-for"];
-  if (typeof fwd === "string" && fwd) return fwd.split(",")[0].trim().slice(0, 45);
-  const direct = req.ip ?? req.socket?.remoteAddress ?? null;
-  return direct ? String(direct).slice(0, 45) : null;
+  const ip = req.ip ?? req.socket?.remoteAddress ?? null;
+  return ip ? String(ip).slice(0, 45) : null;
+}
+
+/**
+ * Seudónimo estable de un correo para la bitácora (SHA-256 truncado, hex).
+ *
+ * En un intento de acceso fallido no se sabe quién es, pero guardar el correo en
+ * claro mete PII en una tabla que se lee desde el panel. El seudónimo permite
+ * correlacionar intentos repetidos contra el mismo correo sin almacenarlo: se
+ * normaliza (trim + minúsculas) y se hashea. No es reversible salvo por fuerza
+ * bruta sobre correos ya conocidos.
+ */
+export function seudonimoEmail(email: string): string {
+  return createHash("sha256").update(String(email).trim().toLowerCase()).digest("hex").slice(0, 16);
 }
 
 /** Actor + IP a partir del request autenticado. */
@@ -103,60 +125,6 @@ export function actorDe(req: Request): Actor {
     actorName: req.user?.name ?? null,
     actorRole: req.user?.role ?? null,
     ip: ipDe(req),
-  };
-}
-
-/**
- * Extrae el id de recurso de la URL original de una mutación (`/api/admin/<tipo>/<id>`,
- * o anidado `/api/admin/<tipo>/<id>/<sub>`). Devuelve el primer segmento numérico
- * que sigue al tipo, o `null` (un `POST` de alta no lleva id). Se lee de
- * `originalUrl` —estable, sin los valores de query— porque `req.params` ya no
- * conserva el `:id` del sub-router cuando dispara el evento `finish`.
- */
-export function idDeUrl(originalUrl: string, resourceType: string): string | null {
-  const path = (originalUrl.split("?")[0] ?? "").split("#")[0];
-  const partes = path.split("/").filter(Boolean);
-  const i = partes.lastIndexOf(resourceType);
-  if (i === -1) return null;
-  const siguiente = partes[i + 1];
-  return siguiente && /^\d+$/.test(siguiente) ? siguiente : null;
-}
-
-/**
- * Auditoría **centralizada** para los routers que no la registran por dentro
- * (doctors, menus, settings, media, redirects, appointments, contact-messages,
- * newsletter). Se monta como middleware del router y registra una fila tras cada
- * mutación con respuesta 2xx —el `finish` del response garantiza que la acción
- * ya terminó bien—. Las lecturas (`GET`/`HEAD`) no se auditan. La acción se
- * deriva del método (POST→create, DELETE→delete, resto→update). El actor y la IP
- * se capturan **ahora**, con `req.user` ya puesto por `requireAuth`, porque en
- * `finish` el request puede haber cambiado. No reemplaza a la auditoría de grano
- * fino (pages/users registran acciones específicas por dentro): esos routers no
- * llevan este middleware para no duplicar filas.
- */
-export function auditarMutaciones(resourceType: string) {
-  return (req: Request, res: Response, next: NextFunction) => {
-    const metodo = req.method.toUpperCase();
-    if (metodo === "GET" || metodo === "HEAD" || metodo === "OPTIONS") return next();
-    const actor = actorDe(req);
-    const originalUrl = req.originalUrl;
-    // En un alta (`POST` a la colección) el id no está en la URL sino en el cuerpo
-    // de la respuesta (`{ id }`). Se lo mira al pasar por `res.json` para que la
-    // fila de auditoría del `create` también lleve el id del recurso creado.
-    let idDeCuerpo: string | null = null;
-    const jsonOriginal = res.json.bind(res);
-    res.json = (body: unknown) => {
-      const id = (body as { id?: unknown } | null)?.id;
-      if (typeof id === "number" || typeof id === "string") idDeCuerpo = String(id);
-      return jsonOriginal(body);
-    };
-    res.on("finish", () => {
-      if (res.statusCode < 200 || res.statusCode >= 300) return; // sólo éxitos
-      const action: AuditAction = metodo === "DELETE" ? "delete" : metodo === "POST" ? "create" : "update";
-      const resourceId = idDeUrl(originalUrl, resourceType) ?? idDeCuerpo;
-      void registrarAccion({ ...actor, action, resourceType, resourceId });
-    });
-    next();
   };
 }
 
