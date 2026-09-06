@@ -47,12 +47,18 @@ declare global {
   }
 }
 
-export function signToken(p: AuthPayload): string {
-  return jwt.sign(p, SECRET, { expiresIn: EXPIRES as any });
+export function signToken(p: AuthPayload, authVersion: number): string {
+  // `av` (versión de sesión) viaja en el token; `requireAuth` la compara contra la
+  // base. Algoritmo fijado a HS256 de forma explícita: la clave es simétrica y no
+  // se acepta ninguna otra familia ni `alg: none` (defensa contra confusión de
+  // algoritmo).
+  return jwt.sign({ ...p, av: authVersion }, SECRET, { algorithm: "HS256", expiresIn: EXPIRES as any });
 }
 
-export function verifyToken(t: string): AuthPayload & { iat?: number } {
-  return jwt.verify(t, SECRET) as AuthPayload & { iat?: number };
+export function verifyToken(t: string): AuthPayload & { av?: number; iat?: number } {
+  // Se fija `algorithms: ["HS256"]` al verificar: un token con `alg: none` u otra
+  // familia se rechaza aunque parezca válido.
+  return jwt.verify(t, SECRET, { algorithms: ["HS256"] }) as AuthPayload & { av?: number; iat?: number };
 }
 
 export async function hashPassword(pw: string) {
@@ -74,46 +80,23 @@ export async function comparePassword(pw: string, hash: string) {
 export const DUMMY_PASSWORD_HASH = bcrypt.hashSync("timing-equalizer-not-a-real-password", 10);
 
 /**
- * Instante de corte para revocar sesiones, **truncado al segundo**.
- *
- * Los `iat` de JWT son segundos enteros (`Math.floor(now/1000)`). Si el corte se
- * guardara con fracción, MySQL 8 lo **redondea** al segundo en una columna
- * `DATETIME(0)` —hacia arriba desde `.5`—, y un token emitido en ese mismo
- * segundo quedaría del lado equivocado: el caso real es cambiar la contraseña y
- * volver a entrar de inmediato, cuyo token nuevo (iat de ese segundo) se
- * rechazaría hasta ~1 s. Truncar el corte al segundo alinea ambos: nunca revoca
- * un token emitido en el segundo del corte o después.
- */
-export function instanteRevocacion(): Date {
-  return new Date(Math.floor(Date.now() / 1000) * 1000);
-}
-
-/**
- * Un token está revocado si se emitió **antes** del `tokens_valid_after` del
- * usuario. `iat` viene en segundos (estándar JWT); la columna es un instante
- * absoluto que el driver devuelve como `Date`. Un token sin `iat` no se puede
- * ubicar en el tiempo, así que se trata como revocado (fail-closed).
- */
-function sesionRevocada(iat: number | undefined, validoDesde: Date | string | null): boolean {
-  if (validoDesde == null) return false; // sin corte: nada revocado
-  if (iat === undefined) return true;
-  const corte = validoDesde instanceof Date ? validoDesde.getTime() : new Date(validoDesde).getTime();
-  if (Number.isNaN(corte)) return false; // valor ilegible: no bloquear por un dato roto
-  return iat * 1000 < corte;
-}
-
-/**
  * Autentica **contra la base**, no sólo contra el token.
  *
  * El token stateless probaba la identidad pero no reflejaba cambios posteriores:
  * cambiarle el rol a un usuario, darlo de baja o revocarle las sesiones no tenía
- * efecto hasta que el token expiraba (hasta 7 días). Ahora, verificada la firma,
- * se relee el usuario y:
+ * efecto hasta que expiraba (hasta 7 días). Ahora, verificada la firma, se relee
+ * el usuario y:
  *  - si ya no existe (baja) → 401;
- *  - si el token se emitió antes de `tokens_valid_after` (revocación / cambio de
- *    contraseña) → 401;
+ *  - si la **versión de sesión** del token (`av`) no coincide **exactamente** con
+ *    `users.auth_version` (revocación / cambio de contraseña) → 401;
  *  - el `role` sale de la base, no del token, así un cambio de rol rige en la
  *    próxima request.
+ *
+ * **Fail-closed** en la versión: un token sin `av` (emitido antes de la migración
+ * de `auth_version`) o una `auth_version` que no sea un número (columna ausente
+ * durante un rollback, valor corrupto) se rechazan. No hay comparación por tiempo,
+ * ni truncamiento ni margen: es igualdad de enteros, así que no hay carrera aunque
+ * el login y el cambio de contraseña ocurran en el mismo milisegundo.
  *
  * Es un lookup por PK por request (costo despreciable en un panel). Si la base no
  * responde, el error se propaga al manejador central (503), no se traduce a 401.
@@ -121,23 +104,23 @@ function sesionRevocada(iat: number | undefined, validoDesde: Date | string | nu
 export async function requireAuth(req: Request, res: Response, next: NextFunction) {
   const h = req.headers.authorization;
   if (!h?.startsWith("Bearer ")) return res.status(401).json({ error: "no token" });
-  let decoded: AuthPayload & { iat?: number };
+  let decoded: AuthPayload & { av?: number; iat?: number };
   try {
     decoded = verifyToken(h.slice(7));
   } catch {
     return res.status(401).json({ error: "token invalido" });
   }
   try {
-    // Se leen todas las columnas (no una lista fija) para que la revocación sea
-    // resiliente a que `tokens_valid_after` todavía no exista: durante un rollback
-    // el esquema puede estar en un punto anterior a esa migración, y una lista fija
-    // con esa columna haría fallar (500) cada request autenticada, dejando el panel
-    // inaccesible justo cuando hace falta operarlo. Ausente → `undefined` →
-    // `sesionRevocada` lo trata como "sin corte" (no revoca). `password_hash` queda
-    // en memoria pero nunca se copia a `req.user`.
+    // Se leen todas las columnas (no una lista fija): así, si el esquema quedó por
+    // debajo de la migración de `auth_version` durante un rollback, la columna
+    // ausente da `undefined` y la sesión se rechaza (fail-closed), en vez de un 500
+    // por seleccionar una columna inexistente. `password_hash` queda en memoria
+    // pero nunca se copia a `req.user`.
     const user = await db("users").where({ id: decoded.id }).first();
     if (!user) return res.status(401).json({ error: "sesion invalida" });
-    if (sesionRevocada(decoded.iat, user.tokens_valid_after ?? null)) {
+    const av = decoded.av;
+    const actual = user.auth_version;
+    if (typeof av !== "number" || typeof actual !== "number" || av !== actual) {
       return res.status(401).json({ error: "sesion expirada" });
     }
     req.user = { id: user.id, email: user.email, name: user.name, role: user.role };
