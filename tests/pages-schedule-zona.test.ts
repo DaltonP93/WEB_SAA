@@ -1,7 +1,7 @@
 // La estación de trabajo (y el servidor) corren en una zona **distinta** de
-// Asunción: así se prueba que la interpretación de la hora de pared y la fidelidad
-// del instante al restaurar NO dependen de la zona del proceso. Se fija antes de
-// cualquier import para que el driver de MySQL la tome.
+// Asunción: así se prueba que la interpretación de la hora de pared NO depende de
+// la zona del proceso. Se fija antes de cualquier import para que el driver de
+// MySQL la tome.
 process.env.TZ = "America/New_York";
 
 import type { Server } from "node:http";
@@ -20,15 +20,17 @@ import {
 } from "./helpers/db";
 
 /**
- * Programación por endpoint del backend (zona Asunción) y restauración fiel de
- * `publish_at`.
+ * Programación por endpoint del backend (zona Asunción) y contrato editorial de
+ * la programación (Bloqueante D).
  *
  * - `POST /admin/pages/:id/schedule` interpreta la hora de pared en
  *   `America/Asuncion` y rechaza el pasado, sin importar la zona del proceso.
- * - Restaurar una revisión conserva el **instante exacto** de `publish_at`: el
- *   paso `Date → snapshot JSON (ISO con Z) → DATETIME` no puede correr la hora.
- *   Con la zona del proceso distinta de UTC, escribir el ISO crudo correría el
- *   instante; por eso se normaliza a `Date` al restaurar.
+ * - Programar es una operación de **publicación**: sólo se puede desde los estados
+ *   permitidos (`in_review`/`approved`/`published`); desde `draft` da 409.
+ * - Restaurar una revisión es **sólo contenido**: NO repone `publish_at`. Una
+ *   página conserva su fecha de publicación vigente aunque se restaure una versión
+ *   vieja que tenía otra —la fecha se cambia con `schedule`/`publish`, no por la
+ *   ventana trasera del historial—.
  *
  *   TEST_DATABASE=1 pnpm test tests/pages-schedule-zona.test.ts
  */
@@ -36,7 +38,7 @@ import {
 const DB_NAME = `${process.env.TEST_DB_NAME ?? "sanatorio_test"}_sched`;
 const describeDb = DB_TESTS_ENABLED ? describe : describe.skip;
 
-describeDb("paginas: programacion por backend y restauracion fiel de publish_at", () => {
+describeDb("paginas: programacion por backend y contrato de publicacion", () => {
   let db: Knex;
   let server: Server;
   let baseUrl = "";
@@ -44,19 +46,17 @@ describeDb("paginas: programacion por backend y restauracion fiel de publish_at"
 
   const auth = () => ({ Authorization: `Bearer ${token}`, "Content-Type": "application/json" });
 
-  async function crearPagina(slug: string) {
+  async function crearPagina(slug: string, status: "draft" | "published" = "draft") {
     const res = await fetch(`${baseUrl}/api/admin/pages`, {
       method: "POST",
       headers: auth(),
-      body: JSON.stringify({ slug, title: `T ${slug}`, status: "draft" }),
+      body: JSON.stringify({ slug, title: `T ${slug}`, status }),
     });
     expect(res.status, await res.clone().text()).toBe(201);
     return (await res.json()).id as number;
   }
   const schedule = (id: number, publish_at: string) =>
     fetch(`${baseUrl}/api/admin/pages/${id}/schedule`, { method: "POST", headers: auth(), body: JSON.stringify({ publish_at }) });
-  const putMeta = (id: number, body: any) =>
-    fetch(`${baseUrl}/api/admin/pages/${id}`, { method: "PUT", headers: auth(), body: JSON.stringify(body) });
   const guardarContent = (id: number, body: any) =>
     fetch(`${baseUrl}/api/admin/pages/${id}/content`, { method: "PUT", headers: auth(), body: JSON.stringify(body) });
   const verPagina = async (id: number) =>
@@ -97,8 +97,10 @@ describeDb("paginas: programacion por backend y restauracion fiel de publish_at"
     await dropTestDatabase(DB_NAME);
   });
 
-  it("programar con fecha futura publica y oculta hasta la fecha (zona Asunción, no la del proceso)", async () => {
-    const id = await crearPagina("sched-futuro");
+  it("programar con fecha futura oculta hasta la fecha (zona Asunción, no la del proceso)", async () => {
+    // Publicada (visible), y se reprograma al futuro: deja de verse hasta la fecha.
+    const id = await crearPagina("sched-futuro", "published");
+    expect((await publicList()).some((p) => p.slug === "sched-futuro")).toBe(true);
     const res = await schedule(id, "2099-01-01T10:00");
     expect(res.status, await res.clone().text()).toBe(200);
     const fila = await verPagina(id);
@@ -108,50 +110,51 @@ describeDb("paginas: programacion por backend y restauracion fiel de publish_at"
     expect((await publicList()).some((p) => p.slug === "sched-futuro")).toBe(false);
   });
 
-  it("una fecha pasada se rechaza con 400 y aviso de 'futura'", async () => {
-    const id = await crearPagina("sched-pasado");
+  it("una fecha pasada se rechaza con 400 y aviso de 'futura', antes de mirar el estado", async () => {
+    const id = await crearPagina("sched-pasado", "published");
     const res = await schedule(id, "2000-01-01T10:00");
     expect(res.status).toBe(400);
     expect(String((await res.json()).error)).toMatch(/futura/i);
-    // No tocó la página: sigue en borrador.
-    expect((await verPagina(id)).status).toBe("draft");
   });
 
   it("una fecha inválida es 400 y una página en la papelera es 404", async () => {
-    const id = await crearPagina("sched-invalida");
+    const id = await crearPagina("sched-invalida", "published");
     expect((await schedule(id, "no-es-fecha")).status).toBe(400);
     await fetch(`${baseUrl}/api/admin/pages/${id}`, { method: "DELETE", headers: auth() });
     expect((await schedule(id, "2099-01-01T10:00")).status).toBe(404);
   });
 
-  it("restaurar conserva el instante EXACTO de publish_at y la visibilidad correcta", async () => {
-    const id = await crearPagina("sched-restore");
+  it("no se puede programar desde borrador: 409 y la página no se toca", async () => {
+    const id = await crearPagina("sched-desde-draft"); // draft
+    const res = await schedule(id, "2099-01-01T10:00"); // fecha válida futura
+    expect(res.status).toBe(409);
+    expect(String((await res.json()).error)).toMatch(/estado/i);
+    const fila = await verPagina(id);
+    expect(fila.status).toBe("draft");
+    expect(fila.publish_at).toBeNull();
+  });
 
-    // Estado F: publicada, agendada a una hora de pared concreta de Asunción (futuro).
-    expect((await putMeta(id, { status: "published", title: "F", publish_at: "2099-06-15T14:30" })).status).toBe(200);
-    const instanteF = new Date((await verPagina(id)).publish_at).getTime();
-    // Archivar F (guardado atómico; sin tocar publish_at, se conserva F en la foto).
-    expect((await guardarContent(id, { title: "F", blocks: [] })).status).toBe(200);
+  it("restaurar es sólo contenido: conserva el publish_at vigente, no el de la foto", async () => {
+    const id = await crearPagina("sched-restore", "published");
 
-    // Estado P: reprogramar al pasado (visible) y archivarlo.
-    expect((await putMeta(id, { status: "published", title: "P", publish_at: "2000-01-01T08:00" })).status).toBe(200);
-    const instanteP = new Date((await verPagina(id)).publish_at).getTime();
-    expect((await guardarContent(id, { title: "P", blocks: [] })).status).toBe(200);
-    expect((await publicList()).some((p) => p.slug === "sched-restore")).toBe(true); // P es pasado → visible
+    // Agendar a D1 (futuro) y dejar una revisión cuya foto guarda publish_at=D1.
+    expect((await schedule(id, "2099-06-15T14:30")).status).toBe(200);
+    const d1 = new Date((await verPagina(id)).publish_at).getTime();
+    expect((await guardarContent(id, { title: "conD1", blocks: [] })).status).toBe(200);
+    expect((await guardarContent(id, { title: "otro", blocks: [] })).status).toBe(200); // archiva "conD1" con publish_at=D1
 
-    const revs = await listar(id);
-    const revF = revs.find((r) => r.title === "F");
-    const revP = revs.find((r) => r.title === "P");
-    expect(revF && revP).toBeTruthy();
+    // Reprogramar a D2 (otro futuro distinto).
+    expect((await schedule(id, "2099-09-20T09:15")).status).toBe(200);
+    const d2 = new Date((await verPagina(id)).publish_at).getTime();
+    expect(d2).not.toBe(d1);
 
-    // Restaurar F: mismo instante exacto, y oculta (fecha futura).
-    expect((await fetch(`${baseUrl}/api/admin/pages/${id}/revisions/${revF.id}/restore`, { method: "POST", headers: auth() })).status).toBe(200);
-    expect(new Date((await verPagina(id)).publish_at).getTime()).toBe(instanteF);
-    expect((await publicList()).some((p) => p.slug === "sched-restore")).toBe(false);
+    // Restaurar la versión "conD1": vuelve el CONTENIDO, pero publish_at sigue en D2.
+    const revD1 = (await listar(id)).find((r) => r.title === "conD1");
+    expect(revD1).toBeTruthy();
+    expect((await fetch(`${baseUrl}/api/admin/pages/${id}/revisions/${revD1.id}/restore`, { method: "POST", headers: auth() })).status).toBe(200);
 
-    // Restaurar P: mismo instante exacto, y visible (fecha pasada).
-    expect((await fetch(`${baseUrl}/api/admin/pages/${id}/revisions/${revP.id}/restore`, { method: "POST", headers: auth() })).status).toBe(200);
-    expect(new Date((await verPagina(id)).publish_at).getTime()).toBe(instanteP);
-    expect((await publicList()).some((p) => p.slug === "sched-restore")).toBe(true);
+    const page = await verPagina(id);
+    expect(page.title).toBe("conD1"); // contenido restaurado
+    expect(new Date(page.publish_at).getTime()).toBe(d2); // ...pero la fecha vigente NO cambió
   });
 });

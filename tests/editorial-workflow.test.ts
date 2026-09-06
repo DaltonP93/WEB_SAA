@@ -160,4 +160,65 @@ describeDb("flujo editorial de páginas", () => {
   it("una transición sobre una página inexistente da 404", async () => {
     expect((await admin(`pages/999999/submit`, "POST", tokens.superadmin)).status).toBe(404);
   });
+
+  it("despublicar (unpublish) retira una publicada y la vuelve a borrador, limpiando publish_at", async () => {
+    const { id, slug } = await crearBorrador("unpublish-flujo");
+    await admin(`pages/${id}/submit`, "POST", tokens.autor);
+    await admin(`pages/${id}/approve`, "POST", tokens.revisor);
+    await admin(`pages/${id}/publish`, "POST", tokens.revisor);
+    expect(await estado(id)).toBe("published");
+    expect((await fetch(`${baseUrl}/api/public/pages/${slug}`)).status).toBe(200);
+
+    // El autor no puede despublicar (no tiene content.publish).
+    expect((await admin(`pages/${id}/unpublish`, "POST", tokens.autor)).status).toBe(403);
+    // El revisor sí.
+    expect((await admin(`pages/${id}/unpublish`, "POST", tokens.revisor)).status).toBe(200);
+    expect(await estado(id)).toBe("draft");
+    expect((await fetch(`${baseUrl}/api/public/pages/${slug}`)).status).toBe(404);
+    expect((await db("pages").where({ id }).first("publish_at")).publish_at).toBeNull();
+
+    // unpublish sólo sale de published: desde draft da 409.
+    expect((await admin(`pages/${id}/unpublish`, "POST", tokens.revisor)).status).toBe(409);
+  });
+
+  it("el estado NO se cambia editando: PUT y /content con status o publish_at dan 400", async () => {
+    const { id } = await crearBorrador("no-estado-por-edicion");
+    for (const ruta of [`pages/${id}`, `pages/${id}/content`]) {
+      const body = ruta.endsWith("/content")
+        ? { status: "published", blocks: [] }
+        : { status: "published" };
+      expect((await admin(ruta, "PUT", tokens.superadmin, body)).status, `${ruta} con status`).toBe(400);
+      const conFecha = ruta.endsWith("/content")
+        ? { publish_at: "2099-01-01T00:00", blocks: [] }
+        : { publish_at: "2099-01-01T00:00" };
+      expect((await admin(ruta, "PUT", tokens.superadmin, conFecha)).status, `${ruta} con publish_at`).toBe(400);
+    }
+    // Sigue en borrador: ninguna edición lo movió.
+    expect(await estado(id)).toBe("draft");
+  });
+
+  it("concurrencia real: dos submit simultáneos → exactamente uno 200 y uno 409 (FOR UPDATE)", async () => {
+    const { id } = await crearBorrador("concurrencia-submit");
+    // Dos transiciones idénticas disparadas a la vez sobre la misma página. El
+    // lock de fila serializa: la segunda ve el estado nuevo (in_review) y su
+    // origen (draft) ya no coincide → 409. Sin el lock, ambas podían leer "draft".
+    const [a, b] = await Promise.all([
+      admin(`pages/${id}/submit`, "POST", tokens.autor),
+      admin(`pages/${id}/submit`, "POST", tokens.autor),
+    ]);
+    const estados = [a.status, b.status].sort();
+    expect(estados).toEqual([200, 409]);
+    expect(await estado(id)).toBe("in_review");
+  });
+
+  it("la bitácora registra el from/to exacto de cada transición", async () => {
+    const { id } = await crearBorrador("auditoria-transicion");
+    await admin(`pages/${id}/submit`, "POST", tokens.autor);
+    await admin(`pages/${id}/approve`, "POST", tokens.revisor);
+
+    const audit = await (await admin(`audit?resource_type=pages&action=approve&limit=50`)).json();
+    const fila = audit.items.find((r: any) => String(r.resource_id) === String(id));
+    expect(fila, "no se registró la aprobación").toBeTruthy();
+    expect(fila.meta).toMatchObject({ from: "in_review", to: "approved" });
+  });
 });

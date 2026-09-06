@@ -34,6 +34,12 @@ const ACCIONES = [
   "restore",
   "purge",
   "restore_revision",
+  // Transiciones del flujo editorial (deben poder filtrarse en la bitácora).
+  "submit_review",
+  "approve",
+  "return_draft",
+  "archive",
+  "unarchive",
   "role_change",
   "login_ok",
   "login_fail",

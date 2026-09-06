@@ -50,6 +50,10 @@ describeDb("paginas: papelera y programacion", () => {
   const publicList = async () =>
     (await (await fetch(`${baseUrl}/api/public/pages`)).json()) as { slug: string }[];
   const publicDetail = (slug: string) => fetch(`${baseUrl}/api/public/pages/${slug}`);
+  const schedule = (id: number, publish_at: string) =>
+    fetch(`${baseUrl}/api/admin/pages/${id}/schedule`, { method: "POST", headers: auth(), body: JSON.stringify({ publish_at }) });
+  const transicion = (id: number, nombre: string) =>
+    fetch(`${baseUrl}/api/admin/pages/${id}/${nombre}`, { method: "POST", headers: auth() });
 
   beforeAll(async () => {
     db = await createTestDatabase(DB_NAME);
@@ -132,46 +136,50 @@ describeDb("paginas: papelera y programacion", () => {
     // Visible al crearse (sin agenda).
     expect((await publicList()).some((p) => p.slug === "agendada-demo")).toBe(true);
 
-    // Programada al futuro lejano: se oculta de lista, detalle y sitemap.
-    const futuro = await fetch(`${baseUrl}/api/admin/pages/${id}`, {
-      method: "PUT",
-      headers: auth(),
-      body: JSON.stringify({ publish_at: "2099-01-01T00:00" }),
-    });
-    expect(futuro.status).toBe(200);
+    // Programada al futuro lejano (desde published): se oculta de lista, detalle y sitemap.
+    expect((await schedule(id, "2099-01-01T00:00")).status).toBe(200);
     expect((await publicList()).some((p) => p.slug === "agendada-demo")).toBe(false);
     expect((await publicDetail("agendada-demo")).status).toBe(404);
     const sitemap = await (await fetch(`${baseUrl}/sitemap.xml`)).text();
     expect(sitemap).not.toContain("/agendada-demo");
 
-    // Programada al pasado: vuelve a estar visible sola, sin tocar el status.
-    const pasado = await fetch(`${baseUrl}/api/admin/pages/${id}`, {
-      method: "PUT",
-      headers: auth(),
-      body: JSON.stringify({ publish_at: "2000-01-01T00:00" }),
-    });
-    expect(pasado.status).toBe(200);
+    // El mero paso del tiempo la vuelve visible: se simula adelantando la fecha al
+    // pasado directamente en la base (no hay —ni debe haber— endpoint para fijar
+    // una fecha ya pasada; `schedule` sólo acepta futuro).
+    await db("pages").where({ id }).update({ publish_at: new Date(Date.now() - 86_400_000) });
     expect((await publicList()).some((p) => p.slug === "agendada-demo")).toBe(true);
 
-    // Quitar la programación (null) también la deja visible.
-    await fetch(`${baseUrl}/api/admin/pages/${id}`, {
-      method: "PUT",
-      headers: auth(),
-      body: JSON.stringify({ publish_at: null }),
-    });
+    // Publicar ahora (transición) limpia la programación y la deja visible en vivo.
+    expect((await transicion(id, "publish")).status).toBe(200);
     const fila = await db("pages").where({ id }).first();
     expect(fila.publish_at).toBeNull();
+    expect(fila.status).toBe("published");
     expect((await publicList()).some((p) => p.slug === "agendada-demo")).toBe(true);
   });
 
-  it("publish_at con un texto que no es fecha es 400", async () => {
-    const id = await crearPagina("fecha-mala-demo", "draft");
-    const res = await fetch(`${baseUrl}/api/admin/pages/${id}`, {
+  it("editar no cambia la publicación: PUT con status o publish_at es 400", async () => {
+    // Bloqueante D: el estado y la fecha se cambian con transiciones / programar,
+    // no editando la página. Un cliente viejo que los mande recibe 400.
+    const id = await crearPagina("rechazo-estado-demo", "draft");
+    expect((await fetch(`${baseUrl}/api/admin/pages/${id}`, {
       method: "PUT",
       headers: auth(),
-      body: JSON.stringify({ publish_at: "no-es-fecha" }),
-    });
-    expect(res.status).toBe(400);
+      body: JSON.stringify({ publish_at: "2099-01-01T00:00" }),
+    })).status).toBe(400);
+    expect((await fetch(`${baseUrl}/api/admin/pages/${id}`, {
+      method: "PUT",
+      headers: auth(),
+      body: JSON.stringify({ status: "published" }),
+    })).status).toBe(400);
+    // Editar sólo contenido sí funciona.
+    expect((await fetch(`${baseUrl}/api/admin/pages/${id}`, {
+      method: "PUT",
+      headers: auth(),
+      body: JSON.stringify({ title: "nuevo titulo" }),
+    })).status).toBe(200);
+    const fila = await db("pages").where({ id }).first();
+    expect(fila.status).toBe("draft"); // nunca se publicó
+    expect(fila.publish_at).toBeNull();
   });
 
   it("editar una página que está en la papelera es 404", async () => {
@@ -218,39 +226,31 @@ describeDb("paginas: papelera y programacion", () => {
     expect(jsonColumn<any>(bloques[0].props).height).toBe(15);
   });
 
-  it("programar desde BORRADOR: publicada + fecha futura en una operación, oculta hasta la fecha", async () => {
-    const id = await crearPagina("programar-borrador-demo", "draft");
-    // Programar en una sola operación: pasa a published con publish_at futuro.
-    const prog = await fetch(`${baseUrl}/api/admin/pages/${id}`, {
-      method: "PUT",
-      headers: auth(),
-      body: JSON.stringify({ status: "published", publish_at: "2099-01-01T00:00" }),
-    });
-    expect(prog.status, await prog.clone().text()).toBe(200);
+  it("programar por el flujo: borrador → revisión → aprobado → programado, oculto hasta la fecha", async () => {
+    const id = await crearPagina("programar-flujo-demo", "draft");
+    // Desde borrador NO se puede programar: hay que pasar por el flujo.
+    expect((await schedule(id, "2099-01-01T00:00")).status).toBe(409);
 
-    // La fila quedó published + agendada, pero el sitio no la muestra todavía.
+    expect((await transicion(id, "submit")).status).toBe(200);
+    expect((await transicion(id, "approve")).status).toBe(200);
+
+    // Aprobada: se programa a futuro. Queda published + agendada, pero oculta.
+    expect((await schedule(id, "2099-01-01T00:00")).status).toBe(200);
     const fila = await db("pages").where({ id }).first();
     expect(fila.status).toBe("published");
     expect(fila.publish_at).toBeTruthy();
-    expect((await publicList()).some((p) => p.slug === "programar-borrador-demo")).toBe(false);
-    expect((await publicDetail("programar-borrador-demo")).status).toBe(404);
+    expect((await publicList()).some((p) => p.slug === "programar-flujo-demo")).toBe(false);
+    expect((await publicDetail("programar-flujo-demo")).status).toBe(404);
     const sitemap = await (await fetch(`${baseUrl}/sitemap.xml`)).text();
-    expect(sitemap).not.toContain("/programar-borrador-demo");
+    expect(sitemap).not.toContain("/programar-flujo-demo");
 
-    // Cuando la fecha ya pasó, aparece sola (mismo status published).
-    await fetch(`${baseUrl}/api/admin/pages/${id}`, {
-      method: "PUT",
-      headers: auth(),
-      body: JSON.stringify({ publish_at: "2000-01-01T00:00" }),
-    });
-    expect((await publicList()).some((p) => p.slug === "programar-borrador-demo")).toBe(true);
+    // Publicar ahora limpia la agenda → visible en vivo.
+    expect((await transicion(id, "publish")).status).toBe(200);
+    expect((await publicList()).some((p) => p.slug === "programar-flujo-demo")).toBe(true);
 
-    // Despublicar la mantiene fuera del sitio (vuelve a borrador).
-    await fetch(`${baseUrl}/api/admin/pages/${id}`, {
-      method: "PUT",
-      headers: auth(),
-      body: JSON.stringify({ status: "draft" }),
-    });
-    expect((await publicList()).some((p) => p.slug === "programar-borrador-demo")).toBe(false);
+    // Despublicar (transición explícita) la saca del sitio y la vuelve a borrador.
+    expect((await transicion(id, "unpublish")).status).toBe(200);
+    expect((await db("pages").where({ id }).first()).status).toBe("draft");
+    expect((await publicList()).some((p) => p.slug === "programar-flujo-demo")).toBe(false);
   });
 });

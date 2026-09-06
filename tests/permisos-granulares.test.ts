@@ -121,7 +121,7 @@ describeDb("autorización granular por capacidades", () => {
     { desc: "editar contenido", method: "PUT", path: "specialties/999999", body: { name: "x" }, cap: "content.write" },
     { desc: "borrar contenido", method: "DELETE", path: "specialties/999999", cap: "content.delete" },
     { desc: "editar página (sin publicar)", method: "PUT", path: "pages/999999", body: { title: "x" }, cap: "content.write" },
-    { desc: "publicar página", method: "PUT", path: "pages/999999", body: { status: "published" }, cap: "content.publish" },
+    { desc: "publicar página", method: "POST", path: "pages/999999/publish", cap: "content.publish" },
     { desc: "programar página", method: "POST", path: "pages/999999/schedule", body: { publish_at: "2035-01-01T10:00" }, cap: "content.publish" },
     { desc: "leer leads", method: "GET", path: "appointments", cap: "leads.read" },
     { desc: "escribir leads", method: "PUT", path: "appointments/999999", body: { status: "confirmado" }, cap: "leads.write" },
@@ -166,14 +166,19 @@ describeDb("autorización granular por capacidades", () => {
       expect(crear.status, await crear.clone().text()).toBe(201);
       pageId = (await crear.json()).id;
 
-      expect((await req("PUT", `pages/${pageId}`, tokens.autor, { status: "published" })).status).toBe(403);
+      // Las transiciones de publicación exigen content.publish; el autor no la tiene.
+      expect((await req("POST", `pages/${pageId}/publish`, tokens.autor)).status).toBe(403);
       expect((await req("POST", `pages/${pageId}/schedule`, tokens.autor, { publish_at: "2035-01-01T10:00" })).status).toBe(403);
-      // Pero sí puede seguir editando el borrador.
+      // Pero sí puede enviar a revisión (content.write) y seguir editando el borrador.
+      expect((await req("POST", `pages/${pageId}/submit`, tokens.autor)).status).toBe(200);
+      expect((await req("POST", `pages/${pageId}/return`, tokens.autor)).status).toBe(200);
       expect((await req("PUT", `pages/${pageId}`, tokens.autor, { title: "Borrador editado" })).status).toBe(200);
     });
 
-    it("un revisor sí puede publicar ese borrador", async () => {
-      expect((await req("PUT", `pages/${pageId}`, tokens.revisor, { status: "published" })).status).toBe(200);
+    it("un revisor sí puede publicar ese borrador (por el flujo)", async () => {
+      expect((await req("POST", `pages/${pageId}/submit`, tokens.revisor)).status).toBe(200);
+      expect((await req("POST", `pages/${pageId}/approve`, tokens.revisor)).status).toBe(200);
+      expect((await req("POST", `pages/${pageId}/publish`, tokens.revisor)).status).toBe(200);
     });
 
     it("un autor no puede borrar la página (no tiene content.delete)", async () => {
@@ -182,53 +187,45 @@ describeDb("autorización granular por capacidades", () => {
   });
 
   /**
-   * Restaurar una versión también cambia el estado de publicación, en las dos
-   * direcciones. El guard tiene que cubrir la despublicación (restaurar un
-   * borrador sobre una página publicada), no sólo el re-publicar: si no, un
-   * `autor` sin `content.publish` bajaba una página viva a borrador por esta
-   * puerta. Se prueba contra la base que el estado no cambió.
+   * Bloqueante D: restaurar una versión es **sólo contenido** (título, SEO,
+   * bloques). NO cambia el estado de publicación ni `publish_at` —eso se hace sólo
+   * por las transiciones—. Por eso restaurar exige `content.write` (que el autor
+   * tiene) y no `content.publish`, y no puede publicar ni despublicar una página
+   * viva por la ventana trasera del historial.
    */
-  describe("restaurar una versión respeta editar-vs-publicar", () => {
-    /** Crea una página, le archiva una versión en borrador y la deja publicada. */
-    const prepararPublicadaConVersionBorrador = async (slug: string): Promise<{ pid: number; revId: number }> => {
-      const crear = await req("POST", "pages", tokens.superadmin, { slug, title: `Restore ${slug}` });
+  describe("restaurar una versión es sólo contenido", () => {
+    /** Crea una página publicada, guarda contenido dos veces y deja una revisión. */
+    const prepararPublicadaConRevision = async (slug: string): Promise<{ pid: number; revId: number }> => {
+      const crear = await req("POST", "pages", tokens.superadmin, { slug, title: `Restore ${slug}`, status: "published" });
       expect(crear.status, await crear.clone().text()).toBe(201);
       const pid = (await crear.json()).id as number;
-      // Estando en borrador, /content archiva una foto con status="draft".
-      expect((await req("PUT", `pages/${pid}/content`, tokens.superadmin, { blocks: [] })).status).toBe(200);
-      // Ahora se publica (el PUT no archiva, así que la única versión es la de borrador).
-      expect((await req("PUT", `pages/${pid}`, tokens.superadmin, { status: "published" })).status).toBe(200);
+      expect((await req("PUT", `pages/${pid}/content`, tokens.superadmin, { title: "C1", blocks: [] })).status).toBe(200);
+      // El segundo guardado archiva "C1" (con el estado actual: published).
+      expect((await req("PUT", `pages/${pid}/content`, tokens.superadmin, { title: "C2", blocks: [] })).status).toBe(200);
       const revs = await (await req("GET", `pages/${pid}/revisions`, tokens.superadmin)).json();
-      expect(revs.length, "debería haber exactamente una versión (la de borrador)").toBe(1);
-      return { pid, revId: revs[0].id };
+      const rev = revs.find((r: any) => r.title === "C1");
+      expect(rev, "debería existir la revisión de C1").toBeTruthy();
+      return { pid, revId: rev.id };
     };
 
-    it("un autor no puede despublicar una página viva restaurando un borrador", async () => {
-      const { pid, revId } = await prepararPublicadaConVersionBorrador("h1-autor");
+    it("un autor puede restaurar (es content.write) y la publicación no cambia", async () => {
+      const { pid, revId } = await prepararPublicadaConRevision("restore-autor");
       const res = await req("POST", `pages/${pid}/revisions/${revId}/restore`, tokens.autor);
-      expect(res.status, "un autor pudo despublicar vía restore").toBe(403);
-      const page = await (await req("GET", `pages/${pid}`, tokens.superadmin)).json();
-      expect(page.status, "la página quedó despublicada por un autor").toBe("published");
-    });
-
-    it("un revisor sí puede (tiene content.publish): la restauración despublica", async () => {
-      const { pid, revId } = await prepararPublicadaConVersionBorrador("h1-revisor");
-      const res = await req("POST", `pages/${pid}/revisions/${revId}/restore`, tokens.revisor);
       expect(res.status, await res.clone().text()).toBe(200);
       const page = await (await req("GET", `pages/${pid}`, tokens.superadmin)).json();
-      expect(page.status).toBe("draft");
+      expect(page.title).toBe("C1"); // contenido restaurado
+      expect(page.status, "restaurar no debe cambiar la publicación").toBe("published");
     });
 
-    it("un autor sí puede restaurar sin cambiar el estado (borrador→borrador)", async () => {
-      const crear = await req("POST", "pages", tokens.superadmin, { slug: "h1-borrador", title: "H1 borrador" });
+    it("un autor restaura una página en borrador sin cambiar el estado", async () => {
+      const crear = await req("POST", "pages", tokens.superadmin, { slug: "restore-borrador", title: "H1 borrador" });
       const pid = (await crear.json()).id as number;
-      // Dos guardados en borrador → hay una versión en borrador para restaurar.
-      expect((await req("PUT", `pages/${pid}/content`, tokens.superadmin, { blocks: [] })).status).toBe(200);
-      expect((await req("PUT", `pages/${pid}/content`, tokens.superadmin, { blocks: [] })).status).toBe(200);
+      expect((await req("PUT", `pages/${pid}/content`, tokens.superadmin, { title: "v1", blocks: [] })).status).toBe(200);
+      expect((await req("PUT", `pages/${pid}/content`, tokens.superadmin, { title: "v2", blocks: [] })).status).toBe(200);
       const revs = await (await req("GET", `pages/${pid}/revisions`, tokens.superadmin)).json();
       const res = await req("POST", `pages/${pid}/revisions/${revs[0].id}/restore`, tokens.autor);
-      // Editar sin tocar el estado de publicación no exige content.publish.
       expect(res.status, await res.clone().text()).toBe(200);
+      expect((await (await req("GET", `pages/${pid}`, tokens.superadmin)).json()).status).toBe("draft");
     });
   });
 
@@ -243,7 +240,10 @@ describeDb("autorización granular por capacidades", () => {
       const crearPagina = await req("POST", "pages", tokens.editor, { slug: "rbac-editor-pagina", title: "Página editor" });
       expect(crearPagina.status).toBe(201);
       const pid = (await crearPagina.json()).id;
-      expect((await req("PUT", `pages/${pid}`, tokens.editor, { status: "published" })).status).toBe(200);
+      // El editor conserva la capacidad de publicar, ahora por el flujo editorial.
+      expect((await req("POST", `pages/${pid}/submit`, tokens.editor)).status).toBe(200);
+      expect((await req("POST", `pages/${pid}/approve`, tokens.editor)).status).toBe(200);
+      expect((await req("POST", `pages/${pid}/publish`, tokens.editor)).status).toBe(200);
 
       const ajuste = await req("PUT", "settings/theme", tokens.editor, { value: {} });
       expect(ajuste.status, `el editor ya no puede editar ajustes: ${ajuste.status}`).not.toBe(403);
