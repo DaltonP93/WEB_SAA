@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { db } from "../../db.js";
 import { sanitizeHtml } from "../../html.js";
+import { badRequest, notFound } from "../../http.js";
 
 export const doctorsRouter = Router();
 
@@ -52,7 +53,11 @@ async function syncSpecialties(doctorId: number, ids: number[]) {
 }
 
 doctorsRouter.post("/", async (req, res) => {
-  const p = schema.parse(req.body);
+  // `safeParse` + 400 con los campos que fallan: `parse()` lanzaba ZodError y el
+  // manejador global lo convertía en 500 "error interno", sin decir qué corregir.
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) throw badRequest("payload invalido", parsed.error.flatten().fieldErrors);
+  const p = parsed.data;
   const [id] = await db("doctors").insert({
     slug: p.slug,
     name: p.name,
@@ -66,7 +71,13 @@ doctorsRouter.post("/", async (req, res) => {
 });
 
 doctorsRouter.put("/:id", async (req, res) => {
-  const p = schema.partial().parse(req.body);
+  const parsed = schema.partial().safeParse(req.body);
+  if (!parsed.success) throw badRequest("payload invalido", parsed.error.flatten().fieldErrors);
+  const p = parsed.data;
+  // Un id inexistente actualizaba cero filas y devolvía `{ ok: true }`: el panel
+  // no podía distinguir "se guardó" de "no existe".
+  const existe = await db("doctors").where({ id: req.params.id }).first("id");
+  if (!existe) throw notFound("médico no encontrado");
   const patch: any = {};
   if (p.slug !== undefined) patch.slug = p.slug;
   if (p.name !== undefined) patch.name = p.name;
@@ -80,6 +91,7 @@ doctorsRouter.put("/:id", async (req, res) => {
 });
 
 doctorsRouter.delete("/:id", async (req, res) => {
-  await db("doctors").where({ id: req.params.id }).del();
+  const n = await db("doctors").where({ id: req.params.id }).del();
+  if (!n) throw notFound("médico no encontrado");
   res.status(204).end();
 });

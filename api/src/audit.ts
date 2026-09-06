@@ -1,19 +1,23 @@
 import type { Request } from "express";
+import { createHash } from "node:crypto";
 import { db } from "./db.js";
 import { errorSeguro } from "./log-seguro.js";
 
 /**
- * Bitácora de acciones administrativas.
+ * Bitácora **operativa** de acciones administrativas (contrato de cobertura).
  *
- * `registrarAccion` es **best-effort**: nunca lanza. Registrar la acción no
- * puede romper ni demorar la acción principal —el contenido ya se guardó cuando
- * esto corre—, así que cualquier fallo (tabla ausente, base caída) se traga y se
- * loguea de forma segura. La contrapartida es que en un incidente de base puede
- * faltar una fila; para el uso de este proyecto (trazabilidad operativa, no
- * cumplimiento legal estricto) es el compromiso correcto.
+ * `registrarAccion` es **best-effort**: nunca lanza y se ejecuta **después** de la
+ * acción principal, así que cualquier fallo (tabla ausente, base caída, proceso
+ * caído entre la mutación y el insert) se traga. **Contrato explícito: esto es una
+ * bitácora operativa para trazabilidad, no un registro de auditoría con garantía
+ * de integridad completa.** No promete que toda mutación tenga su fila: en un
+ * incidente puede faltar. Si en el futuro una operación necesitara auditoría
+ * **obligatoria**, habría que escribir mutación y bitácora en la misma transacción
+ * o vía outbox — es una decisión de alcance del propietario, no está implementado.
  *
- * Nunca se guarda PII de pacientes: el emisor pasa sólo metadatos de operación
- * (id de recurso, slug, cambio de rol). `meta` se sanea igual como defensa.
+ * Nunca se guarda PII: el emisor pasa sólo metadatos de operación (id de recurso,
+ * slug, cambio de rol) y `meta` se sanea como defensa. El correo de un intento de
+ * acceso fallido se guarda **seudonimizado** (`seudonimoEmail`), nunca en claro.
  */
 
 export type AuditAction =
@@ -80,14 +84,32 @@ export function sanitizarMeta(meta: Record<string, unknown>): Record<string, unk
   return out;
 }
 
-/** IP del operador, sin depender de `trust proxy`. Nginx setea X-Real-IP. */
+/**
+ * IP del operador para la bitácora, derivada de `req.ip`.
+ *
+ * `req.ip` respeta `trust proxy` (configurado en `app.ts` como `loopback`): sólo
+ * cree en `X-Forwarded-For` cuando la conexión entrante es el proxy de confianza
+ * (Nginx en loopback); en cualquier otro caso es la IP del peer directo. Antes se
+ * leían `X-Real-IP`/`X-Forwarded-For` **a ciegas**, así que si el puerto de la API
+ * quedaba accesible sin pasar por Nginx, cualquiera falsificaba la IP registrada.
+ * No se leen esas cabeceras acá: la decisión de en quién confiar es de Express.
+ */
 export function ipDe(req: Request): string | null {
-  const real = req.headers["x-real-ip"];
-  if (typeof real === "string" && real) return real.slice(0, 45);
-  const fwd = req.headers["x-forwarded-for"];
-  if (typeof fwd === "string" && fwd) return fwd.split(",")[0].trim().slice(0, 45);
-  const direct = req.ip ?? req.socket?.remoteAddress ?? null;
-  return direct ? String(direct).slice(0, 45) : null;
+  const ip = req.ip ?? req.socket?.remoteAddress ?? null;
+  return ip ? String(ip).slice(0, 45) : null;
+}
+
+/**
+ * Seudónimo estable de un correo para la bitácora (SHA-256 truncado, hex).
+ *
+ * En un intento de acceso fallido no se sabe quién es, pero guardar el correo en
+ * claro mete PII en una tabla que se lee desde el panel. El seudónimo permite
+ * correlacionar intentos repetidos contra el mismo correo sin almacenarlo: se
+ * normaliza (trim + minúsculas) y se hashea. No es reversible salvo por fuerza
+ * bruta sobre correos ya conocidos.
+ */
+export function seudonimoEmail(email: string): string {
+  return createHash("sha256").update(String(email).trim().toLowerCase()).digest("hex").slice(0, 16);
 }
 
 /** Actor + IP a partir del request autenticado. */

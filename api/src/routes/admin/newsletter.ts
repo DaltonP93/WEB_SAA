@@ -3,6 +3,7 @@ import { db } from "../../db.js";
 import { leerAtribucion } from "../../marketing.js";
 import { formatearEnZona } from "../../timezone.js";
 import { celdaCsv } from "./appointments.js";
+import { likeLiteral } from "../../sql-like.js";
 
 /**
  * Bandeja de suscriptores de novedades.
@@ -40,7 +41,7 @@ newsletterRouter.get("/", async (req, res) => {
 
   const base = () => {
     let qb = db("newsletter_subscribers");
-    if (q) qb = qb.where("email", "like", `%${q}%`);
+    if (q) qb = qb.where("email", "like", likeLiteral(q));
     return qb;
   };
 

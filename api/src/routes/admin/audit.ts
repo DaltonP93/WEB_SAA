@@ -4,6 +4,7 @@ import { db } from "../../db.js";
 import { badRequest } from "../../http.js";
 import { formatearEnZona, inicioDelDia, inicioDelDiaSiguiente } from "../../timezone.js";
 import { celdaCsv } from "./appointments.js";
+import { errorSeguro } from "../../log-seguro.js";
 
 /**
  * Lectura de la bitácora de acciones administrativas (`admin_audit_log`).
@@ -150,10 +151,17 @@ auditRouter.get("/", async (req, res) => {
   res.json({ items: filas.map(normalizar), total: Number(total), limit: f.limit, offset: f.offset });
 });
 
-/** Exportación completa de lo que coincide con los filtros. `no-store`: puede llevar IPs y correos. */
+/**
+ * Exportación de lo que coincide con los filtros, **por streaming**.
+ *
+ * La bitácora crece sin techo; construir el CSV entero en memoria (traer todas las
+ * filas a un arreglo y concatenar un string gigante) podía tumbar el proceso en un
+ * VPS chico. Se transmite fila por fila desde un stream de knex: memoria
+ * aproximadamente constante. `no-store`: el archivo puede llevar IPs y correos
+ * seudonimizados.
+ */
 auditRouter.get("/export", async (req, res) => {
   const f = leerFiltros(req.query);
-  const filas = await aplicarOrden(aplicarFiltros(db("admin_audit_log"), f), f).select(COLUMNAS);
 
   const columnas: [string, (r: any) => unknown][] = [
     ["Fecha", (r) => formatearEnZona(r.created_at)],
@@ -166,15 +174,23 @@ auditRouter.get("/export", async (req, res) => {
     ["IP", (r) => r.ip ?? ""],
   ];
 
-  const lineas = [
-    columnas.map(([h]) => celdaCsv(h)).join(","),
-    ...filas.map((r: Record<string, unknown>) => columnas.map(([, valor]) => celdaCsv(valor(r))).join(",")),
-  ];
-  const csv = "﻿" + lineas.join("\r\n");
-
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Content-Disposition", 'attachment; filename="auditoria.csv"');
-  res.send(csv);
+  res.write("﻿" + columnas.map(([h]) => celdaCsv(h)).join(",") + "\r\n");
+
+  const stream = aplicarOrden(aplicarFiltros(db("admin_audit_log"), f), f).select(COLUMNAS).stream();
+  try {
+    for await (const r of stream) {
+      res.write(columnas.map(([, valor]) => celdaCsv(valor(r as Record<string, unknown>))).join(",") + "\r\n");
+    }
+    res.end();
+  } catch (err) {
+    // Las cabeceras ya salieron: no se puede cambiar el status. Se corta el stream
+    // y se cierra la respuesta; el error se loguea sin PII ni SQL.
+    (stream as unknown as { destroy?: () => void }).destroy?.();
+    if (!res.writableEnded) res.end();
+    console.error(`[audit/export] stream interrumpido: ${errorSeguro(err)}`);
+  }
 });

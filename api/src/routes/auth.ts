@@ -3,7 +3,7 @@ import { z } from "zod";
 import { db } from "../db.js";
 import { comparePassword, signToken, requireAuth, DUMMY_PASSWORD_HASH } from "../auth.js";
 import { rateLimit } from "../rate-limit.js";
-import { registrarAccion, ipDe } from "../audit.js";
+import { registrarAccion, ipDe, seudonimoEmail } from "../audit.js";
 import { capacidadesDe } from "../permisos.js";
 
 export const authRouter = Router();
@@ -55,13 +55,13 @@ authRouter.post("/login", loginLimiter, async (req, res) => {
     // emails están registrados.
     await comparePassword(password, DUMMY_PASSWORD_HASH);
     registerFailedAttempt(key, now);
-    await registrarAccion({ actorId: null, actorName: null, actorRole: null, ip: ipDe(req), action: "login_fail", meta: { email } });
+    await registrarAccion({ actorId: null, actorName: null, actorRole: null, ip: ipDe(req), action: "login_fail", meta: { emailHash: seudonimoEmail(email) } });
     return res.status(401).json({ error: "credenciales invalidas" });
   }
   const ok = await comparePassword(password, user.password_hash);
   if (!ok) {
     registerFailedAttempt(key, now);
-    await registrarAccion({ actorId: null, actorName: null, actorRole: null, ip: ipDe(req), action: "login_fail", meta: { email } });
+    await registrarAccion({ actorId: null, actorName: null, actorRole: null, ip: ipDe(req), action: "login_fail", meta: { emailHash: seudonimoEmail(email) } });
     return res.status(401).json({ error: "credenciales invalidas" });
   }
   attempts.delete(key);
