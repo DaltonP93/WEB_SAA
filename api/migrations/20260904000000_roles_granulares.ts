@@ -9,36 +9,50 @@ import type { Knex } from "knex";
  * los middlewares `requirePermiso*` en las rutas; esta columna es la fuente de
  * verdad del rol de cada usuario.
  *
- * `down()` es reversible pero **con pérdida controlada, y hay que leerla como una
- * elevación de privilegio, no sólo como pérdida de granularidad**: antes de
- * angostar el enum a los dos originales, mapea cualquier rol nuevo a `editor` (si
- * no, MySQL rechazaría el `MODIFY` por valores fuera del dominio). El enum viejo
- * sólo tiene `superadmin`/`editor`, así que un rol restringido —`auditor` (sólo
- * lectura), `analista_marketing`, `operador_leads`— **no tiene un destino de menor
- * privilegio**: termina como `editor`, con contenido completo (leer/escribir/
- * publicar/borrar) + settings + leads. No hay forma de conservar "sólo lectura" en
- * un dominio de dos roles. Un `superadmin` se conserva (no hay lockout por esta
- * vía).
+ * `down()` es reversible pero **fail-closed**: angostar el enum a los dos
+ * originales sólo es seguro si no queda ningún usuario con un rol restringido. Un
+ * rol como `auditor` (sólo lectura), `analista_marketing` u `operador_leads` **no
+ * tiene destino de menor privilegio** en un dominio de dos roles: mapearlo a
+ * `editor` (contenido completo + settings + leads) sería una **elevación de
+ * privilegio**, no una simple pérdida de granularidad. Por eso `down()` **no
+ * degrada automáticamente**: si hay usuarios restringidos, aborta antes de tocar
+ * nada y remite a un backup verificado anterior o a un mapeo manual autorizado. Si
+ * sólo quedan `superadmin`/`editor`, angosta el enum normalmente.
  *
- * ⚠️ Operativo: un rollback que cruce esta migración debe ir seguido de una
- * **revisión de los roles de usuarios** (bitácora `admin_audit_log` + panel de
- * Usuarios), porque cuentas que eran de sólo lectura quedaron con permisos de
- * editor. El `down()` no puede evitarlo; la mitigación es este control posterior.
+ * Esta comprobación es **defensa en profundidad**: el preflight global
+ * `scripts/deploy/roles-rollback-preflight.mjs` (invocado por `rollback-db.sh`)
+ * adelanta el mismo bloqueo a antes del primer `migrate:down` de un batch, para no
+ * revertir migraciones más nuevas y descubrir el problema recién acá. El error
+ * lista sólo conteos por rol, nunca nombres, correos ni otra PII.
  */
 
 const ENUM_NUEVO =
   "ENUM('superadmin','admin','editor','autor','revisor','analista_marketing','operador_leads','auditor')";
 const ENUM_VIEJO = "ENUM('superadmin','editor')";
 const ROLES_VIEJOS = ["superadmin", "editor"];
+const MIGRACION = "20260904000000_roles_granulares.ts";
 
 export async function up(knex: Knex): Promise<void> {
   await knex.raw(`ALTER TABLE \`users\` MODIFY \`role\` ${ENUM_NUEVO} NOT NULL DEFAULT 'editor'`);
 }
 
 export async function down(knex: Knex): Promise<void> {
-  // Cualquier rol que no exista en el enum viejo pasa a editor antes de angostar.
-  // Ver el ⚠️ de la cabecera: esto ELEVA privilegios a roles de sólo lectura;
-  // revisar los roles de usuarios después de un rollback que cruce esta migración.
-  await knex("users").whereNotIn("role", ROLES_VIEJOS).update({ role: "editor" });
+  // Defensa en profundidad del preflight: si hay usuarios con un rol fuera de
+  // {superadmin, editor}, angostar el enum los degradaría a `editor` (elevación de
+  // privilegio). Se aborta ANTES de tocar la base. El mensaje lleva sólo conteos
+  // por rol, nunca nombres ni correos.
+  const restringidos = (await knex("users")
+    .whereNotIn("role", ROLES_VIEJOS)
+    .select("role")
+    .count({ n: "id" })
+    .groupBy("role")) as Array<{ role: string; n: number | string }>;
+  if (restringidos.length > 0) {
+    const resumen = restringidos.map((r) => `${r.role}=${Number(r.n)}`).join(", ");
+    throw new Error(
+      `rollback de ${MIGRACION} bloqueado: hay usuarios con roles fuera de {superadmin, editor} (${resumen}). ` +
+        `Angostar el enum los degradaría a 'editor', una elevación de privilegio para cuentas de sólo lectura o acotadas. ` +
+        `No se modificó ninguna fila. Restaurá un backup verificado ANTERIOR a esta migración o aplicá un mapeo manual de roles autorizado.`,
+    );
+  }
   await knex.raw(`ALTER TABLE \`users\` MODIFY \`role\` ${ENUM_VIEJO} NOT NULL DEFAULT 'editor'`);
 }

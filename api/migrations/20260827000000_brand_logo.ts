@@ -96,7 +96,7 @@ function esObjeto(v: unknown): v is BrandObject {
  * construye el objeto tipado a partir de los valores ya validados —nunca un cast
  * del objeto crudo—.
  */
-function validarSnapshot(value: unknown): BrandSnapshot {
+export function validarSnapshot(value: unknown): BrandSnapshot {
   const o = leerValor(value);
   if (!esObjeto(o)) {
     throw new Error(`${MIGRACION}: snapshot inválido — "${SNAPSHOT_KEY}" no es un objeto JSON.`);
@@ -160,9 +160,13 @@ function validarSnapshot(value: unknown): BrandSnapshot {
       throw new Error(`${MIGRACION}: snapshot inválido — valorAnterior debe ser null o "" (propiedad presente, aplicoCambio=true).`);
     }
   } else {
-    // Propiedad presente y no se aplicó nada ⇒ el valor previo era truthy.
-    if (!(typeof valorAnterior === "string" && valorAnterior.length > 0)) {
-      throw new Error(`${MIGRACION}: snapshot inválido — valorAnterior debe ser un string no vacío (aplicoCambio=false).`);
+    // Propiedad presente y no se aplicó nada ⇒ el valor previo NO era vacío. Es
+    // cualquier valor JSON salvo `null` o `""`: string personalizado, `false`,
+    // `0`, `true`, número, objeto o arreglo. Se preservan tal cual (no se
+    // "normalizan"). Antes se exigía un string no vacío, y eso rechazaba un
+    // snapshot que `up()` sí podía producir para esos valores.
+    if (valorAnterior === null || valorAnterior === "") {
+      throw new Error(`${MIGRACION}: snapshot inválido — valorAnterior no puede ser null ni "" con aplicoCambio=false (propiedad presente).`);
     }
   }
 
@@ -188,7 +192,10 @@ export async function up(knex: Knex): Promise<void> {
   const formaInesperada = filaExistia && brand === null;
   const propiedadExistia = brand !== null && Object.prototype.hasOwnProperty.call(brand, PROP);
   const valorAnterior = propiedadExistia ? (brand as BrandObject)[PROP] : null;
-  const debeAplicar = !formaInesperada && !(brand && (brand as BrandObject)[PROP]);
+  // El default se aplica SÓLO cuando la propiedad está ausente, es `null` o es
+  // "". No por truthiness: `false` y `0` son datos legítimos preexistentes, no
+  // "vacío", y `true`/número/objeto/arreglo también se preservan.
+  const debeAplicar = !formaInesperada && (!propiedadExistia || valorAnterior === null || valorAnterior === "");
 
   // 2. Si ya hay snapshot, validarlo estrictamente ANTES de tocar brand.
   const snapPrevio = await knex("settings").where({ key: SNAPSHOT_KEY }).first();
@@ -215,6 +222,11 @@ export async function up(knex: Knex): Promise<void> {
     aplicoCambio: debeAplicar,
     valorAplicado: debeAplicar ? DEFAULT_VALUE : null,
   };
+  // Se valida el snapshot recién construido ANTES de insertarlo: si por algún
+  // motivo no cumpliera el contrato, la migración aborta sin escribir nada (ni
+  // el snapshot ni el cambio en brand). Garantiza el invariante "todo snapshot
+  // que escribe up() lo aceptan down() y el preflight".
+  validarSnapshot(snapshot);
   await knex("settings").insert({ key: SNAPSHOT_KEY, value: JSON.stringify(snapshot) });
 
   if (debeAplicar) {

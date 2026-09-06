@@ -1,4 +1,5 @@
 import type { Server } from "node:http";
+import { createHash } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Knex } from "knex";
 import {
@@ -127,7 +128,7 @@ describeDb("bitácora de acciones administrativas", () => {
       for (const r of body.items) expect(r.action).toBe("login_ok");
     });
 
-    it("un login fallido queda como login_fail con el email intentado, sin contraseña", async () => {
+    it("un login fallido queda como login_fail con el correo SEUDONIMIZADO, sin correo en claro ni contraseña", async () => {
       const res = await login("admin@sanatorio.local", "contraseña-incorrecta");
       expect(res.status).toBe(401);
       const { body } = await listar("action=login_fail&limit=50");
@@ -135,9 +136,30 @@ describeDb("bitácora de acciones administrativas", () => {
       const fila = body.items[0];
       expect(fila.action).toBe("login_fail");
       expect(fila.actor_id).toBeNull(); // no se sabe quién
-      expect(fila.meta?.email).toBe("admin@sanatorio.local");
-      // Nunca la contraseña intentada.
+      // Seudónimo estable (hash), correlacionable pero sin PII: SHA-256 truncado.
+      const esperado = createHash("sha256").update("admin@sanatorio.local").digest("hex").slice(0, 16);
+      expect(fila.meta?.emailHash).toBe(esperado);
+      // El correo en claro NO se guarda; tampoco la contraseña intentada.
+      expect(JSON.stringify(fila)).not.toContain("admin@sanatorio.local");
       expect(JSON.stringify(fila)).not.toContain("contraseña-incorrecta");
+    });
+
+    it("la IP de la bitácora no se puede falsificar con X-Real-IP", async () => {
+      // `ipDe` ahora usa `req.ip`, que respeta `trust proxy` de Express. Ese
+      // mecanismo gobierna sólo `X-Forwarded-For` y **nunca** consulta
+      // `X-Real-IP` (es una convención de Nginx, no de Express). Antes `ipDe`
+      // leía `X-Real-IP` de la cabecera a ciegas, así que cualquiera podía
+      // dictar la IP del registro. Se manda sólo `X-Real-IP` para probar que ya
+      // no llega a la bitácora por ninguna vía.
+      const res = await fetch(`${baseUrl}/api/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Real-IP": "203.0.113.7" },
+        body: JSON.stringify({ email: "spoof@sanatorio.local", password: "x" }),
+      });
+      expect(res.status).toBe(401);
+      const { body } = await listar("action=login_fail&limit=100");
+      const forjada = body.items.some((r: any) => r.ip === "203.0.113.7");
+      expect(forjada, "la IP falsificada por X-Real-IP llegó a la bitácora").toBe(false);
     });
   });
 
