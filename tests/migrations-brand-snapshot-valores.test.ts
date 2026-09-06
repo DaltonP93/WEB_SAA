@@ -110,9 +110,22 @@ describeDb("Bloqueante A · snapshots de marca por valor", () => {
   async function delBrand(): Promise<void> {
     await db("settings").where({ key: "brand" }).del();
   }
+  // Lectura tolerante, como el `leerValor` de las migraciones: MySQL 8 (columna
+  // JSON real) puede devolver un valor JSON no-objeto ya "desenvuelto" (p. ej. el
+  // caso "forma inesperada" con un string suelto), que no es JSON parseable; en
+  // MariaDB (JSON = LONGTEXT) vuelve con comillas. Se parsea si se puede y, si no,
+  // se devuelve crudo — así el caso no-objeto no revienta el helper.
+  function parseTolerante(v: unknown): unknown {
+    if (typeof v !== "string") return v;
+    try {
+      return JSON.parse(v);
+    } catch {
+      return v;
+    }
+  }
   async function readBrand(): Promise<{ exists: boolean; value?: Brand }> {
     const row = await db("settings").where({ key: "brand" }).first();
-    return row ? { exists: true, value: jsonColumn<Brand>(row.value) } : { exists: false };
+    return row ? { exists: true, value: parseTolerante(row.value) as Brand } : { exists: false };
   }
   async function readSnap(key: string): Promise<unknown> {
     const row = await db("settings").where({ key }).first();
