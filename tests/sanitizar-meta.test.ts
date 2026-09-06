@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from "vitest";
-import { sanitizarMeta } from "../api/src/audit.js";
+import { sanitizarMeta, idDeUrl } from "../api/src/audit.js";
 import { db } from "../api/src/db.js";
 
 /**
@@ -42,5 +42,26 @@ describe("sanitizarMeta redacta claves sensibles", () => {
     expect(out).not.toHaveProperty("obj");
     expect(out).not.toHaveProperty("arr");
     expect((out.larga as string).length).toBe(200);
+  });
+});
+
+describe("idDeUrl extrae el id de recurso de la URL de una mutación", () => {
+  it("toma el segmento numérico que sigue al tipo", () => {
+    expect(idDeUrl("/api/admin/doctors/42", "doctors")).toBe("42");
+    expect(idDeUrl("/api/admin/redirects/7?x=1", "redirects")).toBe("7");
+    // Anidado: el id es el que sigue al tipo, no el sub-recurso.
+    expect(idDeUrl("/api/admin/media/13/alt", "media")).toBe("13");
+  });
+
+  it("un alta sin id (POST a la colección) devuelve null", () => {
+    expect(idDeUrl("/api/admin/doctors", "doctors")).toBeNull();
+    expect(idDeUrl("/api/admin/contact-messages/", "contact-messages")).toBeNull();
+  });
+
+  it("ignora segmentos no numéricos y no confunde el nombre del tipo con un id", () => {
+    expect(idDeUrl("/api/admin/newsletter/export", "newsletter")).toBeNull();
+    expect(idDeUrl("/api/admin/settings", "settings")).toBeNull();
+    // El tipo aparece pero no hay id después.
+    expect(idDeUrl("/api/admin/menus", "menus")).toBeNull();
   });
 });

@@ -160,4 +160,59 @@ describeDb("flujo editorial de páginas", () => {
   it("una transición sobre una página inexistente da 404", async () => {
     expect((await admin(`pages/999999/submit`, "POST", tokens.superadmin)).status).toBe(404);
   });
+
+  // ---- Guardas de edición vs. publicación (hallazgos Codex #36 F1/F3/F6) ----
+
+  it("F1/F6: el autor guarda contenido reenviando el estado actual (draft y in_review) sin 400/403", async () => {
+    const { id } = await crearBorrador("autor-guarda-estado");
+    // El Page Builder reenvía el estado actual en cada guardado. Un borrador:
+    const g1 = await admin(`pages/${id}/content`, "PUT", tokens.autor, {
+      title: "Editado por autor",
+      status: "draft",
+      blocks: [],
+    });
+    expect(g1.status, await g1.clone().text()).toBe(200);
+    // Mandado a revisión: el schema tiene que aceptar `in_review` (antes daba 400)
+    // y el guard, al no cambiar el estado, no exige content.publish.
+    expect((await admin(`pages/${id}/submit`, "POST", tokens.autor)).status).toBe(200);
+    const g2 = await admin(`pages/${id}/content`, "PUT", tokens.autor, {
+      title: "Otra edición en revisión",
+      status: "in_review",
+      blocks: [],
+    });
+    expect(g2.status, await g2.clone().text()).toBe(200);
+    expect(await estado(id)).toBe("in_review"); // el guardado no cambió el estado
+  });
+
+  it("F6: el autor NO puede cambiar el estado por /content (in_review→published da 403)", async () => {
+    const { id } = await crearBorrador("autor-no-cambia-estado");
+    await admin(`pages/${id}/submit`, "POST", tokens.autor);
+    const res = await admin(`pages/${id}/content`, "PUT", tokens.autor, { status: "published", blocks: [] });
+    expect(res.status).toBe(403);
+    expect(await estado(id)).toBe("in_review"); // no publicó
+  });
+
+  it("F3: el autor NO puede cambiar publish_at por PUT sin status (no puede publicar una agendada ni ocultar una viva)", async () => {
+    const { id, slug } = await crearBorrador("autor-no-agenda");
+    // El revisor la programa a futuro: queda published + publish_at futuro → aún no pública.
+    expect((await admin(`pages/${id}/schedule`, "POST", tokens.revisor, { publish_at: "2099-01-01T10:00" })).status).toBe(200);
+    expect((await fetch(`${baseUrl}/api/public/pages/${slug}`)).status).toBe(404);
+    // El autor intenta publicarla ya limpiando la agenda (publish_at:null) sin tocar status → 403.
+    const abuso = await admin(`pages/${id}`, "PUT", tokens.autor, { publish_at: null });
+    expect(abuso.status, await abuso.clone().text()).toBe(403);
+    expect((await fetch(`${baseUrl}/api/public/pages/${slug}`)).status).toBe(404); // sigue oculta
+    // El revisor (content.publish) sí puede limpiar la agenda → pública ya.
+    expect((await admin(`pages/${id}`, "PUT", tokens.revisor, { publish_at: null })).status).toBe(200);
+    expect((await fetch(`${baseUrl}/api/public/pages/${slug}`)).status).toBe(200);
+  });
+
+  it("F8: la bitácora se puede filtrar por una acción editorial (approve) sin 400", async () => {
+    const { id } = await crearBorrador("audit-approve");
+    await admin(`pages/${id}/submit`, "POST", tokens.autor);
+    expect((await admin(`pages/${id}/approve`, "POST", tokens.revisor)).status).toBe(200);
+    const res = await admin(`audit?action=approve&resource_type=pages&limit=100`, "GET", tokens.superadmin);
+    expect(res.status).toBe(200); // antes: 400 (acción no permitida en el filtro)
+    const body = await res.json();
+    expect(body.items.some((r: any) => String(r.resource_id) === String(id) && r.action === "approve")).toBe(true);
+  });
 });

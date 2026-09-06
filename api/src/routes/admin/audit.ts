@@ -33,6 +33,14 @@ const ACCIONES = [
   "restore",
   "purge",
   "restore_revision",
+  // Flujo editorial (transiciones de estado). Deben estar acá para poder
+  // filtrar por ellas: sin la entrada, `?action=approve` respondía 400 y sus
+  // filas sólo aparecían en el listado sin filtro.
+  "submit_review",
+  "approve",
+  "return_draft",
+  "archive",
+  "unarchive",
   "role_change",
   "login_ok",
   "login_fail",

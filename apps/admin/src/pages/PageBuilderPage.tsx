@@ -180,8 +180,16 @@ export default function PageBuilderPage() {
         <div><label className="label">Título</label><input className="input" value={page.title} onChange={(e) => { setPage({ ...page, title: e.target.value }); setDirty(true); }} /></div>
         <div><label className="label">Slug</label><input className="input" value={page.slug} onChange={(e) => { setPage({ ...page, slug: e.target.value }); setDirty(true); }} /></div>
         <div><label className="label">Estado</label>
+          {/* Los cinco estados del flujo editorial: si faltaran En revisión /
+              Aprobada / Archivada, una página en esos estados mostraba el select
+              en blanco. Cambiar el estado que publica (o programar) lo autoriza el
+              backend según la capacidad; un autor guarda sin tocarlo. */}
           <select className="input" value={page.status} onChange={(e) => { setPage({ ...page, status: e.target.value }); setDirty(true); }}>
-            <option value="draft">Borrador</option><option value="published">Publicada</option>
+            <option value="draft">Borrador</option>
+            <option value="in_review">En revisión</option>
+            <option value="approved">Aprobada</option>
+            <option value="published">Publicada</option>
+            <option value="archived">Archivada</option>
           </select>
         </div>
         <div><label className="label">SEO título</label><input className="input" maxLength={70} value={page.seo?.title ?? ""} onChange={(e) => { setPage({ ...page, seo: { ...(page.seo ?? {}), title: e.target.value } }); setDirty(true); }} /></div>

@@ -121,7 +121,12 @@ describeDb("autorización granular por capacidades", () => {
     { desc: "editar contenido", method: "PUT", path: "specialties/999999", body: { name: "x" }, cap: "content.write" },
     { desc: "borrar contenido", method: "DELETE", path: "specialties/999999", cap: "content.delete" },
     { desc: "editar página (sin publicar)", method: "PUT", path: "pages/999999", body: { title: "x" }, cap: "content.write" },
-    { desc: "publicar página", method: "PUT", path: "pages/999999", body: { status: "published" }, cap: "content.publish" },
+    // "publicar por PUT" NO va en esta matriz: el guard de publicación es por
+    // **cambio real** de estado/agenda (compara contra lo guardado), así que sobre
+    // una página inexistente un rol con content.write cae en 404, no en 403 — el
+    // 403 sólo aparece con una página real cuyo estado cambia. Se prueba con
+    // páginas reales en "publicar por PUT exige content.publish (página real)" y en
+    // "separación editar-vs-publicar en páginas".
     { desc: "programar página", method: "POST", path: "pages/999999/schedule", body: { publish_at: "2035-01-01T10:00" }, cap: "content.publish" },
     { desc: "leer leads", method: "GET", path: "appointments", cap: "leads.read" },
     { desc: "escribir leads", method: "PUT", path: "appointments/999999", body: { status: "confirmado" }, cap: "leads.write" },
@@ -144,6 +149,23 @@ describeDb("autorización granular por capacidades", () => {
       });
     });
   }
+
+  describe("publicar por PUT exige content.publish (página real)", () => {
+    // Con el guard por cambio real, publicar hay que probarlo sobre una página
+    // que existe: un borrador recién creado (como superadmin) que cada rol intenta
+    // pasar a `published`. Un rol sin content.write cae en 403 en el montaje; uno
+    // con content.write pero sin content.publish (autor), en el guard. Sólo los que
+    // tienen content.publish lo logran (200).
+    it.each(ROLES)("%s: pasar un borrador real a published es 403 sii no tiene content.publish", async (rol) => {
+      const crear = await req("POST", "pages", tokens.superadmin, { slug: `pub-real-${rol.replace(/_/g, "-")}`, title: `Pub ${rol}` });
+      expect(crear.status, await crear.clone().text()).toBe(201);
+      const pid = (await crear.json()).id;
+      const res = await req("PUT", `pages/${pid}`, tokens[rol], { status: "published" });
+      const espera403 = !tieneCapacidad(rol, "content.publish");
+      expect(res.status === 403, `${rol} → publicar dio ${res.status} (esperaba ${espera403 ? "403" : "200"})`).toBe(espera403);
+      if (!espera403) expect(res.status).toBe(200);
+    });
+  });
 
   describe("denegación por defecto y sin sesión", () => {
     it("sin token, cualquier ruta admin responde 401", async () => {

@@ -7,16 +7,18 @@ import { formatearEnZona } from "../lib/fecha";
 import { useSesion } from "../hooks/useSesion";
 
 /**
- * Bitácora de acciones administrativas (solo lectura, solo superadmin).
+ * Bitácora de acciones administrativas (solo lectura).
  *
  * Muestra quién hizo qué y cuándo: crear/editar/borrar contenido, publicar,
- * programar, mandar a la papelera, restaurar, purgar, cambiar roles y los
- * accesos (ok/fallido). La tabla es append-only en el servidor; acá no se edita
- * nada. Búsqueda, filtros, orden y paginación los resuelve la API.
+ * programar, mandar a la papelera, restaurar, purgar, las transiciones del flujo
+ * editorial, cambiar roles y los accesos (ok/fallido). La tabla es append-only en
+ * el servidor; acá no se edita nada. Búsqueda, filtros, orden y paginación los
+ * resuelve la API.
  *
- * El acceso lo protege el backend (`requireRole("superadmin")`); ocultar el
- * enlace del sidebar es sólo UX. Igual se gatea la pantalla para no mostrarle a
- * un editor una tabla que la API le va a negar.
+ * El acceso lo protege el backend (`requirePermisoPorMetodo({ read: "audit.read" })`),
+ * capacidad que tienen superadmin, admin y auditor. Ocultar el enlace del sidebar
+ * es sólo UX; la pantalla se gatea por la **misma** capacidad —no por rol— para no
+ * negarle a un `admin`/`auditor` una tabla que la API sí le autoriza.
  */
 
 interface AuditRow {
@@ -55,6 +57,11 @@ const ACCIONES: { value: string; label: string }[] = [
   { value: "restore", label: "Restaurar" },
   { value: "purge", label: "Borrado definitivo" },
   { value: "restore_revision", label: "Restaurar versión" },
+  { value: "submit_review", label: "Enviar a revisión" },
+  { value: "approve", label: "Aprobar" },
+  { value: "return_draft", label: "Volver a borrador" },
+  { value: "archive", label: "Archivar" },
+  { value: "unarchive", label: "Desarchivar" },
   { value: "role_change", label: "Cambio de rol" },
   { value: "login_ok", label: "Acceso" },
   { value: "login_fail", label: "Acceso fallido" },
@@ -90,7 +97,8 @@ function comoQuery(f: {
 }
 
 export default function AuditPage() {
-  const { esSuperadmin, cargando } = useSesion();
+  const { puede, cargando } = useSesion();
+  const puedeVer = puede("audit.read");
 
   const [action, setAction] = useState("");
   const [resourceType, setResourceType] = useState("");
@@ -114,7 +122,7 @@ export default function AuditPage() {
     queryKey: [AUDIT_KEY, filtros],
     queryFn: async () => (await api.get(`/admin/audit?${comoQuery(filtros)}`)).data as Pagina,
     placeholderData: (previa) => previa,
-    enabled: esSuperadmin,
+    enabled: puedeVer,
   });
 
   const rows = useMemo(() => list.data?.items ?? [], [list.data]);
@@ -221,11 +229,11 @@ export default function AuditPage() {
     },
   ];
 
-  if (!cargando && !esSuperadmin) {
+  if (!cargando && !puedeVer) {
     return (
       <div>
         <h1 className="text-2xl font-bold mb-1">Auditoría</h1>
-        <p className="text-sm text-gray-500">Sólo un superadministrador puede ver la bitácora de acciones.</p>
+        <p className="text-sm text-gray-500">No tenés permiso para ver la bitácora de acciones.</p>
       </div>
     );
   }

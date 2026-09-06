@@ -289,6 +289,41 @@ describeDb("bitácora de acciones administrativas", () => {
     });
   });
 
+  describe("routers bespoke dejan rastro (auditoría centralizada)", () => {
+    /**
+     * La auditoría de los routers bespoke se registra tras el `finish` del
+     * response (fire-and-forget), así que la fila puede aparecer un instante
+     * después de la respuesta. Se reintenta el listado hasta verla.
+     */
+    const esperarFila = async (qs: string, pred: (r: any) => boolean, intentos = 30): Promise<any> => {
+      for (let i = 0; i < intentos; i++) {
+        const { body } = await listar(qs);
+        const f = (body?.items ?? []).find(pred);
+        if (f) return f;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      return null;
+    };
+
+    it("crear un redirect (router bespoke) registra create con actor", async () => {
+      const res = await fetch(`${baseUrl}/api/admin/redirects`, {
+        method: "POST",
+        headers: json(tokenSuperadmin),
+        body: JSON.stringify({ from: "/vieja-audit", to: "/nueva-audit" }),
+      });
+      expect(res.status, await res.clone().text()).toBe(201);
+      const rid = (await res.json()).id;
+
+      const fila = await esperarFila(
+        "action=create&resource_type=redirects&limit=100",
+        (r: any) => String(r.resource_id) === String(rid) && r.action === "create",
+      );
+      expect(fila, "no se auditó la creación del redirect").toBeTruthy();
+      expect(fila.actor_id).toBe(superadminId);
+      expect(fila.actor_role).toBe("superadmin");
+    });
+  });
+
   describe("filtros, paginación y la bitácora sin secretos", () => {
     it("un filtro de orden inválido responde 400", async () => {
       const { status } = await listar("sort=; DROP TABLE");
