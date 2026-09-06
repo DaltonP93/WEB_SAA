@@ -124,8 +124,11 @@ export function validarSnapshot(value, cfg) {
     if (!(valorAnterior === null || valorAnterior === "")) {
       return { ok: false, motivo: 'valorAnterior debe ser null o "" (propiedad presente, aplicoCambio=true)' };
     }
-  } else if (!(typeof valorAnterior === "string" && valorAnterior.length > 0)) {
-    return { ok: false, motivo: "valorAnterior debe ser un string no vacío (aplicoCambio=false)" };
+  } else if (valorAnterior === null || valorAnterior === "") {
+    // Propiedad presente y no se aplicó nada ⇒ el valor previo NO era vacío:
+    // cualquier valor JSON salvo null o "" (string, false, 0, true, número,
+    // objeto, arreglo). Debe permanecer en paridad con las migraciones.
+    return { ok: false, motivo: 'valorAnterior no puede ser null ni "" con aplicoCambio=false (propiedad presente)' };
   }
 
   return { ok: true };
