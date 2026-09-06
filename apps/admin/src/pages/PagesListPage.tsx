@@ -99,24 +99,13 @@ export default function PagesListPage() {
     onSuccess: () => { toast.success("Eliminada definitivamente"); refetchAll(); },
     onError: () => toast.error("Error al eliminar"),
   });
-  // Semántica explícita de publicación (documentada en CLAUDE_CONTEXT §18.7):
-  //  - Publicar: published + publish_at NULL → visible ya, sin agenda pendiente.
-  //  - Despublicar: draft + publish_at NULL. Un borrador que conservara una
-  //    agenda vieja se re-publicaría oculto al volver a publicar; limpiar la
-  //    fecha evita ese estado confuso.
-  //  - Programar: published + fecha futura, decidido en el backend (zona
-  //    Asunción, no la del navegador).
-  //  - Quitar programación: publish_at NULL dejando published → visible ya.
-  const publicarYa = useMutation({
-    mutationFn: async (p: any) => (await api.put(`/admin/pages/${p.id}`, { status: "published", publish_at: null })).data,
-    onSuccess: () => { toast.success("Publicada"); refetchAll(); },
-    onError: () => toast.error("Error al publicar"),
-  });
-  const despublicar = useMutation({
-    mutationFn: async (p: any) => (await api.put(`/admin/pages/${p.id}`, { status: "draft", publish_at: null })).data,
-    onSuccess: () => { toast.success("Despublicada"); refetchAll(); },
-    onError: () => toast.error("Error al despublicar"),
-  });
+  // La publicación se cambia **sólo** por las transiciones del flujo editorial y
+  // por `schedule` (Bloqueante D). Ya no se editan `status`/`publish_at` por PUT:
+  //  - Publicar / Despublicar / Aprobar / Archivar…: POST /admin/pages/:id/<acción>.
+  //  - Programar: POST /admin/pages/:id/schedule (fecha futura, zona Asunción,
+  //    decidido en el backend).
+  //  - Quitar programación = Publicar ya: la transición `publish` desde `published`
+  //    limpia `publish_at` y deja la página visible en vivo.
   const programarMut = useMutation({
     // La validación de "fecha futura" la hace el backend en zona Asunción, no el
     // navegador: el endpoint `/schedule` interpreta la hora de pared y rechaza el
@@ -126,15 +115,11 @@ export default function PagesListPage() {
     onSuccess: () => { toast.success("Programada"); setProgramando(null); setCuando(""); refetchAll(); },
     onError: (e: any) => toast.error(e?.response?.data?.error ?? "Error al programar"),
   });
-  const quitarProg = useMutation({
-    mutationFn: async (p: any) => (await api.put(`/admin/pages/${p.id}`, { publish_at: null })).data,
-    onSuccess: () => { toast.success("Programación quitada"); refetchAll(); },
-    onError: () => toast.error("Error al quitar la programación"),
-  });
   // Transiciones del flujo editorial: cada una es un POST a /admin/pages/:id/<acción>
-  // (submit, approve, publish, return, archive, unarchive). El backend valida el
-  // estado de origen (409 si no corresponde) y la capacidad; acá sólo se ofrece la
-  // que la sesión puede hacer.
+  // (submit, approve, publish, return, unpublish, archive, unarchive). El backend
+  // valida el estado de origen (409 si no corresponde) y la capacidad; acá sólo se
+  // ofrece la que la sesión puede hacer, y el mensaje de error del backend se
+  // muestra tal cual (incluye el 409 "no se puede … desde el estado …").
   const transicion = useMutation({
     mutationFn: async (v: { id: number; accion: string }) =>
       (await api.post(`/admin/pages/${v.id}/${v.accion}`, {})).data,
@@ -217,11 +202,6 @@ export default function PagesListPage() {
                       Enviar a revisión
                     </button>
                   )}
-                  {p.status === "draft" && puede("content.publish") && (
-                    <button onClick={() => publicarYa.mutate(p)} className="btn-secondary" title="Publicar ya, sin pasar por revisión">
-                      Publicar
-                    </button>
-                  )}
                   {p.status === "in_review" && puede("content.publish") && (
                     <button onClick={() => transicion.mutate({ id: p.id, accion: "approve" })} className="btn-secondary">
                       Aprobar
@@ -238,7 +218,7 @@ export default function PagesListPage() {
                     </button>
                   )}
                   {p.status === "published" && puede("content.publish") && (
-                    <button onClick={() => despublicar.mutate(p)} className="btn-secondary">
+                    <button onClick={() => transicion.mutate({ id: p.id, accion: "unpublish" })} className="btn-secondary">
                       Despublicar
                     </button>
                   )}
@@ -252,7 +232,9 @@ export default function PagesListPage() {
                       Desarchivar
                     </button>
                   )}
-                  {puede("content.publish") && ["draft", "approved", "published"].includes(p.status) && (
+                  {/* Programar sale de los mismos estados que la API acepta
+                      (in_review/approved/published); desde borrador no se ofrece. */}
+                  {puede("content.publish") && ["in_review", "approved", "published"].includes(p.status) && (
                     <button onClick={() => { setProgramando(programando === p.id ? null : p.id); setCuando(""); }} className="btn-secondary">
                       Programar
                     </button>
@@ -272,8 +254,13 @@ export default function PagesListPage() {
                   <button className="btn-primary" disabled={!cuando || programarMut.isPending} onClick={() => enviarProgramacion(p)}>
                     Programar
                   </button>
-                  {p.publish_at && (
-                    <button className="btn-secondary" disabled={quitarProg.isPending} onClick={() => quitarProg.mutate(p)}>
+                  {p.status === "published" && p.publish_at && (
+                    <button
+                      className="btn-secondary"
+                      disabled={transicion.isPending}
+                      title="Publicar ya y quitar la fecha programada"
+                      onClick={() => transicion.mutate({ id: p.id, accion: "publish" })}
+                    >
                       Quitar programación
                     </button>
                   )}

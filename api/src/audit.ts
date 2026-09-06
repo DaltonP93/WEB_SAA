@@ -1,4 +1,4 @@
-import type { Request } from "express";
+import type { Request, Response, NextFunction } from "express";
 import { createHash } from "node:crypto";
 import { db } from "./db.js";
 import { errorSeguro } from "./log-seguro.js";
@@ -145,4 +145,56 @@ export async function registrarAccion(e: RegistroEntrada): Promise<void> {
     // No romper la acción principal. Log seguro, sin PII ni sql.
     console.error(`[audit] no se pudo registrar ${e.action} sobre ${e.resourceType ?? "-"}: ${errorSeguro(err)}`);
   }
+}
+
+/**
+ * Extrae el id del recurso de la URL: el segmento numérico que sigue a
+ * `resourceType` (`/admin/doctors/42` → "42"). Devuelve `null` si no hay id
+ * (alta sobre la colección) o si no es numérico.
+ */
+export function idDeUrl(originalUrl: string, resourceType: string): string | null {
+  const path = (originalUrl.split("?")[0] ?? "").split("#")[0];
+  const partes = path.split("/").filter(Boolean);
+  const i = partes.lastIndexOf(resourceType);
+  if (i === -1) return null;
+  const siguiente = partes[i + 1];
+  return siguiente && /^\d+$/.test(siguiente) ? siguiente : null;
+}
+
+/**
+ * Auditoría **centralizada** para los routers que no la registran por dentro
+ * (doctors, menus, settings, media, redirects, appointments, contact-messages,
+ * newsletter). Se monta como middleware del router y registra una fila tras cada
+ * mutación con respuesta 2xx —el `finish` del response garantiza que la acción
+ * ya terminó bien—. Las lecturas (`GET`/`HEAD`) no se auditan. La acción se
+ * deriva del método (POST→create, DELETE→delete, resto→update). El actor y la IP
+ * se capturan **ahora**, con `req.user` ya puesto por `requireAuth`, porque en
+ * `finish` el request puede haber cambiado. No reemplaza a la auditoría de grano
+ * fino (pages/users registran acciones específicas por dentro): esos routers no
+ * llevan este middleware para no duplicar filas.
+ */
+export function auditarMutaciones(resourceType: string) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const metodo = req.method.toUpperCase();
+    if (metodo === "GET" || metodo === "HEAD" || metodo === "OPTIONS") return next();
+    const actor = actorDe(req);
+    const originalUrl = req.originalUrl;
+    // En un alta (`POST` a la colección) el id no está en la URL sino en el cuerpo
+    // de la respuesta (`{ id }`). Se lo mira al pasar por `res.json` para que la
+    // fila de auditoría del `create` también lleve el id del recurso creado.
+    let idDeCuerpo: string | null = null;
+    const jsonOriginal = res.json.bind(res);
+    res.json = (body: unknown) => {
+      const id = (body as { id?: unknown } | null)?.id;
+      if (typeof id === "number" || typeof id === "string") idDeCuerpo = String(id);
+      return jsonOriginal(body);
+    };
+    res.on("finish", () => {
+      if (res.statusCode < 200 || res.statusCode >= 300) return; // sólo éxitos
+      const action: AuditAction = metodo === "DELETE" ? "delete" : metodo === "POST" ? "create" : "update";
+      const resourceId = idDeUrl(originalUrl, resourceType) ?? idDeCuerpo;
+      void registrarAccion({ ...actor, action, resourceType, resourceId });
+    });
+    next();
+  };
 }

@@ -107,9 +107,10 @@ describe("Páginas · publicación programada", () => {
     expect(within(await filaDe("A futuro")).getByText("Programada")).toBeTruthy();
   });
 
-  it("programar un borrador manda la hora de pared cruda al endpoint del backend", async () => {
+  it("programar una aprobada manda la hora de pared cruda al endpoint del backend", async () => {
     montar();
-    const fila = await filaDe("En borrador");
+    // Programar sale de un estado publicable (aprobada), no de un borrador.
+    const fila = await filaDe("Lista aprobada");
     fireEvent.click(within(fila).getByText("Programar"));
     const input = fila.querySelector('input[type="datetime-local"]') as HTMLInputElement;
     fireEvent.change(input, { target: { value: "2099-01-01T10:00" } });
@@ -120,19 +121,19 @@ describe("Páginas · publicación programada", () => {
     fireEvent.click(submit);
 
     await waitFor(() => {
-      const post = llamadas.find((l) => l.metodo === "POST" && l.url === "/admin/pages/1/schedule");
+      const post = llamadas.find((l) => l.metodo === "POST" && l.url === "/admin/pages/5/schedule");
       expect(post, "tuvo que llamar al endpoint /schedule").toBeTruthy();
       // Manda la hora de pared TAL CUAL: no la convierte con la zona del navegador.
       // La interpretación en zona Asunción y la decisión de "futura" son del backend.
       expect(post!.cuerpo.publish_at).toBe("2099-01-01T10:00");
     });
-    // No usa el PUT genérico para programar.
+    // La publicación no se toca por PUT: todo pasa por transiciones / schedule.
     expect(llamadas.some((l) => l.metodo === "PUT")).toBe(false);
   });
 
   it("una fecha pasada la rechaza el backend (zona Asunción) y se muestra el aviso", async () => {
     montar();
-    const fila = await filaDe("En borrador");
+    const fila = await filaDe("Lista aprobada");
     fireEvent.click(within(fila).getByText("Programar"));
     const input = fila.querySelector('input[type="datetime-local"]') as HTMLInputElement;
     fireEvent.change(input, { target: { value: "2000-01-01T10:00" } });
@@ -144,7 +145,7 @@ describe("Páginas · publicación programada", () => {
 
     // El cliente igual manda la hora cruda; es el backend el que decide y rechaza.
     await waitFor(() => {
-      const post = llamadas.find((l) => l.metodo === "POST" && l.url === "/admin/pages/1/schedule");
+      const post = llamadas.find((l) => l.metodo === "POST" && l.url === "/admin/pages/5/schedule");
       expect(post).toBeTruthy();
       expect(post!.cuerpo.publish_at).toBe("2000-01-01T10:00");
     });
@@ -152,41 +153,34 @@ describe("Páginas · publicación programada", () => {
     expect(toastError.mock.calls[0][0]).toMatch(/futura/i);
   });
 
-  it("Publicar un borrador lo publica y limpia la programación (publish_at NULL)", async () => {
+  it("un borrador NO ofrece 'Publicar' directo (sólo por el flujo) ni 'Programar'", async () => {
     montar();
     const fila = await filaDe("En borrador");
-    fireEvent.click(within(fila).getByText("Publicar"));
-    await waitFor(() => {
-      const put = llamadas.find((l) => l.metodo === "PUT" && l.url === "/admin/pages/1");
-      expect(put).toBeTruthy();
-      expect(put!.cuerpo.status).toBe("published");
-      expect(put!.cuerpo.publish_at).toBeNull();
-    });
+    // Bloqueante D: desde borrador no hay atajo de publicación ni programación.
+    expect(within(fila).queryByText("Publicar")).toBeNull();
+    expect(within(fila).queryByText("Programar")).toBeNull();
+    expect(within(fila).getByText("Enviar a revisión")).toBeTruthy();
   });
 
-  it("Despublicar una publicada la pasa a borrador y limpia la programación", async () => {
+  it("Despublicar una publicada usa la transición /unpublish (no PUT)", async () => {
     montar();
     const fila = await filaDe("Ya publicada");
     fireEvent.click(within(fila).getByText("Despublicar"));
-    await waitFor(() => {
-      const put = llamadas.find((l) => l.metodo === "PUT" && l.url === "/admin/pages/2");
-      expect(put).toBeTruthy();
-      expect(put!.cuerpo.status).toBe("draft");
-      expect(put!.cuerpo.publish_at).toBeNull();
-    });
+    await waitFor(() =>
+      expect(llamadas.find((l) => l.metodo === "POST" && l.url === "/admin/pages/2/unpublish")).toBeTruthy(),
+    );
+    expect(llamadas.some((l) => l.metodo === "PUT")).toBe(false);
   });
 
-  it("Quitar programación deja la página publicada ya (publish_at NULL, sin tocar el status)", async () => {
+  it("Quitar programación publica ya vía /publish (limpia la fecha)", async () => {
     montar();
     const fila = await filaDe("A futuro"); // programada (published + publish_at futuro)
     fireEvent.click(within(fila).getByText("Programar")); // abre el panel con "Quitar programación"
     fireEvent.click(within(fila).getByText("Quitar programación"));
-    await waitFor(() => {
-      const put = llamadas.find((l) => l.metodo === "PUT" && l.url === "/admin/pages/3");
-      expect(put).toBeTruthy();
-      expect(put!.cuerpo.publish_at).toBeNull();
-      expect(put!.cuerpo.status).toBeUndefined(); // no cambia el estado
-    });
+    await waitFor(() =>
+      expect(llamadas.find((l) => l.metodo === "POST" && l.url === "/admin/pages/3/publish")).toBeTruthy(),
+    );
+    expect(llamadas.some((l) => l.metodo === "PUT")).toBe(false);
   });
 });
 
