@@ -172,6 +172,18 @@ if ! printf '%s\n' "$PENDIENTES" | (cd "$ROOT" && DB_HOST="$DB_HOST" DB_PORT="$D
   die "el preflight de procedencia de marca bloqueó el rollback: no se revirtió ninguna migración y la base quedó intacta (ver el detalle de arriba)." 4
 fi
 
+# --- 1c. Preflight de rollback de roles granulares -------------------------
+# Si el rollback cruza la migración de roles granulares y existe algún usuario con
+# un rol fuera de {superadmin, editor}, angostar el enum los degradaría a 'editor'
+# (elevación de privilegio para cuentas de sólo lectura). Se bloquea ANTES de
+# revertir nada. El down() de la migración repite la comprobación (defensa en
+# profundidad). No se salta con ROLLBACK_ALLOW_AFTER_SEED.
+if ! printf '%s\n' "$PENDIENTES" | (cd "$ROOT" && DB_HOST="$DB_HOST" DB_PORT="$DB_PORT" \
+      DB_USER="$DB_USER" DB_PASS="${DB_PASS:-}" DB_NAME="$DB_NAME" \
+      node "${ROOT}/scripts/deploy/roles-rollback-preflight.mjs"); then
+  die "el preflight de rollback de roles bloqueó el rollback: no se revirtió ninguna migración y la base quedó intacta (ver el detalle de arriba)." 4
+fi
+
 # --- 2. Revertir, una por una ----------------------------------------------
 # `migrate:rollback` revierte el batch entero, que puede incluir migraciones
 # que el SHA destino sí tiene. Se va de a una.
