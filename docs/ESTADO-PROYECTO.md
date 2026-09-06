@@ -544,7 +544,45 @@ completa **1754/1754** verde. CI (MySQL 8.0) es la autoridad final.
   estado propio, distinto de la papelera; `publish` limpia `publish_at` (publicar = en vivo ya).
 - Orden de revisión/merge: después de #29 → #30 → #31 → #32 → #33; se apila sobre
   `feat/security-hardening`.
-- Pendiente (PR siguiente): UI del panel (transiciones + diff de versiones).
+- Pendiente (PR siguiente): UI del panel — transiciones en el PR #35 (§21); el diff de versiones
+  queda como slice posterior.
+- Producción → **NO-GO** (bloqueantes externos sin cambios).
+
+---
+
+## 21. Módulo — Flujo editorial de páginas · UI del panel (2026-09-05)
+
+**Rama:** `feat/editorial-ui`, **apilada sobre `feat/editorial-workflow`**. Segunda mitad del
+módulo editorial: la UI que hace usable la máquina de estados de #34, en la lista de Páginas del
+panel.
+
+### 21.1 Qué entrega
+- **Estados del flujo visibles** en `PagesListPage`: Borrador / En revisión / Aprobado /
+  Publicada / Programada / Archivada, con color por estado.
+- **Botones de transición por estado**, cada uno **gateado por capacidad** con `useSesion().puede`:
+  - Borrador → *Enviar a revisión* (`content.write`) y, para quien publica, *Publicar* directo.
+  - En revisión → *Aprobar* (`content.publish`) y *Volver a borrador* (`content.write`).
+  - Aprobado → *Publicar* (`content.publish`) y *Volver a borrador*.
+  - Publicada → *Despublicar* y *Archivar* (`content.publish`).
+  - Archivada → *Desarchivar* (`content.publish`).
+  - *Programar*, *Eliminar* también gateados (`content.publish` / `content.delete`).
+  La autorización real la aplica el backend; la UI sólo evita ofrecer lo que daría 403/409.
+- Cada transición llama al endpoint correspondiente de #34 (`/submit`, `/approve`, `/publish`,
+  `/return`, `/archive`, `/unarchive`).
+
+### 21.2 Validación local
+`tests/pages-list-panel.test.tsx` **12/12** (6 previos + 6 nuevos: muestra los estados nuevos;
+submit/approve/return/publish/archive/unarchive por su endpoint; y **gateo por capacidad** — un
+`autor` ve "Enviar a revisión" pero no "Publicar"/"Aprobar"/"Programar"/"Eliminar"). Typecheck de
+admin OK; `pnpm --filter @sa/admin build` OK.
+
+### 21.3 GO/NO-GO
+- Diseño → GO para revisión. Sin regresión: los caminos previos (publicar/despublicar/programar/
+  papelera) siguen intactos y ahora gateados por capacidad.
+- Orden de revisión/merge: después de #29 → #30 → #31 → #32 → #33 → #34; se apila sobre
+  `feat/editorial-workflow`.
+- Pendiente (slice posterior): vista de preview/diff entre versiones (el historial + restaurar ya
+  existen desde el módulo de revisiones).
 - Producción → **NO-GO** (bloqueantes externos sin cambios).
 
 ---

@@ -75,7 +75,21 @@ beforeEach(async () => {
     { id: 1, slug: "borrador", title: "En borrador", status: "draft", order: 0, publish_at: null },
     { id: 2, slug: "publicada", title: "Ya publicada", status: "published", order: 1, publish_at: null },
     { id: 3, slug: "agendada", title: "A futuro", status: "published", order: 2, publish_at: "2099-01-01T00:00:00Z" },
+    { id: 4, slug: "revision", title: "Mandada a revisión", status: "in_review", order: 3, publish_at: null },
+    { id: 5, slug: "aprobada", title: "Lista aprobada", status: "approved", order: 4, publish_at: null },
+    { id: 6, slug: "archivada", title: "Vieja archivada", status: "archived", order: 5, publish_at: null },
   ];
+  // Sesión con todas las capacidades de contenido: así se ven todas las acciones.
+  // Un caso aparte prueba el gateo con un autor (sin content.publish).
+  respuestas["/auth/me"] = {
+    user: {
+      id: 1,
+      email: "admin@sanatorio.local",
+      name: "Admin",
+      role: "editor",
+      capabilities: ["content.read", "content.write", "content.publish", "content.delete", "leads.read", "leads.write", "settings.read", "settings.write"],
+    },
+  };
   PagesListPage = (await import("../apps/admin/src/pages/PagesListPage")).default;
   ConfirmProvider = (await import("../apps/admin/src/components/ConfirmDialog")).ConfirmProvider;
 });
@@ -173,5 +187,72 @@ describe("Páginas · publicación programada", () => {
       expect(put!.cuerpo.publish_at).toBeNull();
       expect(put!.cuerpo.status).toBeUndefined(); // no cambia el estado
     });
+  });
+});
+
+describe("Páginas · flujo editorial", () => {
+  it("muestra los estados del flujo (En revisión, Aprobado, Archivada)", async () => {
+    montar();
+    expect(within(await filaDe("Mandada a revisión")).getByText("En revisión")).toBeTruthy();
+    expect(within(await filaDe("Lista aprobada")).getByText("Aprobado")).toBeTruthy();
+    expect(within(await filaDe("Vieja archivada")).getByText("Archivada")).toBeTruthy();
+  });
+
+  it("un borrador se envía a revisión por el endpoint /submit", async () => {
+    montar();
+    fireEvent.click(within(await filaDe("En borrador")).getByText("Enviar a revisión"));
+    await waitFor(() =>
+      expect(llamadas.find((l) => l.metodo === "POST" && l.url === "/admin/pages/1/submit")).toBeTruthy(),
+    );
+  });
+
+  it("una página en revisión se aprueba (/approve) y se puede volver a borrador (/return)", async () => {
+    montar();
+    const fila = await filaDe("Mandada a revisión");
+    fireEvent.click(within(fila).getByText("Aprobar"));
+    await waitFor(() =>
+      expect(llamadas.find((l) => l.metodo === "POST" && l.url === "/admin/pages/4/approve")).toBeTruthy(),
+    );
+    fireEvent.click(within(fila).getByText("Volver a borrador"));
+    await waitFor(() =>
+      expect(llamadas.find((l) => l.metodo === "POST" && l.url === "/admin/pages/4/return")).toBeTruthy(),
+    );
+  });
+
+  it("una aprobada se publica (/publish); una archivada se desarchiva (/unarchive)", async () => {
+    montar();
+    fireEvent.click(within(await filaDe("Lista aprobada")).getByText("Publicar"));
+    await waitFor(() =>
+      expect(llamadas.find((l) => l.metodo === "POST" && l.url === "/admin/pages/5/publish")).toBeTruthy(),
+    );
+    fireEvent.click(within(await filaDe("Vieja archivada")).getByText("Desarchivar"));
+    await waitFor(() =>
+      expect(llamadas.find((l) => l.metodo === "POST" && l.url === "/admin/pages/6/unarchive")).toBeTruthy(),
+    );
+  });
+
+  it("una publicada ofrece Archivar (/archive)", async () => {
+    montar();
+    fireEvent.click(within(await filaDe("Ya publicada")).getByText("Archivar"));
+    await waitFor(() =>
+      expect(llamadas.find((l) => l.metodo === "POST" && l.url === "/admin/pages/2/archive")).toBeTruthy(),
+    );
+  });
+
+  it("un autor (sin content.publish) ve 'Enviar a revisión' pero no 'Publicar' ni 'Aprobar'", async () => {
+    respuestas["/auth/me"] = {
+      user: { id: 9, email: "autor@sanatorio.local", name: "Autor", role: "autor", capabilities: ["content.read", "content.write"] },
+    };
+    montar();
+    const borrador = await filaDe("En borrador");
+    expect(within(borrador).getByText("Enviar a revisión")).toBeTruthy();
+    expect(within(borrador).queryByText("Publicar")).toBeNull();
+    expect(within(borrador).queryByText("Programar")).toBeNull(); // programar exige content.publish
+    expect(within(borrador).queryByText("Eliminar")).toBeNull(); // eliminar exige content.delete
+
+    const revision = await filaDe("Mandada a revisión");
+    expect(within(revision).queryByText("Aprobar")).toBeNull();
+    // Pero sí puede retirar su envío (content.write).
+    expect(within(revision).getByText("Volver a borrador")).toBeTruthy();
   });
 });
