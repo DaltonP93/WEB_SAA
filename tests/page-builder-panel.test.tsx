@@ -1,8 +1,14 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, configure, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// El runner de CI corre 90+ archivos en paralelo; el default de 1000ms de
+// `waitFor`/`findBy*` es demasiado ajustado bajo esa carga y provoca fallas
+// intermitentes (la aserción del toast de error llegaba tarde por un pico de GC,
+// no por un defecto). Se da holgura a las esperas asíncronas de este archivo.
+configure({ asyncUtilTimeout: 5000 });
 
 /**
  * El Page Builder: restauración segura y guardado atómico, del lado del panel.
@@ -88,7 +94,7 @@ function paginaBase() {
 }
 
 function montar() {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   // Router de datos (createMemoryRouter): `useUnsavedGuard` usa `useBlocker`,
   // que sólo existe en un data router —igual que en el admin real.
   const router = createMemoryRouter([{ path: "/pages/:id", element: <PageBuilderPage /> }], {
