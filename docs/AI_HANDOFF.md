@@ -1,7 +1,8 @@
 # AI handoff — WEB_SAA
 
-> **Actualizado:** 2026-09-01  
-> **Baseline confirmado:** `main@a4cccc1a3e36cae4fbb40b149f8809de0eac7b2a`  
+> **Actualizado:** 2026-09-07  
+> **Baseline confirmado:** `main@a4cccc1a3e36cae4fbb40b149f8809de0eac7b2a` (sin cambios en `main`).  
+> **Fase actual:** stack de estabilización #29→#36 **completo y en verde en CI (MySQL 8)**, en **Draft**, listo para auditoría independiente de Codex. Producción **NO-GO**. Ver "Estado confirmado" abajo.  
 > **Regla de lectura:** este es el resumen operativo. Antes de modificar algo, leer también `AGENTS.md`, `CLAUDE.md`, `docs/ESTADO-PROYECTO.md` y, si la tarea afecta despliegue, `docs/DEPLOY.md`. Si hay contradicción, priorizar `AGENTS.md` y validar contra el código actual.
 
 ## Propósito del producto
@@ -41,94 +42,61 @@ El sitio público es una SPA estática; la API sirve `/api/`, `/uploads/`, `/rob
 - Los logs deben pasar por el mecanismo seguro del proyecto y nunca exponer PII, URL completas con valores, SQL o secretos.
 - No editar migraciones ya aplicadas; crear una nueva migración incremental cuando corresponda.
 
-## Estado confirmado al 2026-09-01
+## Estado confirmado al 2026-09-07
 
-- `main` está en `a4cccc1` (merge del PR #28, "docs: add AI handoff"). Los commits
-  recientes incluyen el logo institucional navy monocromo ("Logo 4"), una
-  corrección de CSP y una automatización que actualiza el VPS al seguir
-  `origin/main`.
-- Esa automatización vuelve sensible cualquier cambio fusionado: no asumir que un
-  merge está autorizado para producción; confirmar el flujo real, los controles y
-  la aprobación del responsable antes de desplegar. Desde el repositorio sólo se
-  puede confirmar que el mecanismo **existe** (`scripts/deploy/auto-deploy.sh` +
-  unidades systemd descritas en `AGENTS.md §9`); no que esté activo en el VPS.
-- Al 2026-09-02 hay **un PR Draft abierto**: [#29 `fix/brand-rollback-idempotente`],
-  base `a4cccc1`, dedicado a corregir el CI rojo del rollback de marca (detalle abajo).
-  No hay otros PRs abiertos. (Corrige una contradicción de una versión previa de
-  este archivo, que decía "no se observaron PRs abiertos" mientras el PR #29 ya
-  estaba en curso.)
-- **CI rojo en el HEAD (`a4cccc1`)**: el job "Typecheck, build y pruebas" falló en
-  `tests/migrations.test.ts > … el rollback devuelve exactamente el estado
-  anterior`. Typecheck y los tres builds pasaron; el fallo está en el rollback de
-  migraciones. "Detección de secretos" y "Auditoría de dependencias" quedaron en
-  verde.
-- **Causa raíz:** `20260827000000_brand_logo` y `20260828000000_brand_favicon`
-  **crean** la fila `settings.brand` cuando no existe, pero su `down()` original
-  sólo la vaciaba (nunca la borraba). Sobre una base migrada sin sembrar, el
-  rollback dejaba un residuo `{ logoUrl:"", faviconUrl:"" }` que el snapshot de la
-  prueba detecta. Reproducido 3/3 de forma determinística.
-- **Primera solución descartada (heurística de contenido).** Un intento previo del
-  PR #29 agregó una migración posterior que borraba la fila si su contenido
-  "parecía" autogenerado (claves ⊆ `logoUrl`/`faviconUrl` con los valores por
-  defecto). Se **descartó**: una coincidencia de contenido no prueba procedencia.
-  Una fila legítima, preexistente, con exactamente
-  `{ logoUrl:"/logo-sanatorio.png", faviconUrl:"/favicon.png" }` es indistinguible
-  por contenido de una autogenerada, y la heurística la habría borrado (verificado
-  de forma reproducible contra `672ae96`). Esa migración se eliminó del PR.
-- **Solución vigente (por snapshot, excepción autorizada).** Bajo una autorización
-  explícita y acotada del propietario para editar **sólo** esas dos migraciones ya
-  fusionadas, cada una ahora registra un **snapshot interno de procedencia** antes
-  de tocar la base (`snapshot_brand_logo_20260827000000` /
-  `snapshot_brand_favicon_20260828000000`, prefijo `snapshot_`: no publicado ni
-  editable desde el CMS). El snapshot guarda si la fila existía, si la propiedad
-  existía, su valor anterior exacto (distinguiendo ausente / `null` / `""` /
-  default / personalizado) y si la migración realmente aplicó un cambio. El
-  `down()` restaura a partir del snapshot —no del contenido— así que preserva una
-  fila preexistente idéntica a los defaults y cualquier edición posterior del
-  cliente; el `down()` del logo elimina la fila sólo si el snapshot demuestra que
-  no existía y ya no queda ninguna propiedad. **Fail-closed:** en una base migrada
-  **antes** de esta corrección el snapshot no existe y `down()` **aborta sin tocar
-  datos**, remitiendo a restaurar un backup verificado o a un procedimiento manual
-  autorizado; no hay fallback heurístico. Pruebas en
-  `tests/migrations-brand-rollback.test.ts` (incluye la regresión que falla contra
-  `672ae96` y pasa sólo con snapshots).
-- **Segunda auditoría (sobre `bc2439a`) — endurecimiento.** La auditoría halló dos
-  defectos: el lector de snapshot era laxo (aceptaba un objeto parcial y hacía cast,
-  así un snapshot forjado podía borrar una fila legítima) y `up()` no validaba un
-  snapshot preexistente corrupto (lo conservaba pero igual modificaba `brand`). Se
-  corrigió con **validación estricta de estructura cerrada + coherencia** por
-  migración (nunca un cast tras validar sólo algunos campos), `up()` que **lanza**
-  ante un snapshot preexistente inválido y es **no-op idempotente** si es válido, y
-  un **preflight de rollback** (`scripts/deploy/brand-snapshot-preflight.mjs`,
-  invocado por `rollback-db.sh` tras calcular `PENDIENTES` y antes del primer
-  `migrate:down`) que aborta un rollback múltiple **antes** de revertir nada si
-  cruza favicon/logo sin snapshot válido (no se salta con
-  `ROLLBACK_ALLOW_AFTER_SEED`; pide un backup **anterior** a esas migraciones).
-  Pruebas: `tests/migrations-brand-rollback-strict.test.ts` (27) y
-  `tests/rollback-brand-preflight.test.ts` (8) + 2 casos bash end-to-end.
-- **Producción sigue en NO-GO** por los bloqueantes externos de
-  `docs/ESTADO-PROYECTO.md` (secreto histórico, protección de `main`, dominio/DNS/
-  TLS, backups/restore, monitoreo y contenido). Esta corrección no los altera.
-- `docs/ESTADO-PROYECTO.md` mantiene la evaluación histórica más detallada; su
-  baseline previo (`fd49743a`/`7eb570c`) no coincide con el HEAD actual, así que
-  sus conteos de CI no valen como evidencia del HEAD hasta revalidar.
-- **Desarrollo en curso (apilado sobre el PR #29):** rama `feat/admin-audit-log`
-  —primer incremento seguro del módulo de seguridad/roles: **trazabilidad de
-  acciones administrativas** (tabla `admin_audit_log`, emisor best-effort
-  `api/src/audit.ts`, enganches en CRUD/páginas/usuarios/login, endpoint
-  `GET /api/admin/audit` solo-superadmin + página en el panel). No cambia la
-  autorización actual; los permisos granulares (deny-by-default) van en un PR
-  posterior. Detalle y validación en `docs/ESTADO-PROYECTO.md` §16. Se revisa y
-  fusiona **después** del PR #29. Producción sigue NO-GO.
-- **Desarrollo en curso (apilado sobre `feat/admin-audit-log`):** rama
-  `feat/roles-granulares` — **permisos granulares (RBAC deny-by-default)**: modelo
-  de capacidades por recurso/acción (`api/src/permisos.ts`), 8 roles, middlewares
-  `requirePermiso*`, mapa de autorización central en `routes/admin/index.ts`,
-  separación editar-vs-publicar en páginas, y `/auth/me` con capacidades para el
-  panel. `editor` conserva su poder actual (sin regresión); el tightening recae en
-  los 6 roles nuevos y la denegación por defecto. Detalle en
-  `docs/ESTADO-PROYECTO.md` §17. Orden de revisión: después de #29 y del PR de
-  auditoría. Producción sigue NO-GO.
+`main` sigue en `a4cccc1` (merge del PR #28, "docs: add AI handoff"); **nada se
+fusionó a `main`** desde entonces. Todo el trabajo vive en un **stack lineal de 8
+PR Draft** (#29→#36), cada uno basado en el anterior, con CI en **verde sobre
+MySQL 8** (los tres jobs: "Typecheck, build y pruebas", "Detección de secretos",
+"Auditoría de dependencias"). Ninguno debe fusionarse todavía: quedan para la
+**auditoría independiente de Codex**. `#36` es sólo un PR de **integración** hacia
+`main` para ver el diff completo del stack y **no debe fusionarse** (cada pieza se
+fusiona por su propio PR, en orden, empezando por #29).
+
+| PR | Rama | Head | Qué aporta |
+|----|------|------|-----------|
+| #29 | `fix/brand-rollback-idempotente` | `31b792d` | Rollback de `settings.brand` por **snapshot de procedencia** (fail-closed, sin heurística) + preflight; corrige el CI rojo histórico de `main`. |
+| #30 | `feat/admin-audit-log` | `f70d9dd` | Bitácora `admin_audit_log` (append-only, gateada por `audit.read`, sin PII); middleware `auditarMutaciones` para routers sin auditoría propia. |
+| #31 | `feat/roles-granulares` | `b588953` | RBAC por capacidades (`api/src/permisos.ts`, 8 roles, deny-by-default) + rollback fail-closed de roles. |
+| #32 | `feat/jwt-revocacion` | `0e682ee` | Revocación de sesiones por `auth_version` (igualdad exacta, fail-closed, HS256 fijado). |
+| #33 | `feat/security-hardening` | `50261a1` | Ronda 2: bind loopback, IP de auditoría vía `req.ip` (sin leer cabeceras a ciegas), escape de comodines LIKE, 400/404 en médicos, seudónimo de correo en `login_fail`, export de auditoría por streaming. |
+| #34 | `feat/editorial-workflow` | `b90be5e` | Flujo editorial (API): **transiciones como única vía de cambiar el estado**; `PUT`/`content` rechazan `status`/`publish_at`; `unpublish` explícito; `schedule` sólo desde estados permitidos, atómico y bajo `FOR UPDATE`; restaurar sólo-contenido con schema estricto; auditoría `from/to`. |
+| #35 | `feat/editorial-ui` | `ed88a54` | Flujo editorial (panel): estado de sólo lectura en el Page Builder, transiciones en la lista de Páginas, sin `PUT` de publicación; roles y auditoría en el admin. |
+| #36 | `feat/editorial-ui` → `main` | `ed88a54` | **Integración, NO FUSIONAR.** Diff completo del stack contra `main` para auditoría. |
+
+Detalle de diseño de cada pieza en el cuerpo de su PR (actualizados con SHAs y
+conteos reales) y, para las de seguridad/roles/editorial, en `docs/ESTADO-PROYECTO.md`
+§16–§17.
+
+### Validación
+
+- **CI (MySQL 8, la autoridad):** las 8 cabezas del stack en verde.
+- **Local (MariaDB):** `pnpm typecheck` OK · suite completa `TEST_DATABASE=1`
+  **99 archivos / 1844 pruebas** OK · `pnpm build` (web+admin+api, con prerender de
+  `/estudios`) OK · `pnpm check:secrets` OK · `pnpm audit:prod` sin high/critical.
+- **Nota MySQL 8 vs MariaDB:** las columnas JSON difieren (MySQL 8 devuelve valores
+  no-objeto desenvueltos; MariaDB entre comillas). Las pruebas de base leen JSON con
+  `jsonColumn()`/parse tolerante; CI en MySQL 8 es siempre la referencia final.
+
+### Nota de estabilidad de CI (2026-09-07)
+
+`tests/page-builder-panel.test.tsx` (prueba de componente que vive en `main` desde
+la ronda del PR #23) tuvo un **flake** de timing bajo la carga del runner
+(`waitFor` con el default de 1000 ms). Se endureció (`configure({ asyncUtilTimeout })`
++ `mutations:{retry:false}` en el QueryClient del test) y se propagó por todo el
+stack; CI en verde lo confirmó en cada rama. Es cambio **sólo de prueba**, no toca
+componentes ni contratos.
+
+### Producción: NO-GO
+
+Sigue en **NO-GO** por los bloqueantes externos de `docs/ESTADO-PROYECTO.md`
+(secreto histórico en el historial de git, protección de `main`, dominio/DNS/TLS,
+backups/restore verificados, monitoreo y contenido real del cliente). El stack
+verde no altera esos bloqueantes; son decisiones/acciones del propietario.
+
+`docs/ESTADO-PROYECTO.md` mantiene la evaluación histórica más detallada; sus
+conteos de CI de baselines previos no valen como evidencia del HEAD actual del
+stack hasta revalidar contra estos SHAs.
 
 [#29 `fix/brand-rollback-idempotente`]: https://github.com/DaltonP93/WEB_SAA/pull/29
 
