@@ -3,6 +3,8 @@ import type { Request, Response } from "express";
 import { z, ZodSchema, ZodObject } from "zod";
 import { db } from "../../db.js";
 import { isLucideIconName } from "../../lucide-icons.js";
+import { registrarAccion, actorDe } from "../../audit.js";
+import { likeLiteral } from "../../sql-like.js";
 
 /**
  * Icono administrable: o vacío, o un nombre que existe de verdad en la versión
@@ -37,6 +39,16 @@ export interface CrudOpts {
   uniqueIcon?: boolean;
   /** columnas a devolver en list */
   listColumns?: string[];
+  /**
+   * Columnas por las que se permite buscar con `?q=&searchField=`. **Allowlist**:
+   * un `searchField` fuera de esta lista se rechaza con 400 en vez de usarse como
+   * identificador de columna. Sin esto, el query decidía qué columna filtrar sin
+   * restricción —knex escapa el identificador, así que no hay inyección SQL, pero
+   * dejaba enumerar por cualquier columna—. El panel busca del lado del cliente
+   * (no manda `searchField`), así que por defecto no hay campo permitido y el
+   * parámetro queda inerte salvo que un mount lo habilite explícitamente.
+   */
+  searchableColumns?: string[];
   /** ordering por defecto */
   defaultOrderBy?: string;
   /** transformación de payload antes de insert/update (JSON.stringify de campos json) */
@@ -80,8 +92,14 @@ export function crudRouter(opts: CrudOpts): Router {
     let qb = db(opts.table);
     if (opts.listColumns) qb = qb.select(opts.listColumns);
     if (opts.defaultOrderBy) qb = qb.orderBy(opts.defaultOrderBy);
-    if (q && (req.query.searchField as string)) {
-      qb = qb.where(req.query.searchField as string, "like", `%${q}%`);
+    const searchField = req.query.searchField as string | undefined;
+    if (q && searchField) {
+      // Allowlist: el campo tiene que estar declarado como buscable. Si no, 400 —
+      // no se usa un valor arbitrario del query como nombre de columna.
+      if (!opts.searchableColumns?.includes(searchField)) {
+        return res.status(400).json({ error: "campo de búsqueda no permitido" });
+      }
+      qb = qb.where(searchField, "like", likeLiteral(q));
     }
     const rows = await qb;
     res.json(rows.map(serialize));
@@ -114,6 +132,7 @@ export function crudRouter(opts: CrudOpts): Router {
     }
     const [id] = await db(opts.table).insert(prepare(parsed.data));
     const row = await db(opts.table).where({ id }).first();
+    await registrarAccion({ ...actorDe(req), action: "create", resourceType: opts.table, resourceId: id });
     res.status(201).json(serialize(row));
   });
 
@@ -157,6 +176,7 @@ export function crudRouter(opts: CrudOpts): Router {
       .where({ id: req.params.id })
       .update(opts.touchUpdatedAt ? { ...cambios, updated_at: db.fn.now() } : cambios);
     const row = await db(opts.table).where({ id: req.params.id }).first();
+    await registrarAccion({ ...actorDe(req), action: "update", resourceType: opts.table, resourceId: req.params.id });
     res.json(serialize(row));
   });
 
@@ -166,6 +186,7 @@ export function crudRouter(opts: CrudOpts): Router {
     const bloqueo = opts.guard?.canDelete?.(current);
     if (bloqueo) return res.status(403).json({ error: bloqueo });
     await db(opts.table).where({ id: req.params.id }).del();
+    await registrarAccion({ ...actorDe(req), action: "delete", resourceType: opts.table, resourceId: req.params.id });
     res.status(204).end();
   });
 

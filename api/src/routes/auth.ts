@@ -1,8 +1,10 @@
 import { Router } from "express";
 import { z } from "zod";
 import { db } from "../db.js";
-import { comparePassword, signToken, requireAuth } from "../auth.js";
+import { comparePassword, signToken, requireAuth, DUMMY_PASSWORD_HASH } from "../auth.js";
 import { rateLimit } from "../rate-limit.js";
+import { registrarAccion, ipDe, seudonimoEmail } from "../audit.js";
+import { capacidadesDe } from "../permisos.js";
 
 export const authRouter = Router();
 
@@ -14,6 +16,18 @@ const loginSchema = z.object({
 const attempts = new Map<string, { count: number; resetAt: number }>();
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_MAX_ATTEMPTS = 8;
+
+// El Map de intentos crece con cada par IP+email distinto y no se vaciaba nunca:
+// en un barrido sostenido queda una fuga de memoria lenta. Se poda a lo sumo una
+// vez por ventana (no en cada request), borrando las entradas ya expiradas.
+let lastPrune = 0;
+function pruneAttempts(now: number) {
+  if (now - lastPrune < LOGIN_WINDOW_MS) return;
+  lastPrune = now;
+  for (const [k, v] of attempts) {
+    if (v.resetAt <= now) attempts.delete(k);
+  }
+}
 
 // Límite por IP además del contador por IP+email de más abajo: frena el
 // barrido de muchos emails distintos desde la misma conexión.
@@ -29,28 +43,43 @@ authRouter.post("/login", loginLimiter, async (req, res) => {
   const { email, password } = parsed.data;
   const key = `${req.ip}:${email.toLowerCase()}`;
   const now = Date.now();
+  pruneAttempts(now);
   const current = attempts.get(key);
   if (current && current.resetAt > now && current.count >= LOGIN_MAX_ATTEMPTS) {
     return res.status(429).json({ error: "demasiados intentos, intente nuevamente mas tarde" });
   }
   const user = await db("users").where({ email }).first();
   if (!user) {
+    // Se corre un compare contra un hash ficticio para que este camino tarde lo
+    // mismo que el de un email real: sin esto, la latencia menor delataba qué
+    // emails están registrados.
+    await comparePassword(password, DUMMY_PASSWORD_HASH);
     registerFailedAttempt(key, now);
+    await registrarAccion({ actorId: null, actorName: null, actorRole: null, ip: ipDe(req), action: "login_fail", meta: { emailHash: seudonimoEmail(email) } });
     return res.status(401).json({ error: "credenciales invalidas" });
   }
   const ok = await comparePassword(password, user.password_hash);
   if (!ok) {
     registerFailedAttempt(key, now);
+    await registrarAccion({ actorId: null, actorName: null, actorRole: null, ip: ipDe(req), action: "login_fail", meta: { emailHash: seudonimoEmail(email) } });
     return res.status(401).json({ error: "credenciales invalidas" });
   }
   attempts.delete(key);
   const payload = { id: user.id, email: user.email, role: user.role, name: user.name };
-  const token = signToken(payload);
+  // La versión de sesión vigente viaja en el token; `requireAuth` la compara
+  // contra la base. `auth_version` es NOT NULL DEFAULT 0, pero si por un rollback
+  // de esquema no estuviera, se firma con 0 (y `requireAuth` la validará).
+  const token = signToken(payload, typeof user.auth_version === "number" ? user.auth_version : 0);
+  await registrarAccion({ actorId: user.id, actorName: user.name, actorRole: user.role, ip: ipDe(req), action: "login_ok" });
   res.json({ token, user: payload });
 });
 
 authRouter.get("/me", requireAuth, (req, res) => {
-  res.json({ user: req.user });
+  // Se adjuntan las capacidades derivadas del rol para que el panel oculte lo
+  // que la sesión no puede hacer. La autorización real la aplican los
+  // middlewares del backend; esto es sólo UX. Se calculan en el servidor (fuente
+  // única) y no se decodifican del token, que podría traer un rol ya cambiado.
+  res.json({ user: { ...req.user, capabilities: capacidadesDe(req.user?.role) } });
 });
 
 function registerFailedAttempt(key: string, now: number) {

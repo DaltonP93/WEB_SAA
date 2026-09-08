@@ -13,6 +13,15 @@ import { useConfirm } from "../components/ConfirmDialog";
 
 interface BlockDraft { _key: string; type: BlockType; props: any; }
 
+/** Nombres visibles de los estados del flujo editorial (sólo lectura acá). */
+const ESTADO_LABEL: Record<string, string> = {
+  draft: "Borrador",
+  in_review: "En revisión",
+  approved: "Aprobada",
+  published: "Publicada",
+  archived: "Archivada",
+};
+
 function SortableBlock({ b, selected, onSelect, onRemove }: { b: BlockDraft; selected: boolean; onSelect: () => void; onRemove: () => void }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: b._key });
   const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 };
@@ -55,13 +64,16 @@ export default function PageBuilderPage() {
   // Guardado atómico: metadatos + bloques en una sola operación. Antes iban en
   // dos llamadas (meta y bloques por separado), lo que dejaba fotos intermedias
   // inconsistentes y estado a medias si la segunda fallaba.
+  //
+  // **No manda `status`.** Guardar contenido nunca cambia la publicación (el
+  // backend la rechaza con 400): el estado se cambia con las acciones del flujo
+  // editorial en la lista de Páginas. Acá el estado se muestra de sólo lectura.
   const guardar = useMutation({
     mutationFn: async () =>
       (
         await api.put(`/admin/pages/${pageId}/content`, {
           title: page.title,
           slug: page.slug,
-          status: page.status,
           seo: page.seo,
           blocks: blocks.map(({ type, props }) => ({ type, props })),
         })
@@ -180,9 +192,15 @@ export default function PageBuilderPage() {
         <div><label className="label">Título</label><input className="input" value={page.title} onChange={(e) => { setPage({ ...page, title: e.target.value }); setDirty(true); }} /></div>
         <div><label className="label">Slug</label><input className="input" value={page.slug} onChange={(e) => { setPage({ ...page, slug: e.target.value }); setDirty(true); }} /></div>
         <div><label className="label">Estado</label>
-          <select className="input" value={page.status} onChange={(e) => { setPage({ ...page, status: e.target.value }); setDirty(true); }}>
-            <option value="draft">Borrador</option><option value="published">Publicada</option>
-          </select>
+          {/* Estado de **sólo lectura**: guardar contenido no cambia la
+              publicación. El estado se mueve con las acciones del flujo editorial
+              (Enviar a revisión, Aprobar, Publicar, Despublicar, Archivar) desde la
+              lista de Páginas. Mostrarlo editable acá invitaba a un cambio que el
+              backend rechaza. */}
+          <div className="input bg-gray-50 text-gray-700 flex items-center" aria-readonly="true">
+            {ESTADO_LABEL[page.status] ?? page.status}
+          </div>
+          <p className="text-xs text-gray-500 mt-1">Se cambia desde la lista de Páginas.</p>
         </div>
         <div><label className="label">SEO título</label><input className="input" maxLength={70} value={page.seo?.title ?? ""} onChange={(e) => { setPage({ ...page, seo: { ...(page.seo ?? {}), title: e.target.value } }); setDirty(true); }} /></div>
         <div><label className="label">SEO descripción</label><input className="input" maxLength={170} value={page.seo?.description ?? ""} onChange={(e) => { setPage({ ...page, seo: { ...(page.seo ?? {}), description: e.target.value } }); setDirty(true); }} /></div>

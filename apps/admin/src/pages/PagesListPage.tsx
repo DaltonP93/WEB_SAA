@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import toast from "react-hot-toast";
 import { api } from "../api";
 import { useConfirm } from "../components/ConfirmDialog";
+import { useSesion } from "../hooks/useSesion";
 
 /** Fecha legible; si no se puede parsear, se muestra el valor crudo. */
 function fecha(v: any): string {
@@ -18,15 +19,47 @@ function estaAgendada(p: any): boolean {
   return !isNaN(t) && t > Date.now();
 }
 
-/** Tres estados distinguibles: borrador, publicada, o programada al futuro. */
-function etiquetaEstado(p: any): "Borrador" | "Publicada" | "Programada" {
-  if (p.status !== "published") return "Borrador";
-  return estaAgendada(p) ? "Programada" : "Publicada";
+/** Nombres visibles de los estados del flujo editorial. */
+const ESTADO_LABEL: Record<string, string> = {
+  draft: "Borrador",
+  in_review: "En revisión",
+  approved: "Aprobado",
+  published: "Publicada",
+  archived: "Archivada",
+};
+
+/**
+ * Estado visible. `published` con fecha futura se muestra como "Programada"; el
+ * resto usa el nombre del flujo editorial. Un estado desconocido cae a su valor
+ * crudo en vez de romper.
+ */
+function etiquetaEstado(p: any): string {
+  if (p.status === "published") return estaAgendada(p) ? "Programada" : "Publicada";
+  return ESTADO_LABEL[p.status] ?? String(p.status ?? "");
+}
+
+/** Color del estado para el texto de la lista. */
+function colorEstado(p: any): string {
+  switch (etiquetaEstado(p)) {
+    case "Publicada":
+      return "text-green-700";
+    case "Programada":
+      return "text-amber-700";
+    case "En revisión":
+      return "text-blue-700";
+    case "Aprobado":
+      return "text-teal-700";
+    case "Archivada":
+      return "text-gray-400";
+    default:
+      return "text-gray-500"; // Borrador
+  }
 }
 
 export default function PagesListPage() {
   const qc = useQueryClient();
   const confirm = useConfirm();
+  const { puede } = useSesion();
   const [verPapelera, setVerPapelera] = useState(false);
   const q = useQuery({ queryKey: ["adm-pages"], queryFn: async () => (await api.get("/admin/pages")).data });
   const papelera = useQuery({
@@ -66,24 +99,13 @@ export default function PagesListPage() {
     onSuccess: () => { toast.success("Eliminada definitivamente"); refetchAll(); },
     onError: () => toast.error("Error al eliminar"),
   });
-  // Semántica explícita de publicación (documentada en CLAUDE_CONTEXT §18.7):
-  //  - Publicar: published + publish_at NULL → visible ya, sin agenda pendiente.
-  //  - Despublicar: draft + publish_at NULL. Un borrador que conservara una
-  //    agenda vieja se re-publicaría oculto al volver a publicar; limpiar la
-  //    fecha evita ese estado confuso.
-  //  - Programar: published + fecha futura, decidido en el backend (zona
-  //    Asunción, no la del navegador).
-  //  - Quitar programación: publish_at NULL dejando published → visible ya.
-  const publicarYa = useMutation({
-    mutationFn: async (p: any) => (await api.put(`/admin/pages/${p.id}`, { status: "published", publish_at: null })).data,
-    onSuccess: () => { toast.success("Publicada"); refetchAll(); },
-    onError: () => toast.error("Error al publicar"),
-  });
-  const despublicar = useMutation({
-    mutationFn: async (p: any) => (await api.put(`/admin/pages/${p.id}`, { status: "draft", publish_at: null })).data,
-    onSuccess: () => { toast.success("Despublicada"); refetchAll(); },
-    onError: () => toast.error("Error al despublicar"),
-  });
+  // La publicación se cambia **sólo** por las transiciones del flujo editorial y
+  // por `schedule` (Bloqueante D). Ya no se editan `status`/`publish_at` por PUT:
+  //  - Publicar / Despublicar / Aprobar / Archivar…: POST /admin/pages/:id/<acción>.
+  //  - Programar: POST /admin/pages/:id/schedule (fecha futura, zona Asunción,
+  //    decidido en el backend).
+  //  - Quitar programación = Publicar ya: la transición `publish` desde `published`
+  //    limpia `publish_at` y deja la página visible en vivo.
   const programarMut = useMutation({
     // La validación de "fecha futura" la hace el backend en zona Asunción, no el
     // navegador: el endpoint `/schedule` interpreta la hora de pared y rechaza el
@@ -93,10 +115,16 @@ export default function PagesListPage() {
     onSuccess: () => { toast.success("Programada"); setProgramando(null); setCuando(""); refetchAll(); },
     onError: (e: any) => toast.error(e?.response?.data?.error ?? "Error al programar"),
   });
-  const quitarProg = useMutation({
-    mutationFn: async (p: any) => (await api.put(`/admin/pages/${p.id}`, { publish_at: null })).data,
-    onSuccess: () => { toast.success("Programación quitada"); refetchAll(); },
-    onError: () => toast.error("Error al quitar la programación"),
+  // Transiciones del flujo editorial: cada una es un POST a /admin/pages/:id/<acción>
+  // (submit, approve, publish, return, unpublish, archive, unarchive). El backend
+  // valida el estado de origen (409 si no corresponde) y la capacidad; acá sólo se
+  // ofrece la que la sesión puede hacer, y el mensaje de error del backend se
+  // muestra tal cual (incluye el 409 "no se puede … desde el estado …").
+  const transicion = useMutation({
+    mutationFn: async (v: { id: number; accion: string }) =>
+      (await api.post(`/admin/pages/${v.id}/${v.accion}`, {})).data,
+    onSuccess: () => { toast.success("Estado actualizado"); refetchAll(); },
+    onError: (e: any) => toast.error(e?.response?.data?.error ?? "No se pudo cambiar el estado"),
   });
 
   function enviarProgramacion(p: any) {
@@ -160,33 +188,61 @@ export default function PagesListPage() {
                   <div className="font-semibold">{p.title}</div>
                   <div className="text-xs text-gray-500">
                     /{p.slug} ·{" "}
-                    <span
-                      className={
-                        etiquetaEstado(p) === "Publicada"
-                          ? "text-green-700"
-                          : etiquetaEstado(p) === "Programada"
-                            ? "text-amber-700"
-                            : "text-gray-500"
-                      }
-                    >
-                      {etiquetaEstado(p)}
-                    </span>
+                    <span className={colorEstado(p)}>{etiquetaEstado(p)}</span>
                     {estaAgendada(p) && <span className="ml-2 text-amber-700">· desde {fecha(p.publish_at)}</span>}
                   </div>
                 </div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => (p.status === "published" ? despublicar : publicarYa).mutate(p)}
-                    className="btn-secondary"
-                    title="Cambiar estado"
-                  >
-                    {p.status === "published" ? "Despublicar" : "Publicar"}
-                  </button>
-                  <button onClick={() => { setProgramando(programando === p.id ? null : p.id); setCuando(""); }} className="btn-secondary">
-                    Programar
-                  </button>
+                <div className="flex gap-2 flex-wrap justify-end">
+                  {/* Flujo editorial: cada estado ofrece sus transiciones, y sólo las que
+                      la sesión puede hacer (autor envía a revisión; revisor/editor
+                      aprueban, publican y archivan). El backend igual valida estado y
+                      capacidad; esto sólo evita ofrecer lo que daría 403/409. */}
+                  {p.status === "draft" && puede("content.write") && (
+                    <button onClick={() => transicion.mutate({ id: p.id, accion: "submit" })} className="btn-secondary">
+                      Enviar a revisión
+                    </button>
+                  )}
+                  {p.status === "in_review" && puede("content.publish") && (
+                    <button onClick={() => transicion.mutate({ id: p.id, accion: "approve" })} className="btn-secondary">
+                      Aprobar
+                    </button>
+                  )}
+                  {p.status === "approved" && puede("content.publish") && (
+                    <button onClick={() => transicion.mutate({ id: p.id, accion: "publish" })} className="btn-secondary">
+                      Publicar
+                    </button>
+                  )}
+                  {(p.status === "in_review" || p.status === "approved") && puede("content.write") && (
+                    <button onClick={() => transicion.mutate({ id: p.id, accion: "return" })} className="btn-secondary">
+                      Volver a borrador
+                    </button>
+                  )}
+                  {p.status === "published" && puede("content.publish") && (
+                    <button onClick={() => transicion.mutate({ id: p.id, accion: "unpublish" })} className="btn-secondary">
+                      Despublicar
+                    </button>
+                  )}
+                  {p.status === "published" && puede("content.publish") && (
+                    <button onClick={() => transicion.mutate({ id: p.id, accion: "archive" })} className="btn-secondary">
+                      Archivar
+                    </button>
+                  )}
+                  {p.status === "archived" && puede("content.publish") && (
+                    <button onClick={() => transicion.mutate({ id: p.id, accion: "unarchive" })} className="btn-secondary">
+                      Desarchivar
+                    </button>
+                  )}
+                  {/* Programar sale de los mismos estados que la API acepta
+                      (in_review/approved/published); desde borrador no se ofrece. */}
+                  {puede("content.publish") && ["in_review", "approved", "published"].includes(p.status) && (
+                    <button onClick={() => { setProgramando(programando === p.id ? null : p.id); setCuando(""); }} className="btn-secondary">
+                      Programar
+                    </button>
+                  )}
                   <Link to={`/pages/${p.id}`} className="btn-secondary">Editar bloques</Link>
-                  <button onClick={() => askDelete(p)} className="btn-danger">Eliminar</button>
+                  {puede("content.delete") && (
+                    <button onClick={() => askDelete(p)} className="btn-danger">Eliminar</button>
+                  )}
                 </div>
               </div>
               {programando === p.id && (
@@ -198,8 +254,13 @@ export default function PagesListPage() {
                   <button className="btn-primary" disabled={!cuando || programarMut.isPending} onClick={() => enviarProgramacion(p)}>
                     Programar
                   </button>
-                  {p.publish_at && (
-                    <button className="btn-secondary" disabled={quitarProg.isPending} onClick={() => quitarProg.mutate(p)}>
+                  {p.status === "published" && p.publish_at && (
+                    <button
+                      className="btn-secondary"
+                      disabled={transicion.isPending}
+                      title="Publicar ya y quitar la fecha programada"
+                      onClick={() => transicion.mutate({ id: p.id, accion: "publish" })}
+                    >
                       Quitar programación
                     </button>
                   )}

@@ -37,7 +37,10 @@ export interface Sesion {
   id: number;
   email: string;
   name: string;
-  role: "superadmin" | "editor";
+  /** Uno de los ocho roles del modelo de permisos (ver `api/src/permisos.ts`). */
+  role: string;
+  /** Capacidades derivadas del rol por el servidor (`recurso.acción`). */
+  capabilities?: string[];
 }
 
 export function useSesion() {
@@ -51,6 +54,8 @@ export function useSesion() {
     retry: false,
   });
 
+  const capacidades = q.data?.capabilities ?? [];
+
   return {
     sesion: q.data ?? null,
     cargando: q.isLoading,
@@ -62,5 +67,12 @@ export function useSesion() {
      * escribió el texto cuando se entera de que no podía.
      */
     esSuperadmin: q.data?.role === "superadmin",
+    capacidades,
+    /**
+     * ¿La sesión tiene la capacidad? `false` mientras carga o si falló (mismo
+     * criterio de "ante la duda, no ofrecer"). No es autorización: la aplica el
+     * backend; esto sólo oculta lo que no se va a poder hacer.
+     */
+    puede: (cap: string) => capacidades.includes(cap),
   };
 }

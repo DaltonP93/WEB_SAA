@@ -104,6 +104,16 @@ describeDb("el blindaje de la guardia detecta ediciones reales del panel", () =>
   };
 
   const crearAdmin = async () => {
+    // `requireAuth` es fail-closed en la versión de sesión: exige `auth_version`
+    // igual en el token y en la base. Este archivo corta la cadena de migraciones
+    // en la correctiva (20260820) para probar el blindaje de `schedules`, un punto
+    // anterior a la migración que agrega `auth_version` (20260905): sin la columna,
+    // la API autenticada respondería 401. Como acá la auth es sólo plomería (el
+    // contrato de revocación se prueba en `auth-revocacion.test.ts`), se asegura la
+    // columna con su default 0, que coincide con el `av` del token de la sesión.
+    if (!(await db.schema.hasColumn("users", "auth_version"))) {
+      await db.schema.alterTable("users", (t) => t.integer("auth_version").notNullable().defaultTo(0));
+    }
     await db("users").insert({
       email: EMAIL,
       password_hash: await bcrypt.hash(TEST_ADMIN_PASSWORD, 10),
@@ -133,9 +143,9 @@ describeDb("el blindaje de la guardia detecta ediciones reales del panel", () =>
     const address = server.address();
     baseUrl = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`;
 
-    // Se inicia sesión **una sola vez**: el login tiene rate limit por IP y
-    // `requireAuth` sólo verifica la firma del token, así que sigue sirviendo
-    // después de recrear las tablas entre pruebas.
+    // Se inicia sesión **una sola vez**: el login tiene rate limit por IP. El
+    // token sigue sirviendo entre pruebas porque `crearAdmin` recrea al admin con
+    // `auth_version = 0`, la misma versión que lleva este token (`av: 0`).
     const login = await fetch(`${baseUrl}/api/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

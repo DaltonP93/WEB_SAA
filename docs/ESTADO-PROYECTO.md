@@ -11,6 +11,580 @@
 > pruebas o pendientes. La actualización debe incluirse en el mismo PR del
 > cambio; después del merge se confirma el SHA de `main` y el CI post-merge.
 
+> ⚠️ **Baseline desactualizado.** Los SHA y conteos de las secciones 1–14 fueron
+> verificados sobre `fd49743a`/`7eb570c` y **no coinciden con el HEAD actual de
+> `main` (`a4cccc1`)**. Para el estado vigente ver la **sección 15**, a
+> continuación; los conteos de CI previos no valen como evidencia del HEAD hasta
+> revalidar sobre él.
+
+---
+
+## 15. Ronda correctiva — rollback de `settings.brand` por snapshot (2026-09-02)
+
+**HEAD de `main` verificado:** `a4cccc1a3e36cae4fbb40b149f8809de0eac7b2a`
+(merge del PR #28). **PR abierto:** [#29
+`fix/brand-rollback-idempotente`](https://github.com/DaltonP93/WEB_SAA/pull/29)
+(Draft, base `a4cccc1`), único PR abierto y dedicado a esta corrección.
+**Protección de `main`:** sin ruleset ni revisión obligatoria (sigue bloqueante
+para producción).
+
+### 15.1 Hallazgo: CI rojo en el HEAD
+
+El workflow "CI" sobre `a4cccc1`
+([run 33459369884](https://github.com/DaltonP93/WEB_SAA/actions/runs/33459369884))
+terminó en **failure**:
+
+| Check | Resultado |
+|---|---|
+| Auditoría de dependencias | success |
+| Detección de secretos | success |
+| Typecheck, build y pruebas | **failure** |
+
+Dentro de ese job, typecheck y los tres builds pasaron; falló el paso de pruebas
+en `tests/migrations.test.ts > migraciones correctivas frente a ediciones del
+cliente > el rollback devuelve exactamente el estado anterior`. Los checks
+verdes históricos (secciones 5 y 13) se tomaron sobre `fd49743a`/`7eb570c`, no
+sobre este HEAD.
+
+### 15.2 Causa raíz
+
+Las migraciones fusionadas en el PR #27 `20260827000000_brand_logo.ts` y
+`20260828000000_brand_favicon.ts` **crean** la fila `settings.brand` cuando no
+existe (`insert … onConflict.merge`), pero su `down()` **original** sólo la
+**actualizaba** vaciando el campo; nunca la borraba. Sobre una base migrada **sin
+sembrar** (la de la prueba), revertir la cadena dejaba un residuo `{ logoUrl:"", faviconUrl:"" }`
+que en el estado anterior no estaba, y el snapshot lo detecta. Reproducido de
+forma **determinística 3/3** sobre bases limpias; el `DUMP_SNAPSHOTS` confirma
+que la única sección que difiere es `settings`, y la única clave nueva es
+`brand`.
+
+### 15.3 Primera solución descartada (heurística de contenido)
+
+Un intento previo del PR #29 agregó una migración posterior
+(`20260901000000_brand_rollback_idempotente.ts`) cuyo `down()` borraba la fila
+`settings.brand` si su contenido "parecía" autogenerado (claves ⊆
+`logoUrl`/`faviconUrl` con los valores por defecto). Se **descartó (NO-GO)** y se
+eliminó del PR: una coincidencia de contenido **no prueba procedencia**. Una fila
+legítima, preexistente, con exactamente
+`{ logoUrl:"/logo-sanatorio.png", faviconUrl:"/favicon.png" }` es indistinguible
+por contenido de una autogenerada, y la heurística la habría borrado. Se verificó
+de forma reproducible contra `672ae96`: replicando su cadena de `down()` sobre una
+fila preexistente idéntica a los defaults, la fila **se borra**. La regresión que
+lo demuestra vive ahora en `tests/migrations-brand-rollback.test.ts` y falla
+contra `672ae96`, pasando sólo con la solución por snapshot.
+
+### 15.4 Corrección vigente (por snapshot; excepción autorizada y acotada)
+
+Bajo una **autorización explícita y acotada del propietario** para editar
+**exclusivamente** las dos migraciones ya fusionadas
+`20260827000000_brand_logo.ts` y `20260828000000_brand_favicon.ts` (ninguna otra),
+cada una ahora registra **procedencia**, no contenido:
+
+- **Snapshot interno, antes de tocar la base.** Claves
+  `snapshot_brand_logo_20260827000000` y `snapshot_brand_favicon_20260828000000`
+  (prefijo `snapshot_`, `varchar(64)`, fuera de `PUBLIC_SETTING_KEYS` /
+  `ADMIN_SETTING_KEYS`: no publicadas ni editables desde el CMS, igual que los 9
+  `snapshot_*` que ya dejan las migraciones correctivas previas). Guarda: versión
+  de formato, nombre de la migración, propiedad, si la fila existía, si tenía forma
+  inesperada, si la propiedad existía, su **valor anterior exacto** (distinguiendo
+  ausente / `null` / `""` / default / personalizado), si aplicó un cambio y qué
+  valor aplicó. Se guarda **aunque no haga falta cambiar nada**, **no se
+  sobrescribe** si ya existe, y se **elimina** recién tras un rollback exitoso. Si
+  el snapshot no puede guardarse, `up()` no modifica `settings.brand` (la
+  transacción de la migración revierte).
+- **`down()` específico por propiedad.** Restaura desde el snapshot y sólo sobre lo
+  que la propia migración escribió: si la propiedad conserva exactamente el valor
+  que aplicó, restaura el valor anterior exacto (o elimina sólo esa propiedad si no
+  existía); si fue personalizada después, la preserva. El favicon corre primero
+  (LIFO) y **nunca borra la fila**; el logo, después de restaurar su propiedad,
+  elimina la fila `settings.brand` **sólo** si el snapshot demuestra que no existía
+  originalmente y ya no queda ninguna propiedad. Nunca borra una fila preexistente
+  ni claves agregadas después.
+- **Fail-closed en bases migradas antes de la corrección.** Si la migración figura
+  aplicada pero su snapshot está ausente, es inválido o de una versión desconocida,
+  `down()` **aborta antes de tocar datos** (no vacía la marca, no borra la fila) y
+  remite a restaurar un backup verificado o a un procedimiento manual autorizado.
+  **No hay fallback heurístico.** Este fallo seguro se propaga de punta a punta por
+  el flujo local existente: `scripts/deploy/rollback-db.sh` aborta al fallar un
+  `migrate:down` (sale 4 "ROLLBACK NO INICIADO" si es el primero, o va por
+  restauración de dump si es intermedio), sin ningún cambio en los scripts de
+  rollback. Un preflight dedicado en `rollback-guard.mjs` quedaría **redundante**
+  dado ese comportamiento verificado; se documenta como mejora opcional futura, no
+  necesaria.
+- **No se editó ninguna otra migración fusionada**, no se borra `settings.brand`
+  de forma incondicional, y se preservan marca sembrada (`name`/`tagline`),
+  personalizaciones y claves adicionales. `up()`/`down()` son idempotentes y
+  seguros ante fila ausente, JSON inválido y estructuras parciales.
+- **Pruebas:** `tests/migrations-brand-rollback.test.ts` (23 casos) cubre fila
+  inexistente, preexistente `{}`, propiedades inexistentes, `null`, `""`,
+  preexistente idéntica a los defaults (la **regresión** principal), logo/favicon/
+  ambos personalizados, claves adicionales, edición posterior de logo y de favicon,
+  clave agregada tras el `up()`, snapshot ausente / inválido / de versión
+  desconocida (fail-closed), ciclo aplicar→revertir→aplicar y desaparición de los
+  snapshots tras el rollback. `tests/migrations.test.ts` **no se debilitó** y su
+  aserción de rollback vuelve a verde.
+
+### 15.5 Validación local (reproducible)
+
+Entorno: **Node 20.20.2**, **pnpm 9.0.0**, **MySQL 8.4.9** local descartable
+(`127.0.0.1:3306`, sin servicio Windows). El CI usa **MySQL 8.0** y es la
+autoridad final.
+
+| Validación | Comando | Resultado |
+|---|---|---|
+| Typecheck | `pnpm typecheck` | OK (api/web/admin) |
+| Build API | `pnpm --filter @sa/api build` | OK |
+| Build web | `pnpm --filter @sa/web build` | OK (prerender best-effort, omitido sin API viva) |
+| Build admin | `pnpm --filter @sa/admin build` | OK |
+| Suite de marca | `pnpm test tests/migrations-brand-rollback.test.ts` | **23/23** |
+| Migraciones integrales ×3 sobre bases limpias | `pnpm test tests/migrations.test.ts` | **26/26** cada corrida |
+| Secretos | `pnpm check:secrets` | OK (sin credenciales en el árbol) |
+| Dependencias | `pnpm audit:prod` | OK (0 alto/crítico; 1 moderado preexistente, bajo el umbral) |
+
+**Comparación reproducible de la suite completa** (mismo entorno Windows), para no
+atribuir fallos a Windows sin evidencia:
+
+| Árbol | Test Files | Tests |
+|---|---|---|
+| Base pristina `672ae96` (sin el fix) | 13 failed / 73 passed | 67 failed / **1458** passed / 5 skipped (1530) |
+| Con el fix por snapshot | 13 failed / 73 passed | 67 failed / **1471** passed / 5 skipped (1543) |
+
+Los **mismos 13 archivos** fallan en ambos árboles, con los **mismos 67 tests**,
+todos por spawn de herramientas externas ausentes en la PowerShell de Windows
+(`bash`/`npx`/`pnpm`/`stat`, y los de media que dependen de libvips/Unix). El fix
+**no agrega ningún fallo**; suma +13 en verde (la aserción de `migrations.test.ts`
+corregida +1 y la suite de marca ampliada +12). En el runner Ubuntu del CI esas 13
+integraciones corren normalmente; el **conteo verde definitivo lo confirma el CI de
+GitHub sobre el PR #29**.
+
+### 15.6 Veredicto de la ronda (GO/NO-GO separado)
+
+- **Diseño:** GO para revisión. Se corrigió la falla conceptual de la heurística
+  con un enfoque por procedencia. **No se declara "riesgo bajo"**: el diseño debe
+  pasar una auditoría independiente antes de merge.
+- **CI:** verde localmente en todo lo que corre sin herramientas Unix; el conteo
+  autoritativo depende del run de CI del PR #29. **No se declara CI verde sin ese
+  run.**
+- **Merge:** NO-GO hasta auditoría independiente y CI verde del PR.
+- **Producción:** **NO-GO**, sin cambios. Esta ronda no toca los bloqueantes de las
+  secciones 6 y 10 (secreto histórico, protección de `main`, dominio/DNS/TLS,
+  backups/restore, monitoreo, contenido).
+
+### 15.7 Riesgos residuales y observación fuera de alcance
+
+- **Bases ya migradas sin snapshot:** su rollback por debajo de estas migraciones
+  queda **bloqueado (fail-closed)** hasta restaurar un backup verificado o ejecutar
+  un procedimiento manual autorizado. Es intencional: preferir bloquear a corromper
+  la marca. No accedemos al VPS para verificar su estado.
+- **Rollback sobre base sembrada:** si `settings.brand` trae `name`/`tagline`, esta
+  corrección los preserva; el vaciado de `logoUrl`/`faviconUrl` sembrados que hacía
+  el `down()` original quedó, además, gobernado por el snapshot (sólo se toca lo que
+  la migración aplicó). Cambiar la semántica de restauración de assets sembrados
+  excede esta corrección mínima y se deja como seguimiento.
+
+### 15.8 Segunda auditoría independiente — validación estricta + preflight (2026-09-02)
+
+Una auditoría independiente del PR #29 sobre `bc2439a` reprodujo **dos defectos
+bloqueantes** de la corrección por snapshot y devolvió **NO-GO para merge**:
+
+1. **`down()` confiaba en un snapshot mal validado.** El lector sólo comprobaba
+   `formato` + tres booleanos y hacía un cast al tipo completo, así que un snapshot
+   **parcial forjado** (sin `migracion`/`propiedad`/`formaInesperada`/`valorAnterior`)
+   pasaba y `down()` podía **borrar una fila legítima** `settings.brand`.
+2. **`up()` no validaba un snapshot preexistente corrupto:** lo conservaba pero igual
+   modificaba `settings.brand`, dejando un estado sin restauración segura.
+
+**Corrección (sin migración posterior ni heurística):**
+
+- **Validación estricta por migración (estructura cerrada).** Cada migración valida
+  el snapshot contra su contrato de formato 1 antes de cualquier escritura: exactamente
+  los 9 campos permitidos (ni faltantes ni extra), `formato===1`, `migracion===MIGRACION`,
+  `propiedad===PROP`, tipos booleanos exactos, `valorAplicado===DEFAULT` sii
+  `aplicoCambio` y `===null` en caso contrario, y coherencia entre
+  `filaExistia`/`formaInesperada`/`propiedadExistia`/`valorAnterior`/`aplicoCambio`
+  (se rechaza toda combinación imposible). El objeto tipado se construye a partir de los
+  valores ya validados — **nunca un cast** tras validar sólo algunos campos.
+- **`up()` endurecido.** Sin snapshot: lo captura y aplica el default (como antes). Con
+  snapshot preexistente: lo **valida estrictamente**; si es inválido/ajeno/contradictorio
+  **lanza antes de tocar `brand`**; si es válido, es un **no-op idempotente** (no recalcula
+  otro contrato ni pisa nada) que preserva personalizaciones posteriores.
+- **`down()` endurecido.** Valida el snapshot por completo antes de modificar o borrar
+  cualquier fila; ante error no toca `brand` ni elimina el snapshot; la coincidencia con
+  el valor por defecto **no** se usa como prueba de procedencia (la da el snapshot
+  validado), sólo como guarda extra contra pisar una personalización.
+- **Preflight de rollback** (`scripts/deploy/brand-snapshot-preflight.mjs`, invocado por
+  `rollback-db.sh` **después** de calcular `PENDIENTES` y **antes** del primer
+  `migrate:down`). Sólo actúa si el rollback cruza `20260828…_brand_favicon` o
+  `20260827…_brand_logo`; valida por adelantado los snapshots requeridos de las de marca
+  incluidas y, si falta uno o es inválido, **aborta sin revertir ninguna migración**
+  (exit 4, base intacta). Un rollback que no cruza esas migraciones no queda bloqueado.
+  **No se salta con `ROLLBACK_ALLOW_AFTER_SEED`.** El mensaje aclara que hace falta un
+  backup **anterior** a esas migraciones (o al deploy que las trajo) o un procedimiento
+  manual autorizado: un backup tomado justo antes del rollback sólo recupera el estado
+  actual. Esto es necesario porque el fail-closed dentro de cada `down()` llega tarde en
+  una reversión múltiple (las migraciones más nuevas ya se habrían revertido).
+
+**Pruebas nuevas.** `tests/migrations-brand-rollback-strict.test.ts` (27): defecto 1 y 2
+para logo y favicon, y validación estricta campo por campo (cada campo faltante,
+`migracion`/`propiedad` incorrectas, `formaInesperada` contradictoria, mezclas
+`aplicoCambio`/`valorAplicado`, procedencias imposibles, clave extra), `up()` idempotente
+con snapshot válido, y `down()` que no modifica nada ante snapshot inválido.
+`tests/rollback-brand-preflight.test.ts` (8, sin base/bash): no cruza marca → permite;
+snapshots válidos → permite; migración más nueva antes de favicon/logo sin snapshot →
+bloquea; snapshot inválido → bloquea; uno de dos ausente → bloquea; error de lectura →
+bloquea (fail-closed); mensaje correcto. `tests/rollback-db.test.ts` suma dos casos
+end-to-end (bash): bloqueo con **cero `down()` ejecutados** y rollback que no cruza marca
+no bloqueado. Todas las nuevas pruebas de validación estricta **fallan contra `bc2439a`**
+(18/27 en el archivo estricto) y pasan sólo con esta corrección.
+
+**Validación local** (Node 20.20.2, pnpm 9.0.0, MySQL 8.4.9; CI usa 8.0):
+`typecheck` OK; builds api/web/admin OK; `check:secrets` OK; `audit:prod` OK (0 alto/
+crítico; 5 moderados preexistentes, bajo el umbral); marca+estricto+preflight **58/58**;
+`tests/migrations.test.ts` ×3 sobre bases limpias **26/26**; suite completa **1506✓ /
+69✗ / 5 skip (1580)** vs `bc2439a` **1471✓ / 67✗ (1543)**: **+35 en verde**; los +2 fallos
+nuevos son los dos casos **bash** del preflight en `rollback-db.test.ts`, ambientales de
+Windows (`spawn bash ENOENT`, idénticos al resto de ese archivo, verdes en el runner
+Ubuntu del CI). Mismos 13 archivos ambientales que el baseline. **Conteo verde autoritativo
+= CI del PR.**
+
+**GO/NO-GO (sin cambios respecto de la ronda anterior salvo el diseño):** diseño → GO para
+nueva auditoría (no se declara "riesgo bajo"); CI → pendiente del run del PR; merge → NO-GO
+hasta nueva auditoría independiente + CI verde; **producción → NO-GO**.
+
+---
+
+## 16. Módulo — Trazabilidad de acciones administrativas (2026-09-02)
+
+**Rama:** `feat/admin-audit-log`, **apilada sobre el PR #29** (`40c3b11`, CI verde).
+Es el primer incremento —seguro y sin cambiar la autorización actual— del módulo de
+seguridad/roles del plan. Los **permisos granulares (deny-by-default en los 18 routers)**
+quedan para un PR posterior; éste entrega sólo la **bitácora de "quién hizo qué"**, que hoy
+falta: publicar/despublicar/programar, papelera/restaurar/purgar y todo el CRUD de
+médicos/servicios/estudios/menús/settings/usuarios no dejaban rastro de autor (sólo lo
+hacían `page_revisions.created_by`, `media.uploaded_by` y la confirmación de Biopsias).
+
+**Orden de revisión:** revisar y fusionar **después** del PR #29 (del que depende su base).
+
+### 16.1 Qué entrega
+- **Migración nueva** `20260903000000_admin_audit_log.ts`: tabla append-only `admin_audit_log`
+  (`actor_id` FK→users `SET NULL` + foto `actor_name`/`actor_role`, `action`,
+  `resource_type`/`resource_id`, `meta` JSON acotado, `ip` del operador, `created_at`),
+  con índices por recurso, fecha, actor y acción. Reversible (`down()` dropea la tabla).
+- **Emisor** `api/src/audit.ts` (`registrarAccion`): **best-effort, nunca lanza** —registrar
+  no puede romper ni demorar la acción principal—; `meta` se sanea (sólo escalares acotados)
+  como defensa; nunca guarda payloads, contraseñas ni tokens.
+- **Enganches**: `crudRouter` (create/update/delete de las 12 entidades), ciclo de vida de
+  páginas (create/publish/unpublish/schedule/trash/restore/purge/restore_revision), usuarios
+  (create/role_change/delete) y login (`login_ok`/`login_fail`, con el email intentado en el
+  fallo, nunca la contraseña). Los guardados de contenido siguen trazados por
+  `page_revisions`, así que no se duplican.
+- **Lectura** `GET /api/admin/audit` (+ `/export` CSV con `Cache-Control: no-store`):
+  **solo superadmin** (`requireRole`), Zod-validado, paginado y filtrable por acción, recurso,
+  actor, rango de fecha y búsqueda; orden por allowlist (sin inyección en `ORDER BY`).
+- **Panel**: página `Auditoría` (solo lectura) bajo *Sistema*, **enlace y pantalla
+  gateados a superadmin** (además del control real en el backend), con `DataTable`
+  server-side, filtros y export.
+
+### 16.2 Decisiones de privacidad
+- La tabla vive detrás de un endpoint **solo superadmin**: es "dentro del panel autenticado",
+  donde el proyecto permite información personal. Por eso guarda la IP del **operador** (personal
+  del panel) y el email intentado en un `login_fail` —ambos con valor forense—, nunca datos de
+  pacientes ni contenido de formularios/turnos/mensajes. Verificado por prueba: ninguna fila
+  contiene contraseñas ni tokens.
+
+### 16.3 Validación local
+Node 20.20.2, pnpm 9.0.0, MySQL 8.4.9 (CI: 8.0). typecheck OK; builds api/web/admin OK;
+`check:secrets` OK; `audit:prod` OK (0 alto/crítico). `tests/admin-audit-log.test.ts` **13/13**
+(autz editor 403 / superadmin 200 / sin sesión 401; una fila por acción de CRUD, ciclo de vida,
+usuarios y login; `role_change` con `{from,to}`; paginación y filtros; 400 ante orden inválido;
+ninguna fila con contraseña/token). Suite completa **1519✓ / 69✗ / 5 skip (1593)** vs la base
+`40c3b11` 1506✓/69✗ (1580): **+13 en verde, 0 fallos nuevos**; los 69 fallos son los mismos 13
+archivos ambientales de Windows (verdes en CI). **Conteo verde autoritativo = CI del PR** (aún
+no abierto: ver nota de despliegue).
+
+### 16.4 GO/NO-GO
+- Diseño → GO para auditoría (no se declara "riesgo bajo").
+- CI → **pendiente**: la rama está pusheada pero el PR aún no se abrió (el token disponible no
+  tiene permiso de escritura de PRs); el CI corre recién al abrir el PR Draft.
+- Merge → NO-GO hasta auditoría independiente + CI verde, y después del PR #29.
+- Producción → **NO-GO** (bloqueantes externos intactos).
+
+---
+
+## 17. Módulo — Permisos granulares (RBAC deny-by-default) (2026-09-02)
+
+**Rama:** `feat/roles-granulares`, **apilada sobre `feat/admin-audit-log`** (que a su vez
+apila sobre el PR #29). Es la segunda mitad —la "riesgosa"— del módulo de seguridad/roles:
+convierte los dos roles binarios en un **modelo de capacidades por recurso/acción** con
+**denegación por defecto** y comprobación **real en el backend**.
+
+**Orden de revisión:** después del PR #29 y del PR de auditoría (`feat/admin-audit-log`).
+
+### 17.1 Qué entrega
+- **Modelo de capacidades** `api/src/permisos.ts`: 11 capacidades (`content.read/write/publish/
+  delete`, `leads.read/write`, `settings.read/write`, `data.confirm`, `users.manage`,
+  `audit.read`) y una **matriz central** rol → capacidades para los **8 roles**: `superadmin`,
+  `admin`, `editor`, `autor`, `revisor`, `analista_marketing`, `operador_leads`, `auditor`.
+- **Migración** `20260904000000_roles_granulares.ts`: amplía el enum `users.role` a los 8
+  roles (default `editor`). No toca filas. Reversible con pérdida controlada (mapea roles
+  nuevos → `editor` antes de angostar).
+- **Middlewares** `requirePermiso(cap)` y `requirePermisoPorMetodo({read,write,delete})` en
+  `auth.ts`; el segundo mapea el método HTTP a una capacidad y **deniega por defecto** un
+  método sin capacidad declarada.
+- **Mapa de autorización central** en `routes/admin/index.ts`: cada uno de los 18 routers se
+  monta con su grupo de capacidades (content/leads/settings) o su capacidad específica
+  (`users.manage`, `audit.read`, `data.confirm`). Antes sólo 2 routers comprobaban rol.
+- **Separación editar-vs-publicar** en `pages.ts`: publicar/despublicar/programar y restaurar
+  una versión publicada exigen `content.publish` además de `content.write`, así un `autor`
+  crea/edita borradores pero no publica; `revisor`/`editor` sí.
+- **`/auth/me`** expone las capacidades del rol (calculadas en el servidor) para que el panel
+  oculte lo que la sesión no puede hacer; `useSesion` gana `capacidades` + `puede(cap)`, y el
+  sidebar gatea *Usuarios* (`users.manage`) y *Auditoría* (`audit.read`) por capacidad. **La
+  autorización es del backend; el front sólo oculta.**
+
+### 17.2 Cambio de comportamiento y no-regresión
+- **`editor` conserva exactamente lo que ya podía** (contenido completo, leads y settings):
+  sin regresión, verificado por prueba y por las suites existentes (`settings-allowlist`,
+  `confirmacion-biopsias`, `usuarios-blindaje`) que siguen verdes.
+- El **tightening** recae en los **6 roles nuevos** (autor/revisor/analista/operador/auditor
+  restringidos) y en la denegación por defecto: un router nuevo montado sin capacidad queda
+  cerrado en vez de abierto. `users.manage` y `data.confirm` siguen siendo sólo de superadmin
+  (la guarda del último superadmin no cambia).
+- Roles como `autor`/`revisor`/`analista_marketing`/`operador_leads` ganarán capacidades
+  específicas cuando se construyan sus módulos (editorial/marketing/CRM); hoy se definen
+  sobre los recursos existentes.
+
+### 17.3 Validación local
+Node 20.20.2, pnpm 9.0.0, MySQL 8.4.9 (CI: 8.0). typecheck OK; builds api/web/admin OK;
+`check:secrets` OK; `audit:prod` OK (0 alto/crítico). `tests/permisos-granulares.test.ts`
+**128/128**: matriz por rol contra `permisos.ts` (403 sii el rol no tiene la capacidad
+efectiva) sobre 14 endpoints, `/auth/me` por rol, denegación por defecto, separación
+editar-vs-publicar (autor no publica, revisor sí), no-regresión de `editor`, y que sólo el
+superadmin gestiona usuarios. `tests/migrations.test.ts` ×3 sobre bases limpias **26/26**.
+Suite completa **1647✓ / 69✗ / 5 skip (1721)** vs la base `feat/admin-audit-log` 1519✓/69✗
+(1593): **+128 en verde, 0 fallos nuevos** (los 69 son los mismos 13 archivos ambientales de
+Windows, verdes en CI). **Conteo verde autoritativo = CI del PR** (pendiente de abrir).
+
+### 17.4 GO/NO-GO
+- Diseño → GO para auditoría (no se declara "riesgo bajo"; es un cambio auth-crítico y merece
+  revisión especialmente cuidadosa de la matriz).
+- CI → pendiente del run del PR.
+- Merge → NO-GO hasta auditoría + CI verde, y después de #29 y del PR de auditoría.
+- Producción → **NO-GO**.
+
+### 17.5 Re-corrida del fleet de verificación y endurecimiento (2026-09-04)
+
+Se re-corrieron las auditorías de **código** y **DevOps** (solo lectura) que habían quedado
+incompletas. Resultados:
+
+- **S2 (candado del último superadmin) — CERRADO y verificado.** El `PUT` ahora bloquea
+  cualquier rol destino ≠ `superadmin` sobre el único superadmin (no sólo `editor`); regresión
+  con `it.each` sobre los 6 roles nuevos → 409 en `tests/usuarios-blindaje.test.ts` (34/34).
+- **Hueco de rollback `migrate:down` vs `migrate:rollback` — DESCARTADO.** No existe: ambos
+  scripts npm encadenan `rollback-guard.mjs`, y el preflight de marca está bien ubicado en
+  `rollback-db.sh` (tras `PENDIENTES`, antes del primer `migrate:down`), fail-closed y no
+  salteable con `ROLLBACK_ALLOW_AFTER_SEED`. Ningún módulo toca `pnpm-lock.yaml`/deps.
+
+Tres hallazgos menores confirmados fueron **corregidos en esta rama** (con pruebas):
+
+- **H1 · `pages.ts` (restaurar versión).** El guard de publicar sólo cubría re-publicar; un
+  `autor` (sin `content.publish`) podía **despublicar** una página viva restaurando un
+  borrador. Ahora se gatea cualquier transición del estado de publicación (las dos
+  direcciones); editar sin cambiar estado sigue permitido. Pruebas en
+  `tests/permisos-granulares.test.ts` (131/131).
+- **H2 · `pages.ts` (`/content` y `/blocks`).** El guardado del Page Builder podía publicar/
+  despublicar sin dejar fila en `admin_audit_log`. Ahora `/content` registra
+  `publish`/`unpublish`/`update` según el cambio de estado, y `/blocks` registra `update`
+  (best-effort). Prueba en `tests/admin-audit-log.test.ts` (14/14).
+- **D3 · migración `roles_granulares` (`down()`).** El remapeo de roles restringidos → `editor`
+  al revertir es una **elevación de privilegio** (el enum viejo no tiene destino de menor
+  privilegio). Documentado como tal en la migración, con ⚠️ operativo: revisar roles de
+  usuarios después de un rollback que cruce esta migración. Sin cambio de comportamiento del
+  `down()` (estructuralmente inevitable en un dominio de dos roles).
+
+D1 (timestamps de migración duplicados, hoy deterministas por orden lexicográfico) y D2
+(preflight sólo en la ruta sancionada de rollback) quedan como backlog operativo/documental,
+sin cambio de código (tocar los timestamps exigiría renombrar migraciones ya aplicadas). GO
+técnico de diseño para los 3 módulos; **CI del PR sigue siendo la autoridad**. Producción
+**NO-GO** sin cambios.
+
+---
+
+## 18. Módulo — Revocación de sesiones JWT + TTL configurable (S1) (2026-09-04)
+
+**Rama:** `feat/jwt-revocacion`, **apilada sobre `feat/roles-granulares`**. Cierra el hallazgo
+de seguridad **S1**: el token duraba hasta 7 días y era irrevocable — cambiarle el rol a un
+usuario, darlo de baja o cambiarle la contraseña no invalidaba sus tokens ya emitidos, sobre un
+panel con PII de pacientes.
+
+### 18.1 Qué entrega
+- **Migración** `20260905000000_users_tokens_valid_after.ts`: columna nullable
+  `users.tokens_valid_after` (instante de corte por usuario). No toca filas; reversible.
+- **`requireAuth` contra la base** (`api/src/auth.ts`): verificada la firma, relee al usuario
+  y (a) rechaza al borrado (401), (b) rechaza el token emitido antes de `tokens_valid_after`
+  (401), (c) toma el **rol de la base**, no del token. Un lookup por PK por request. Si la base
+  no responde, el error se propaga al manejador central (503), no se traduce a 401.
+- **TTL configurable** por `JWT_EXPIRES_IN` (ya existía; ahora documentado en `.env.example` y
+  con la revocación que lo complementa). Se recomienda un valor del orden de horas para el panel.
+- **Revocación al cambiar contraseña** (`routes/admin/users.ts`): un cambio de contraseña marca
+  `tokens_valid_after`, cerrando las sesiones abiertas de ese usuario. El corte se **trunca al
+  segundo** (`instanteRevocacion`): los `iat` de JWT son segundos enteros y MySQL 8 redondea un
+  `DATETIME(0)` con fracción hacia arriba, así que sin truncar, el token que se obtiene al volver
+  a entrar en el mismo segundo quedaba revocado por error (~1 s). El cambio de rol y la baja **no**
+  necesitan revocación: los resuelve el lookup contra la base en la próxima request.
+- **Resiliente al rollback:** `requireAuth` lee todas las columnas y toma `tokens_valid_after`
+  de forma defensiva (ausente → sin corte). Si el esquema queda en un punto anterior a esta
+  migración —durante un rollback—, la autenticación sigue funcionando en vez de devolver 500 en
+  cada request y dejar el panel inaccesible. Lo ejercita `tests/rollback-guardia-campos`, y CI
+  (MySQL 8.0) lo detectó cuando la primera versión fijaba la columna en el `SELECT`.
+
+### 18.2 Cambio de comportamiento y no-regresión
+- **Efecto instantáneo:** cambio de rol, baja y cambio de contraseña rigen en la request
+  siguiente, no al expirar el token.
+- **Consecuencia en las guardas del "último superadmin":** como quien actúa debe **seguir siendo
+  superadmin en la base**, el escenario alcanzable de "vaciar el panel" es la autodegradación
+  (409) o el auto-borrado (400) del único superadmin; la guarda 409 del `DELETE` queda como
+  defensa en profundidad (sombreada por la de auto-borrado). Las pruebas de `usuarios-blindaje`
+  se reescribieron a ese escenario real (34/34, incluye los 7 roles destino → 409).
+- `password_hash` y `tokens_valid_after` nunca salen en respuestas (`CAMPOS` no los incluye).
+
+### 18.3 Validación local
+typecheck OK. `tests/auth-revocacion.test.ts` **5/5** (TTL configurable respetado; rol desde la
+base; baja invalida; cambio de contraseña revoca; firma inválida sigue 401). Regresión:
+`permisos-granulares` **131/131**, `admin-audit-log` **14/14**, `usuarios-blindaje` **34/34**
+(reescrita), `migrations` **26/26** (la nueva migración migra y revierte limpia). Suite completa
+**1736/1736** tras el fix de resiliencia (la primera versión fijaba `tokens_valid_after` en el
+`SELECT` y CI la marcó roja en `rollback-guardia-campos`; corregido). CI (MySQL 8.0) es la
+autoridad final.
+
+### 18.4 GO/NO-GO
+- Diseño → GO para auditoría (cambio auth-crítico; la matriz y el lookup merecen revisión).
+- Orden de revisión/merge: después de #29 → #30 → #31; se apila sobre `feat/roles-granulares`.
+- Producción → **NO-GO** (bloqueantes externos sin cambios).
+- Futuro (fuera de alcance): refresh-token revocable y un botón de "cerrar sesiones" por usuario
+  en el panel; hoy la revocación se dispara por cambio de contraseña.
+
+---
+
+## 19. Módulo — Endurecimiento de seguridad menor (backlog auditoría) (2026-09-04)
+
+**Rama:** `feat/security-hardening`, **apilada sobre `feat/jwt-revocacion`**. Cierra el backlog de
+hardening de severidad baja de la auditoría de seguridad (ninguno era merge-blocker), como un PR
+chico y de bajo riesgo. Sin migración; sólo código + pruebas.
+
+### 19.1 Qué entrega
+- **`X-Content-Type-Options: nosniff`** en los **tres** export CSV con datos (turnos, auditoría,
+  newsletter), junto al `Cache-Control: no-store` que ya tenían.
+- **`searchField` con allowlist (deny-by-default)** en `crud.ts`: `?q=&searchField=` sólo filtra
+  por una columna declarada en `CrudOpts.searchableColumns`; cualquier otra da **400**. Knex ya
+  escapaba el identificador (no había inyección SQL), pero se dejaba enumerar por cualquier
+  columna. El panel busca del lado del cliente (no manda `searchField`), así que ningún mount la
+  declara y el parámetro queda inerte — sin regresión funcional (S3).
+- **`sanitizarMeta` con denylist de claves** (`audit.ts`): descarta `password`/`token`/
+  `authorization`/`api_key`/`*_hash`/`contrase*` aunque sean escalares, además de objetos/arrays.
+  Segunda barrera: hoy ningún emisor pasa secretos, pero la bitácora se lee desde el panel.
+- **Login de tiempo constante** (`routes/auth.ts`, S4): el camino de email inexistente corre un
+  `bcrypt.compare` contra un hash ficticio (`DUMMY_PASSWORD_HASH`), igualando la latencia con la
+  del email real; antes la diferencia delataba qué correos están registrados.
+- **Poda del Map de intentos de login**: se limpian las entradas expiradas a lo sumo una vez por
+  ventana (no en cada request); antes crecía sin techo (fuga de memoria lenta bajo barrido).
+
+### 19.2 Validación local
+typecheck OK. `tests/security-hardening.test.ts` **8/8** (nosniff en los 3 export; `searchField`
+no permitido → 400; listar sin `searchField` → 200; login inexistente → 401) y
+`tests/sanitizar-meta.test.ts` **3/3** (unidad pura). Suite completa **1747/1747** verde. CI
+(MySQL 8.0) es la autoridad final.
+
+### 19.3 GO/NO-GO
+- Diseño → GO (bajo riesgo, sin migración).
+- Orden de revisión/merge: después de #29 → #30 → #31 → #32; se apila sobre `feat/jwt-revocacion`.
+- Producción → **NO-GO** (bloqueantes externos sin cambios).
+
+---
+
+## 20. Módulo — Flujo editorial de páginas · API (2026-09-04)
+
+**Rama:** `feat/editorial-workflow`, **apilada sobre `feat/security-hardening`**. Primera mitad
+del módulo editorial (paso 5 del roadmap): la **máquina de estados en el backend**. La UI del
+panel (botones de transición + vista de diff de versiones) va en un PR siguiente, apilado sobre
+éste.
+
+### 20.1 Qué entrega
+- **Migración** `20260906000000_pages_editorial_states.ts`: amplía `pages.status` de
+  `draft`/`published` a **cinco** estados: `draft → in_review → approved → published → archived`.
+  No toca filas; reversible con pérdida controlada (los estados nuevos → `draft` antes de angostar).
+- **Máquina de estados** en `pages.ts` (6 transiciones, `POST /admin/pages/:id/<acción>`):
+  `submit` (draft→in_review), `approve` (in_review→approved), `publish`
+  (approved|in_review→published, limpia `publish_at`), `return` (in_review|approved→draft),
+  `archive` (published|approved→archived), `unarchive` (archived→draft). Actualización
+  **condicional atómica** (sólo si la fila está viva y en un estado de origen válido): estado
+  inválido → **409**, página inexistente/en papelera → **404**.
+- **Gateo por capacidad:** `submit`/`return` exigen `content.write` (un `autor` mueve su propio
+  borrador); `approve`/`publish`/`archive`/`unarchive` exigen `content.publish` (revisor/editor).
+  Se apoya en el RBAC del módulo #31.
+- **Bitácora:** cada transición deja acción propia (`submit_review`, `approve`, `return_draft`,
+  `archive`, `unarchive`, y `publish`) en `admin_audit_log`.
+
+### 20.2 No-regresión (contrato público intacto)
+- **Sólo `published` es público.** `pages-visibilidad.ts` no cambia: `in_review`/`approved`/
+  `archived` no se sirven en el sitio, igual que un borrador (probado). Los estados nuevos son
+  ortogonales a la papelera (`deleted_at`) y al agendado (`publish_at`).
+- Los caminos directos previos (`PUT` status, `/schedule`, `/content`, papelera, revisiones)
+  siguen funcionando sin cambios; el flujo editorial **agrega** la vía de revisión para `autor`.
+
+### 20.3 Validación local
+typecheck OK. `tests/editorial-workflow.test.ts` **7/7** (camino feliz; autor no aprueba/publica →
+403; transición inválida → 409; return; archivar/desarchivar; estados intermedios no públicos;
+404 en inexistente). `migrations` **26/26** (la nueva migración migra y revierte limpia). Suite
+completa **1754/1754** verde. CI (MySQL 8.0) es la autoridad final.
+
+### 20.4 GO/NO-GO
+- Diseño → GO para revisión. **Semántica a confirmar por el dueño** (documentada acá para poder
+  redirigir en el Draft): publicar es de dos pasos (aprobar y luego publicar); `archived` es un
+  estado propio, distinto de la papelera; `publish` limpia `publish_at` (publicar = en vivo ya).
+- Orden de revisión/merge: después de #29 → #30 → #31 → #32 → #33; se apila sobre
+  `feat/security-hardening`.
+- Pendiente (PR siguiente): UI del panel — transiciones en el PR #35 (§21); el diff de versiones
+  queda como slice posterior.
+- Producción → **NO-GO** (bloqueantes externos sin cambios).
+
+---
+
+## 21. Módulo — Flujo editorial de páginas · UI del panel (2026-09-05)
+
+**Rama:** `feat/editorial-ui`, **apilada sobre `feat/editorial-workflow`**. Segunda mitad del
+módulo editorial: la UI que hace usable la máquina de estados de #34, en la lista de Páginas del
+panel.
+
+### 21.1 Qué entrega
+- **Estados del flujo visibles** en `PagesListPage`: Borrador / En revisión / Aprobado /
+  Publicada / Programada / Archivada, con color por estado.
+- **Botones de transición por estado**, cada uno **gateado por capacidad** con `useSesion().puede`:
+  - Borrador → *Enviar a revisión* (`content.write`) y, para quien publica, *Publicar* directo.
+  - En revisión → *Aprobar* (`content.publish`) y *Volver a borrador* (`content.write`).
+  - Aprobado → *Publicar* (`content.publish`) y *Volver a borrador*.
+  - Publicada → *Despublicar* y *Archivar* (`content.publish`).
+  - Archivada → *Desarchivar* (`content.publish`).
+  - *Programar*, *Eliminar* también gateados (`content.publish` / `content.delete`).
+  La autorización real la aplica el backend; la UI sólo evita ofrecer lo que daría 403/409.
+- Cada transición llama al endpoint correspondiente de #34 (`/submit`, `/approve`, `/publish`,
+  `/return`, `/archive`, `/unarchive`).
+
+### 21.2 Validación local
+`tests/pages-list-panel.test.tsx` **12/12** (6 previos + 6 nuevos: muestra los estados nuevos;
+submit/approve/return/publish/archive/unarchive por su endpoint; y **gateo por capacidad** — un
+`autor` ve "Enviar a revisión" pero no "Publicar"/"Aprobar"/"Programar"/"Eliminar"). Typecheck de
+admin OK; `pnpm --filter @sa/admin build` OK.
+
+### 21.3 GO/NO-GO
+- Diseño → GO para revisión. Sin regresión: los caminos previos (publicar/despublicar/programar/
+  papelera) siguen intactos y ahora gateados por capacidad.
+- Orden de revisión/merge: después de #29 → #30 → #31 → #32 → #33 → #34; se apila sobre
+  `feat/editorial-workflow`.
+- Pendiente (slice posterior): vista de preview/diff entre versiones (el historial + restaurar ya
+  existen desde el módulo de revisiones).
+- Producción → **NO-GO** (bloqueantes externos sin cambios).
+
 ---
 
 ## 1. Resumen ejecutivo

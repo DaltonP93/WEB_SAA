@@ -214,6 +214,7 @@ appointmentsRouter.get("/export", async (req, res) => {
 
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
   res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Content-Disposition", 'attachment; filename="turnos.csv"');
   res.send(csv);
 });

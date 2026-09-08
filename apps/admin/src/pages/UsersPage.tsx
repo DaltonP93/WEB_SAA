@@ -33,7 +33,7 @@ interface Usuario {
   id: number;
   email: string;
   name: string;
-  role: "superadmin" | "editor";
+  role: string;
   created_at?: string;
 }
 
@@ -42,9 +42,29 @@ interface Borrador {
   id?: number;
   email?: string;
   name?: string;
-  role: "superadmin" | "editor";
+  role: string;
   password?: string;
 }
+
+/**
+ * Los ocho roles del modelo de permisos (`api/src/permisos.ts`), con etiqueta en
+ * español. La API ya los acepta y valida; sin estas opciones un superadmin no
+ * podía asignar `admin`, `autor`, `revisor`, `analista_marketing`,
+ * `operador_leads` ni `auditor` desde el panel — el RBAC quedaba usable sólo por
+ * API/DB directa. El orden es de mayor a menor alcance.
+ */
+const ROLES: { value: string; label: string }[] = [
+  { value: "superadmin", label: "Superadmin" },
+  { value: "admin", label: "Administrador" },
+  { value: "editor", label: "Editor" },
+  { value: "autor", label: "Autor" },
+  { value: "revisor", label: "Revisor" },
+  { value: "analista_marketing", label: "Analista de marketing" },
+  { value: "operador_leads", label: "Operador de leads" },
+  { value: "auditor", label: "Auditor" },
+];
+
+const etiquetaRol = (rol: string) => ROLES.find((r) => r.value === rol)?.label ?? rol;
 
 /** Espejo del mínimo que valida el `schema` de la API. */
 const MINIMO_CLAVE = 6;
@@ -178,15 +198,16 @@ export default function UsersPage() {
                 setEditando({ ...editando, role: e.target.value as Borrador["role"] })
               }
             >
-              <option value="editor">Editor</option>
-              <option value="superadmin">Superadmin</option>
+              {ROLES.map((r) => (
+                <option key={r.value} value={r.value}>{r.label}</option>
+              ))}
             </select>
             {editando.id !== undefined &&
-              editando.role === "editor" &&
+              editando.role !== "superadmin" &&
               usuarios.find((u) => u.id === editando.id)?.role === "superadmin" &&
               superadmins <= 1 && (
                 <p className="text-xs text-amber-800 mt-1">
-                  Es el último superadmin: el servidor va a rechazar el cambio de rol.
+                  Es el último superadmin: el servidor va a rechazar quitarle el rol.
                 </p>
               )}
           </div>
@@ -231,7 +252,7 @@ export default function UsersPage() {
                   {propio && <span className="text-xs font-normal text-gray-500"> · vos</span>}
                 </div>
                 <div className="text-xs text-gray-500 truncate">
-                  {u.email} · {u.role}
+                  {u.email} · {etiquetaRol(u.role)}
                 </div>
               </div>
               <div className="flex gap-2 flex-shrink-0">

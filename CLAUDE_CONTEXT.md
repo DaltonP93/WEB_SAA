@@ -2520,3 +2520,88 @@ columna `unsubscribed_at`; `audit:prod` sin vulnerabilidades; `check:secrets`
 limpio; `gitleaks` sobre el árbol sin hallazgos). CI corre la suite contra
 **MySQL 8**. El hallazgo histórico `9ced09d` **sigue vigente** (ver el aviso de
 arriba): no se rota ni se purga, y no se afirma que el historial esté limpio.
+
+## 19. Ronda correctiva — rollback de `settings.brand` por snapshot (2026-09-02)
+
+**Contexto.** `main` en `a4cccc1` (merge PR #28). PR Draft [#29
+`fix/brand-rollback-idempotente`](https://github.com/DaltonP93/WEB_SAA/pull/29),
+único abierto. El CI del HEAD
+([run 33459369884](https://github.com/DaltonP93/WEB_SAA/actions/runs/33459369884))
+falló en `tests/migrations.test.ts > … el rollback devuelve exactamente el estado
+anterior`. Typecheck y builds verdes; "Detección de secretos" y "Auditoría de
+dependencias" verdes.
+
+**Causa.** `20260827000000_brand_logo.ts` y `20260828000000_brand_favicon.ts`
+(PR #27) crean `settings.brand` cuando no existe, pero su `down()` original sólo
+vaciaba el campo — nunca borraba la fila. Sobre una base migrada sin sembrar (la
+de la prueba), el rollback dejaba el residuo `{ logoUrl:"", faviconUrl:"" }` y el
+snapshot lo detecta. Determinístico 3/3; `DUMP_SNAPSHOTS` muestra que la única
+sección que difiere es `settings` y la única clave nueva es `brand`.
+
+**Solución descartada (heurística).** Un intento previo del PR #29 agregó una
+migración posterior (`20260901000000_brand_rollback_idempotente.ts`) que borraba
+la fila si su contenido coincidía con los defaults. Se **descartó**: coincidir con
+los defaults no prueba procedencia; una fila legítima preexistente idéntica a
+`{ logoUrl:"/logo-sanatorio.png", faviconUrl:"/favicon.png" }` sería borrada.
+Verificado de forma reproducible contra `672ae96` (la fila se borra). Migración
+eliminada del PR.
+
+**Solución vigente (snapshot; excepción autorizada).** Bajo autorización explícita
+y acotada del propietario para editar **sólo** esas dos migraciones ya fusionadas,
+cada una registra un snapshot interno de procedencia **antes** de tocar la base
+(`snapshot_brand_logo_20260827000000` / `snapshot_brand_favicon_20260828000000`,
+prefijo `snapshot_`, `varchar(64)`, no publicados ni editables desde el CMS). El
+snapshot guarda si la fila y la propiedad existían, el valor anterior exacto
+(ausente / `null` / `""` / default / personalizado) y si se aplicó un cambio; se
+guarda aunque no cambie nada, no se sobrescribe, y se elimina tras un rollback
+exitoso; si no puede guardarse, `up()` no toca la marca. `down()` restaura desde el
+snapshot y sólo lo que la migración escribió (favicon primero y nunca borra la
+fila; logo elimina la fila sólo si el snapshot prueba que no existía y no queda
+propiedad). **Fail-closed:** aplicada sin snapshot válido ⇒ `down()` aborta sin
+tocar datos y remite a backup verificado / procedimiento manual; sin fallback
+heurístico. El flujo local ya lo propaga: `rollback-db.sh` aborta al fallar un
+`migrate:down` (no se tocan los scripts de rollback). Pruebas en
+`tests/migrations-brand-rollback.test.ts` (23), incluida la regresión que falla
+contra `672ae96`; `tests/migrations.test.ts` no se debilita y vuelve a verde.
+
+**Validación local.** Node 20.20.2, pnpm 9.0.0, MySQL 8.4.9 (local; CI usa 8.0,
+autoritativo). `typecheck` OK; builds api/web/admin OK; suite de marca 23/23;
+`tests/migrations.test.ts` ×3 sobre bases limpias 26/26 cada corrida;
+`check:secrets` OK; `audit:prod` OK (0 alto/crítico). Suite completa con el fix
+1471✓/67✗/5 skip (1543) vs baseline `672ae96` 1458✓/67✗/5 skip (1530): **+13 en
+verde, 0 fallos nuevos**. Los 67 restantes son ambientales de Windows
+(`bash`/`npx`/`pnpm`/`stat` no en PATH; media/libvips), **idénticos** en ambos
+árboles (comparación reproducible); el CI Ubuntu del PR es la verificación del
+conteo verde.
+
+**Producción.** NO-GO sin cambios (bloqueantes externos intactos).
+
+**Segunda auditoría (sobre `bc2439a`) — validación estricta + preflight.** La
+auditoría independiente devolvió NO-GO para merge por dos defectos: (1) el lector
+de snapshot era laxo —sólo `formato` + tres booleanos y un cast al tipo completo—,
+así un snapshot **parcial forjado** podía hacer que `down()` **borre una fila
+legítima** `settings.brand`; (2) `up()` no validaba un snapshot preexistente
+corrupto: lo conservaba pero igual modificaba `brand`. Corrección sin migración
+posterior ni heurística: **validación estricta de estructura cerrada + coherencia**
+por migración (9 campos exactos, `formato`/`migracion`/`propiedad`, tipos booleanos,
+`valorAplicado` atado a `aplicoCambio`, combinaciones de procedencia imposibles
+rechazadas; se construye el objeto tipado desde los valores validados, nunca un
+cast); `up()` que **lanza** ante snapshot preexistente inválido y es **no-op
+idempotente** si es válido (preserva personalizaciones); `down()` que valida por
+completo antes de tocar o borrar filas y no usa la coincidencia con el default como
+prueba de procedencia. **Preflight** `scripts/deploy/brand-snapshot-preflight.mjs`
+(lo invoca `rollback-db.sh` tras calcular `PENDIENTES` y antes del primer
+`migrate:down`): si el rollback cruza favicon/logo, valida sus snapshots por
+adelantado y **aborta sin revertir nada** (exit 4) si falta o es inválido; no se
+salta con `ROLLBACK_ALLOW_AFTER_SEED`; el mensaje pide un backup **anterior** a esas
+migraciones (uno reciente sólo recupera el estado actual). Necesario porque el
+fail-closed de cada `down()` llega tarde en una reversión múltiple. Pruebas:
+`tests/migrations-brand-rollback-strict.test.ts` (27; 18/27 fallan contra
+`bc2439a`), `tests/rollback-brand-preflight.test.ts` (8, sin base/bash) y 2 casos
+bash end-to-end en `tests/rollback-db.test.ts` (cero `down()` al bloquear; no
+bloquea si no cruza marca). Validación local: typecheck/builds/secrets/`audit:prod`
+OK (0 alto/crítico); marca+estricto+preflight 58/58; migraciones ×3 26/26; suite
+completa **1506✓/69✗/5 skip (1580)** vs `bc2439a` 1471✓/67✗ (1543): +35 verdes, los
++2 fallos son los dos casos **bash** del preflight (ambientales de Windows, verdes
+en CI). Mismos 13 archivos ambientales. Conteo verde autoritativo = CI del PR.
+Producción sigue NO-GO.

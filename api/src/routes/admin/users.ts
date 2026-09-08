@@ -3,6 +3,8 @@ import { z } from "zod";
 import { db } from "../../db.js";
 import { hashPassword, requireRole } from "../../auth.js";
 import { badRequest, conflict, notFound } from "../../http.js";
+import { registrarAccion, actorDe } from "../../audit.js";
+import { ROLES } from "../../permisos.js";
 
 /**
  * Usuarios del panel.
@@ -14,8 +16,11 @@ import { badRequest, conflict, notFound } from "../../http.js";
  *    salida es entrar a MySQL a mano en el VPS, que es exactamente el tipo de
  *    intervención que este panel existe para no necesitar.
  * 2. **Bajarle el rol al último superadmin.** El mismo agujero por otra
- *    puerta: la versión anterior protegía el borrado —y sólo el propio— pero
- *    dejaba que un `PUT` con `role: "editor"` produjera el mismo resultado.
+ *    puerta: bajar el rol produce el mismo resultado que borrarlo. El guard
+ *    tiene que cubrir *cualquier* rol destino que no sea `superadmin`, no una
+ *    sola forma: cuando el sistema era binario alcanzaba con vigilar el paso a
+ *    `editor`, pero RBAC agregó `admin`, `autor`, `revisor`, etc., y un `PUT`
+ *    con `role: "admin"` sobre el último superadmin lo degradaba igual.
  *
  * Las dos se cierran contando cuántos superadmin quedarían **después** de la
  * operación, no antes.
@@ -30,8 +35,6 @@ import { badRequest, conflict, notFound } from "../../http.js";
 
 export const usersRouter = Router();
 usersRouter.use(requireRole("superadmin"));
-
-const ROLES = ["superadmin", "editor"] as const;
 
 /** Lo que se devuelve. Nunca `password_hash`, ni siquiera al propio superadmin. */
 const CAMPOS = ["id", "email", "name", "role", "created_at"];
@@ -75,6 +78,7 @@ usersRouter.post("/", async (req, res) => {
     role: p.role ?? "editor",
   });
 
+  await registrarAccion({ ...actorDe(req), action: "create", resourceType: "users", resourceId: id, meta: { role: p.role ?? "editor" } });
   res.status(201).json(await db("users").where({ id }).first(CAMPOS));
 });
 
@@ -90,7 +94,17 @@ usersRouter.put("/:id", async (req, res) => {
 
   const p = parsed.data;
 
-  if (p.role === "editor" && actual.role === "superadmin" && (await otrosSuperadmin(id)) === 0) {
+  // Cualquier rol distinto de `superadmin` lo saca del panel de usuarios: no
+  // alcanza con vigilar el paso a `editor`. Desde que RBAC agregó `admin`,
+  // `autor`, `revisor`, etc., un `PUT` con `role: "admin"` sobre el último
+  // superadmin lo degradaba y dejaba el panel sin nadie que pueda administrar
+  // usuarios. Se bloquea toda degradación del último, no una sola de sus formas.
+  if (
+    p.role !== undefined &&
+    p.role !== "superadmin" &&
+    actual.role === "superadmin" &&
+    (await otrosSuperadmin(id)) === 0
+  ) {
     throw conflict(
       "no se puede quitar el rol de superadmin al último que queda: nadie podría volver a administrar usuarios",
     );
@@ -105,13 +119,46 @@ usersRouter.put("/:id", async (req, res) => {
   if (p.email !== undefined) patch.email = p.email;
   if (p.name !== undefined) patch.name = p.name;
   if (p.role !== undefined) patch.role = p.role;
-  if (p.password) patch.password_hash = await hashPassword(p.password);
+  if (p.password) {
+    patch.password_hash = await hashPassword(p.password);
+    // Cambiar la contraseña cierra las sesiones abiertas de ese usuario:
+    // **incrementa `auth_version`** de forma atómica en el mismo UPDATE, así que
+    // todo token con la versión anterior queda revocado y el token que se obtiene
+    // al volver a entrar (con la versión nueva) vale de inmediato — sin ventanas de
+    // tiempo ni carreras de reloj. El cambio de rol y la baja NO lo necesitan:
+    // `requireAuth` lee el rol de la base y rechaza al usuario borrado.
+    patch.auth_version = db.raw("auth_version + 1");
+  }
 
   // Un `update({})` en knex genera SQL inválido. Sin cambios, no hay nada que
   // escribir y la respuesta es la fila tal como está.
   if (Object.keys(patch).length > 0) await db("users").where({ id }).update(patch);
 
+  const cambioRol = p.role !== undefined && p.role !== actual.role;
+  await registrarAccion({
+    ...actorDe(req),
+    action: cambioRol ? "role_change" : "update",
+    resourceType: "users",
+    resourceId: id,
+    meta: cambioRol ? { from: actual.role, to: p.role } : undefined,
+  });
   res.json(await db("users").where({ id }).first(CAMPOS));
+});
+
+/**
+ * Cierra **todas** las sesiones abiertas de un usuario sin cambiarle la
+ * contraseña: incrementa `auth_version`, con lo que todos sus tokens vigentes
+ * quedan revocados en la próxima request (los compara `requireAuth` por igualdad
+ * exacta). Sólo superadmin —el router ya lo exige—. Queda auditado.
+ */
+usersRouter.post("/:id/cerrar-sesiones", async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) throw badRequest("id invalido");
+  const actual = await db("users").where({ id }).first("id");
+  if (!actual) throw notFound("usuario no encontrado");
+  await db("users").where({ id }).update({ auth_version: db.raw("auth_version + 1") });
+  await registrarAccion({ ...actorDe(req), action: "update", resourceType: "users", resourceId: id, meta: { op: "cerrar_sesiones" } });
+  res.json({ ok: true });
 });
 
 usersRouter.delete("/:id", async (req, res) => {
@@ -131,5 +178,6 @@ usersRouter.delete("/:id", async (req, res) => {
   }
 
   await db("users").where({ id }).del();
+  await registrarAccion({ ...actorDe(req), action: "delete", resourceType: "users", resourceId: id, meta: { role: actual.role } });
   res.status(204).end();
 });

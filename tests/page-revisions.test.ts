@@ -20,8 +20,14 @@ import {
  * El contrato corregido: `PUT /pages/:id/content` archiva el estado ANTERIOR
  * antes de reemplazar, así la primera edición de una página existente ya deja
  * recuperable su contenido original. Restaurar archiva primero el estado actual,
- * de modo que restaurar se pueda deshacer. La foto es completa (título, estado,
- * SEO, publish_at, bloques) y consistente, y nada queda a medias si algo falla.
+ * de modo que restaurar se pueda deshacer.
+ *
+ * **Bloqueante D (contrato editorial):** `/content` guarda **sólo contenido**
+ * —título, slug, SEO y bloques—; NO cambia `status` ni `publish_at` (eso es de las
+ * transiciones y de `schedule`). Restaurar es también **sólo contenido**: repone
+ * título, SEO y bloques, pero deja intactos el estado de publicación y la fecha.
+ * Por eso esta prueba nunca manda `status` por `/content` y verifica que restaurar
+ * no toca el estado de una página viva.
  *
  *   TEST_DATABASE=1 pnpm test tests/page-revisions.test.ts
  */
@@ -37,16 +43,16 @@ describeDb("paginas: historial realmente recuperable", () => {
 
   const auth = () => ({ Authorization: `Bearer ${token}`, "Content-Type": "application/json" });
 
-  async function crearPagina(slug: string) {
+  async function crearPagina(slug: string, status: "draft" | "published" = "draft") {
     const res = await fetch(`${baseUrl}/api/admin/pages`, {
       method: "POST",
       headers: auth(),
-      body: JSON.stringify({ slug, title: `T ${slug}`, status: "draft" }),
+      body: JSON.stringify({ slug, title: `T ${slug}`, status }),
     });
     expect(res.status, await res.clone().text()).toBe(201);
     return (await res.json()).id as number;
   }
-  /** Guardado atómico completo (metadatos + bloques). */
+  /** Guardado atómico de contenido (metadatos + bloques; nunca estado). */
   function guardar(id: number, body: any) {
     return fetch(`${baseUrl}/api/admin/pages/${id}/content`, {
       method: "PUT",
@@ -58,16 +64,17 @@ describeDb("paginas: historial realmente recuperable", () => {
     (await (await fetch(`${baseUrl}/api/admin/pages/${id}/revisions`, { headers: auth() })).json()) as any[];
   const verPagina = async (id: number) =>
     (await (await fetch(`${baseUrl}/api/admin/pages/${id}`, { headers: auth() })).json()) as any;
+  const restaurar = (id: number, revId: number) =>
+    fetch(`${baseUrl}/api/admin/pages/${id}/revisions/${revId}/restore`, { method: "POST", headers: auth() });
 
+  // Los payloads de contenido NO llevan estado: `/content` sólo guarda contenido.
   const contenidoA = {
     title: "Versión A",
-    status: "draft" as const,
     seo: { title: "seg A", description: "desc A" },
     blocks: [{ type: "spacer", props: { height: 11 } }],
   };
   const contenidoB = {
     title: "Versión B",
-    status: "published" as const,
     seo: { title: "seg B", description: "desc B" },
     blocks: [
       { type: "spacer", props: { height: 21 } },
@@ -128,15 +135,12 @@ describeDb("paginas: historial realmente recuperable", () => {
     expect(revA, "la versión A tiene que estar en el historial").toBeTruthy();
     expect(revA.blockCount).toBe(1);
 
-    const restaurar = await fetch(`${baseUrl}/api/admin/pages/${id}/revisions/${revA.id}/restore`, {
-      method: "POST",
-      headers: auth(),
-    });
-    expect(restaurar.status, await restaurar.clone().text()).toBe(200);
+    const res = await restaurar(id, revA.id);
+    expect(res.status, await res.clone().text()).toBe(200);
 
     const page = await verPagina(id);
     expect(page.title).toBe("Versión A");
-    expect(page.status).toBe("draft");
+    expect(page.status).toBe("draft"); // restaurar no toca el estado; siguió en draft
     expect(jsonColumn<any>(page.seo).title).toBe("seg A");
     expect(page.blocks.length).toBe(1);
     expect(jsonColumn<any>(page.blocks[0].props).height).toBe(11);
@@ -150,17 +154,36 @@ describeDb("paginas: historial realmente recuperable", () => {
     const revs1 = await listar(id);
     const revA = revs1.find((r) => r.title === "Versión A");
     // Restaurar A: archiva primero el estado actual (B), así B queda recuperable.
-    await fetch(`${baseUrl}/api/admin/pages/${id}/revisions/${revA.id}/restore`, { method: "POST", headers: auth() });
+    await restaurar(id, revA.id);
     expect((await verPagina(id)).title).toBe("Versión A");
 
     const revs2 = await listar(id);
     const revB = revs2.find((r) => r.title === "Versión B");
     expect(revB, "restaurar A tuvo que archivar B").toBeTruthy();
-    await fetch(`${baseUrl}/api/admin/pages/${id}/revisions/${revB.id}/restore`, { method: "POST", headers: auth() });
+    await restaurar(id, revB.id);
     const page = await verPagina(id);
     expect(page.title).toBe("Versión B");
-    expect(page.status).toBe("published");
     expect(page.blocks.length).toBe(2);
+  });
+
+  it("restaurar es sólo contenido: no cambia el estado de publicación de una página viva", async () => {
+    // Página publicada; se le guarda contenido (queda una revisión), se despublica,
+    // y al restaurar la revisión el contenido vuelve pero el estado sigue en draft.
+    const id = await crearPagina("restore-no-publica", "published");
+    await guardar(id, { title: "Publicada", blocks: [{ type: "spacer", props: { height: 5 } }] });
+    await guardar(id, { title: "Segunda", blocks: [] }); // archiva "Publicada" (status published en la foto)
+
+    // Despublicar explícitamente (transición), la página queda en draft.
+    expect((await fetch(`${baseUrl}/api/admin/pages/${id}/unpublish`, { method: "POST", headers: auth() })).status).toBe(200);
+    expect((await verPagina(id)).status).toBe("draft");
+
+    const revPub = (await listar(id)).find((r) => r.title === "Publicada");
+    expect(revPub).toBeTruthy();
+    expect((await restaurar(id, revPub.id)).status).toBe(200);
+
+    const page = await verPagina(id);
+    expect(page.title).toBe("Publicada"); // contenido restaurado
+    expect(page.status).toBe("draft"); // ...pero el estado NO se resucita a published
   });
 
   it("un bloque inválido no deja los metadatos actualizados a medias", async () => {
@@ -170,7 +193,6 @@ describeDb("paginas: historial realmente recuperable", () => {
 
     const res = await guardar(id, {
       title: "NO DEBE QUEDAR",
-      status: "published",
       blocks: [{ type: "tipo-inexistente", props: {} }],
     });
     expect(res.status).toBe(400);
@@ -182,14 +204,14 @@ describeDb("paginas: historial realmente recuperable", () => {
   });
 
   it("el snapshot conserva título, estado, SEO y propiedades anidadas de los bloques", async () => {
-    const id = await crearPagina("snapshot-demo");
+    // El estado publicado se logra con transiciones/creación, no por `/content`.
+    const id = await crearPagina("snapshot-demo", "published");
     await guardar(id, {
       title: "Con anidados",
-      status: "published",
       seo: { title: "seo-t", description: "seo-d", ogImage: "/uploads/o.png" },
       blocks: [{ type: "spacer", props: { height: 42 } }],
     });
-    // Segundo guardado para que el primero quede archivado.
+    // Segundo guardado para que el primero quede archivado (con el estado actual).
     await guardar(id, { title: "Otro", blocks: [] });
 
     const rev = (await listar(id)).find((r) => r.title === "Con anidados");
@@ -197,7 +219,7 @@ describeDb("paginas: historial realmente recuperable", () => {
     const fila = await db("page_revisions").where({ id: rev.id }).first();
     const snap = jsonColumn<any>(fila.snapshot);
     expect(snap.title).toBe("Con anidados");
-    expect(snap.status).toBe("published");
+    expect(snap.status).toBe("published"); // la foto guarda el estado que había
     expect(snap.seo).toEqual({ title: "seo-t", description: "seo-d", ogImage: "/uploads/o.png" });
     expect(snap.blocks[0].props.height).toBe(42);
   });
@@ -234,11 +256,7 @@ describeDb("paginas: historial realmente recuperable", () => {
     await guardar(id, contenidoB);
     expect(await db("page_revisions").where({ page_id: id }).first()).toBeTruthy();
 
-    const noExiste = await fetch(`${baseUrl}/api/admin/pages/${id}/revisions/999999/restore`, {
-      method: "POST",
-      headers: auth(),
-    });
-    expect(noExiste.status).toBe(404);
+    expect((await restaurar(id, 999999)).status).toBe(404);
 
     await fetch(`${baseUrl}/api/admin/pages/${id}`, { method: "DELETE", headers: auth() });
     await fetch(`${baseUrl}/api/admin/pages/${id}/definitivo`, { method: "DELETE", headers: auth() });

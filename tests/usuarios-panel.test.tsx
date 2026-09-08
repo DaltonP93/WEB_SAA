@@ -238,8 +238,10 @@ describe("panel de Usuarios", () => {
       fireEvent.change(screen.getByLabelText("Rol"), { target: { value: "editor" } });
 
       // El mismo agujero que el borrado, por la otra puerta: la API lo rechaza
-      // con 409 y el panel lo dice antes.
-      expect(screen.getByText(/el servidor va a rechazar el cambio de rol/i)).toBeTruthy();
+      // con 409 y el panel lo dice antes. El aviso cubre cualquier rol destino
+      // que no sea superadmin (no sólo "editor"), por eso el texto habla de
+      // "quitarle el rol".
+      expect(screen.getByText(/el servidor va a rechazar quitarle el rol/i)).toBeTruthy();
     });
   });
 
