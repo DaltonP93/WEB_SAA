@@ -1,8 +1,8 @@
 # AI handoff — WEB_SAA
 
-> **Actualizado:** 2026-09-07  
-> **Baseline confirmado:** `main@a4cccc1a3e36cae4fbb40b149f8809de0eac7b2a` (sin cambios en `main`).  
-> **Fase actual:** stack de estabilización #29→#36 **completo y en verde en CI (MySQL 8)**, en **Draft**, listo para auditoría independiente de Codex. Producción **NO-GO**. Ver "Estado confirmado" abajo.  
+> **Actualizado:** 2026-09-08  
+> **Baseline confirmado:** `main@844ff074a5fe2b2d2b0cc0fb3902aef419a02f81` (merge del stack de estabilización #29→#35).  
+> **Fase actual:** stack de estabilización #29→#35 **fusionado a `main`** (código con GO tras CI verde en MySQL 8 + auditoría de código independiente). El auto-deploy de systemd (que sigue `origin/main` cada ~5 min) aplica este `main` al VPS. Ver "Estado confirmado" abajo.  
 > **Regla de lectura:** este es el resumen operativo. Antes de modificar algo, leer también `AGENTS.md`, `CLAUDE.md`, `docs/ESTADO-PROYECTO.md` y, si la tarea afecta despliegue, `docs/DEPLOY.md`. Si hay contradicción, priorizar `AGENTS.md` y validar contra el código actual.
 
 ## Propósito del producto
@@ -42,16 +42,19 @@ El sitio público es una SPA estática; la API sirve `/api/`, `/uploads/`, `/rob
 - Los logs deben pasar por el mecanismo seguro del proyecto y nunca exponer PII, URL completas con valores, SQL o secretos.
 - No editar migraciones ya aplicadas; crear una nueva migración incremental cuando corresponda.
 
-## Estado confirmado al 2026-09-07
+## Estado confirmado al 2026-09-08
 
-`main` sigue en `a4cccc1` (merge del PR #28, "docs: add AI handoff"); **nada se
-fusionó a `main`** desde entonces. Todo el trabajo vive en un **stack lineal de 8
-PR Draft** (#29→#36), cada uno basado en el anterior, con CI en **verde sobre
-MySQL 8** (los tres jobs: "Typecheck, build y pruebas", "Detección de secretos",
-"Auditoría de dependencias"). Ninguno debe fusionarse todavía: quedan para la
-**auditoría independiente de Codex**. `#36` es sólo un PR de **integración** hacia
-`main` para ver el diff completo del stack y **no debe fusionarse** (cada pieza se
-fusiona por su propio PR, en orden, empezando por #29).
+`main` está en `844ff07`: el **stack de estabilización #29→#35 quedó fusionado a
+`main`** mediante un merge `--no-ff` (todos los commits del stack, con CI en verde
+sobre MySQL 8 en las 8 cabezas). El PR #29 (base `main`) figura como **merged**;
+#30→#35 (basados cada uno en la rama anterior) quedaron **cerrados** al estar sus
+commits ya contenidos en `main` — GitHub no permite re-fusionar lo que ya está
+integrado. El antiguo #36 era sólo un PR de integración para revisar el diff y ya
+no aplica.
+
+La decisión de fusionar la tomó el propietario (`DaltonP93`) tras confirmar los
+ítems 1–4 de `AGENTS.md` §10 (rotación y purga del secreto histórico, revisión de
+accesos SSH). La tabla siguiente conserva el mapa del stack tal como se integró.
 
 | PR | Rama | Head | Qué aporta |
 |----|------|------|-----------|
@@ -61,8 +64,10 @@ fusiona por su propio PR, en orden, empezando por #29).
 | #32 | `feat/jwt-revocacion` | `0e682ee` | Revocación de sesiones por `auth_version` (igualdad exacta, fail-closed, HS256 fijado). |
 | #33 | `feat/security-hardening` | `50261a1` | Ronda 2: bind loopback, IP de auditoría vía `req.ip` (sin leer cabeceras a ciegas), escape de comodines LIKE, 400/404 en médicos, seudónimo de correo en `login_fail`, export de auditoría por streaming. |
 | #34 | `feat/editorial-workflow` | `b90be5e` | Flujo editorial (API): **transiciones como única vía de cambiar el estado**; `PUT`/`content` rechazan `status`/`publish_at`; `unpublish` explícito; `schedule` sólo desde estados permitidos, atómico y bajo `FOR UPDATE`; restaurar sólo-contenido con schema estricto; auditoría `from/to`. |
-| #35 | `feat/editorial-ui` | `ed88a54` | Flujo editorial (panel): estado de sólo lectura en el Page Builder, transiciones en la lista de Páginas, sin `PUT` de publicación; roles y auditoría en el admin. |
-| #36 | `feat/editorial-ui` → `main` | `ed88a54` | **Integración, NO FUSIONAR.** Diff completo del stack contra `main` para auditoría. |
+| #35 | `feat/editorial-ui` | `67dddae` | Flujo editorial (panel): estado de sólo lectura en el Page Builder, transiciones en la lista de Páginas, sin `PUT` de publicación; roles y auditoría en el admin. |
+
+El merge `--no-ff` que integró el stack quedó en `main@844ff07`. El antiguo #36
+(integración `feat/editorial-ui → main`) ya cumplió su función y no debe reabrirse.
 
 Detalle de diseño de cada pieza en el cuerpo de su PR (actualizados con SHAs y
 conteos reales) y, para las de seguridad/roles/editorial, en `docs/ESTADO-PROYECTO.md`
@@ -87,16 +92,25 @@ la ronda del PR #23) tuvo un **flake** de timing bajo la carga del runner
 stack; CI en verde lo confirmó en cada rama. Es cambio **sólo de prueba**, no toca
 componentes ni contratos.
 
-### Producción: NO-GO
+### Producción: código en `main` y desplegándose; readiness operativa aún del propietario
 
-Sigue en **NO-GO** por los bloqueantes externos de `docs/ESTADO-PROYECTO.md`
-(secreto histórico en el historial de git, protección de `main`, dominio/DNS/TLS,
-backups/restore verificados, monitoreo y contenido real del cliente). El stack
-verde no altera esos bloqueantes; son decisiones/acciones del propietario.
+El **código** tiene GO: CI verde en MySQL 8, auditoría de código independiente sin
+hallazgos HIGH/MEDIUM, smoke funcional de la API y E2E de navegador del flujo
+editorial. Ese `main` (`844ff07`) lo aplica al VPS el auto-deploy de systemd que
+sigue `origin/main` cada ~5 min (build en el VPS incluido). **Verificación
+post-deploy obligatoria**: `curl http://<IP>/api/health` debe dar 200 (que la home
+cargue no alcanza — Nginx sirve estáticos aun con la API caída). Runbook en
+`AGENTS.md` §9.
+
+Lo que **no** se verifica desde acá y sigue siendo del propietario/operación
+(ninguno lo altera el merge): `PUBLIC_SITE_URL` todavía apunta a la IP del VPS en
+vez del dominio (canonical/sitemap), protección de rama `main`, DNS/TLS,
+backups/restore verificados, monitoreo y carga de contenido real del cliente. Esos
+ítems, y el detalle de §10, se rastrean en `docs/ESTADO-PROYECTO.md`.
 
 `docs/ESTADO-PROYECTO.md` mantiene la evaluación histórica más detallada; sus
-conteos de CI de baselines previos no valen como evidencia del HEAD actual del
-stack hasta revalidar contra estos SHAs.
+conteos de CI de baselines previos no valen como evidencia del HEAD actual hasta
+revalidar contra estos SHAs.
 
 [#29 `fix/brand-rollback-idempotente`]: https://github.com/DaltonP93/WEB_SAA/pull/29
 
@@ -105,7 +119,7 @@ stack hasta revalidar contra estos SHAs.
 - Nunca versionar ni copiar secretos, tokens, contraseñas, hosts internos, IPs privadas, datos clínicos, pacientes ni PII.
 - No hacer deploy, cambio de DNS, SSH, reinicio de PM2/Nginx, migración, seed, limpieza masiva, rollback ni cambios de infraestructura sin autorización expresa.
 - Antes de cambiar dependencias, conservar `pnpm-lock.yaml`; el despliegue usa instalación reproducible.
-- La producción continúa en **NO-GO** hasta que se verifiquen los bloqueantes externos y la evidencia actualizada indicada en `docs/ESTADO-PROYECTO.md`.
+- El **código** está en `main` y en despliegue automático; la **readiness operativa** de producción (dominio/DNS/TLS, `PUBLIC_SITE_URL`, backups/restore verificados, monitoreo, contenido real) sigue dependiendo de acciones del propietario y no se declara desde acá sin evidencia verificable (ver `docs/ESTADO-PROYECTO.md`).
 
 ## Flujo obligatorio para cualquier tarea
 
